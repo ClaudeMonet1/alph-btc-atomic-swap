@@ -1,0 +1,29 @@
+{
+  "name": "alph-btc-atomic-swap",
+  "version": "0.1.0",
+  "description": "BTC-ALPH atomic swaps via MuSig2 adaptor signatures - scriptless scripts with taproot key-path spends",
+  "type": "module",
+  "scripts": {
+    "swap": "node src/atomic-swap.js",
+    "reset": "rm -rf devnet/bitcoin/regtest devnet/alephium/.alephium .swap-state.json && echo 'Chain data and swap state cleared.'"
+  },
+  "keywords": [
+    "alephium",
+    "bitcoin",
+    "atomic-swap",
+    "musig2",
+    "adaptor-signatures",
+    "schnorr",
+    "bip340",
+    "taproot"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@alephium/web3": "^2.0.8",
+    "@alephium/web3-wallet": "^2.0.8",
+    "bitcoinjs-lib": "^7.0.1",
+    "ecpair": "^3.0.1",
+    "nostr-tools": "^2.23.1",
+    "tiny-secp256k1": "^2.2.4"
+  }
+}

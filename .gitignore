@@ -1,0 +1,7 @@
+node_modules/
+.env
+.swap-state.json
+devnet/bitcoin/regtest/
+devnet/alephium/.alephium/
+devnet/alephium/alephium.log
+devnet/alephium/alephium.pid
