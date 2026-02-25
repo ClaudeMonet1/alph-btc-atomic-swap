@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "swap": "node src/atomic-swap.js",
+    "nostr-swap": "node src/nostr-swap.js",
     "reset": "rm -rf devnet/bitcoin/regtest devnet/alephium/.alephium .swap-state.json && echo 'Chain data and swap state cleared.'"
   },
   "keywords": [
@@ -24,6 +25,7 @@
     "bitcoinjs-lib": "^7.0.1",
     "ecpair": "^3.0.1",
     "nostr-tools": "^2.23.1",
-    "tiny-secp256k1": "^2.2.4"
+    "tiny-secp256k1": "^2.2.4",
+    "ws": "^8.19.0"
   }
 }

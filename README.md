@@ -45,6 +45,9 @@ start-regtest && start-devnet
 # Run the full test: happy path + both refund paths
 npm run swap
 
+# Run the Nostr relay-based swap (3 scenarios via encrypted DMs)
+npm run nostr-swap
+
 # Stop local chains
 stop-regtest && stop-devnet
 ```
@@ -188,9 +191,12 @@ Contract AtomicSwap(
 |------|-------|-------------|
 | `src/musig2.js` | 215 | BIP-327 MuSig2: key aggregation, nonce gen, partial sign/verify/agg |
 | `src/adaptor.js` | 132 | Adaptor signatures: sign, verify, aggregate, complete, extract |
+| `src/taproot-utils.js` | 44 | Taproot tweaked keys, adaptor challenge, tweaked private key |
 | `src/btc-swap.js` | 285 | Bitcoin taproot: P2TR output, key-path spend, refund via script-path |
 | `src/alph-swap.js` | 254 | Alephium contract: compile, deploy, claim, refund, verify state + bytecode |
-| `src/atomic-swap.js` | 690 | End-to-end orchestration, state persistence/recovery, refund tests |
+| `src/atomic-swap.js` | 654 | End-to-end orchestration, state persistence/recovery, refund tests |
+| `src/relay.js` | 98 | Minimal NIP-01 Nostr relay (in-memory, WebSocket) |
+| `src/nostr-swap.js` | 875 | Nostr relay-based swap: 3 scenarios (happy path, both refund, crash recovery) |
 
 No Bitcoin Core wallet is used anywhere in the swap flow. Bob mines to his nsec-derived P2TR and signs the funding transaction with his nsec-tweaked private key. Alice receives BTC at her nsec-derived P2TR. All Bitcoin RPC calls go to the base node URL — no wallet context needed.
 
