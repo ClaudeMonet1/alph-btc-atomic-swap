@@ -1,10 +1,24 @@
 // Alephium Contract Operations for Atomic Swap
-// Requires Alephium devnet running at 127.0.0.1:22973
+// Supports devnet (local) and testnet (public node)
 
 import { web3, ONE_ALPH, DUST_AMOUNT, addressFromPublicKey, groupOfAddress, buildContractByteCode, buildScriptByteCode } from '@alephium/web3';
 import { PrivateKeyWallet } from '@alephium/web3-wallet';
 
-const NODE_URL = 'http://127.0.0.1:22973';
+const NODE_URL = 'http://127.0.0.1:22973'; // kept for backward compat
+let alphNodeUrl = 'http://127.0.0.1:22973';
+let alphNetworkName = 'devnet';
+
+export function setAlphNetwork(name) {
+  const urls = { devnet: 'http://127.0.0.1:22973', testnet: 'https://node.testnet.alephium.org' };
+  if (!urls[name]) throw new Error(`Unknown ALPH network: ${name}`);
+  alphNodeUrl = urls[name];
+  alphNetworkName = name;
+  web3.setCurrentNodeProvider(alphNodeUrl);
+}
+
+export function getAlphNetwork() {
+  return { name: alphNetworkName, url: alphNodeUrl };
+}
 
 // Genesis private keys for devnet (one per group 0-3)
 const GENESIS_KEYS = [
@@ -22,7 +36,7 @@ async function nodeApi(path, method = 'GET', body = null) {
     headers: { 'Content-Type': 'application/json' },
   };
   if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(`${NODE_URL}${path}`, opts);
+  const res = await fetch(`${alphNodeUrl}${path}`, opts);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Alephium API ${method} ${path}: ${res.status} ${text}`);
@@ -171,11 +185,10 @@ export async function refundSwap(wallet, contractId, compiled) {
 // ---- Fund from genesis ----
 
 export async function fundFromGenesis(destAddress, amount) {
-  // Use genesis key[0] (group 0) which has the funded allocation.
-  // Cross-group transfers work on devnet with auto-mining.
+  if (alphNetworkName !== 'devnet') throw new Error('fundFromGenesis is only available on devnet. Use faucets on testnet.');
   const genesisKey = GENESIS_KEYS[0];
 
-  web3.setCurrentNodeProvider(NODE_URL);
+  web3.setCurrentNodeProvider(alphNodeUrl);
   const genesisWallet = new PrivateKeyWallet({
     privateKey: genesisKey,
     keyType: 'default',
@@ -240,15 +253,15 @@ export async function getBalance(address) {
 
 // ---- Wait for tx confirmation ----
 
-export async function waitForTx(txId, maxRetries = 30) {
+export async function waitForTx(txId, maxRetries = 60, intervalMs = 2000) {
   for (let i = 0; i < maxRetries; i++) {
     try {
       const status = await nodeApi(`/transactions/status?txId=${txId}`);
       if (status.type === 'Confirmed') return status;
     } catch (_) {}
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, intervalMs));
   }
-  throw new Error(`Tx ${txId} not confirmed after ${maxRetries}s`);
+  throw new Error(`Tx ${txId} not confirmed after ${maxRetries * intervalMs / 1000}s`);
 }
 
 export { NODE_URL, web3, ONE_ALPH, DUST_AMOUNT, PrivateKeyWallet, addressFromPublicKey, groupOfAddress };

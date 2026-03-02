@@ -1,18 +1,17 @@
 #!/usr/bin/env node
 // Web server for BTC-ALPH Atomic Swap
-// Combined HTTP (REST API + static files) + WebSocket (Nostr relay) on a single port.
+// HTTP REST API + static files. Nostr messaging handled by public relays (browser-side).
+// Supports devnet (local regtest + devnet) and testnet (signet + alph testnet) via SWAP_NETWORK env.
 
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { WebSocketServer } from 'ws';
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { sha256 } from '@noble/hashes/sha256.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { nip19 } from 'nostr-tools';
 
-import { attachRelay } from './relay.js';
 import {
   keyAgg, nonceGen, nonceAgg,
   lift_x, hasEvenY, bytesToNum, numTo32b,
@@ -25,15 +24,30 @@ import {
   bitcoinRpc, createSwapOutput, verifySwapOutput,
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
   mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin,
+  setBtcNetwork, getBtcNetwork, getP2TRAddress, getUtxos, selectUtxo,
+  getBtcBalance, estimateFee, findVout, waitForConfirmation,
 } from './btc-swap.js';
 import {
   compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
   fundFromGenesis, getBalance, waitForTx,
   web3, ONE_ALPH, PrivateKeyWallet, addressFromPublicKey, groupOfAddress,
+  setAlphNetwork,
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
 
-web3.setCurrentNodeProvider('http://127.0.0.1:22973');
+// ============================================================
+// Network Mode Detection
+// ============================================================
+
+const NETWORK_MODE = process.env.SWAP_NETWORK || 'devnet';
+const isTestnet = NETWORK_MODE === 'testnet';
+
+if (isTestnet) {
+  setBtcNetwork('signet');
+  setAlphNetwork('testnet');
+} else {
+  web3.setCurrentNodeProvider('http://127.0.0.1:22973');
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 7778;
@@ -65,9 +79,7 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
   const { address: swapBtcAddress, internalPubkey, scriptTree, p2tr } =
     createSwapOutput(aggPubkey, bobPub, csvTimeout);
 
-  const aliceBtcAddress = bitcoin.payments.p2tr({
-    internalPubkey: Buffer.from(alicePub), network: REGTEST,
-  }).address;
+  const aliceBtcAddress = getP2TRAddress(alicePub);
 
   const { Qbytes, tweakScalar, negated: tweakNeg } = computeTweakedKey(aggPubkey, p2tr.hash);
   const gaccTweaked = tweakNeg ? Fn.create(n - gacc) : gacc;
@@ -115,6 +127,22 @@ function err(res, msg, status = 400) {
 }
 
 // ============================================================
+// findVout with retry (for testnet where tx may take a moment to appear)
+// ============================================================
+
+async function findVoutWithRetry(txid, address, maxRetries = 5) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const vout = await findVout(txid, address);
+      if (vout >= 0) return vout;
+    } catch (_) {}
+    if (i < maxRetries - 1) await new Promise(r => setTimeout(r, 2000));
+  }
+  // Fallback: destination is always first output
+  return 0;
+}
+
+// ============================================================
 // REST API Route Handler
 // ============================================================
 
@@ -132,6 +160,11 @@ async function handleApi(req, res, urlPath) {
   try {
     const body = req.method === 'POST' ? await readBody(req) : {};
 
+    // ── Network info ──
+    if (urlPath === '/api/network' && req.method === 'GET') {
+      return json(res, { network: NETWORK_MODE, isTestnet });
+    }
+
     // ── Identity ──
     if (urlPath === '/api/session' && req.method === 'POST') {
       const { nsec } = body;
@@ -145,7 +178,7 @@ async function handleApi(req, res, urlPath) {
       const pubKey = schnorr.getPublicKey(secBytes);
       const pubKeyHex = bytesToHex(pubKey);
       const npub = nip19.npubEncode(pubKeyHex);
-      const btcAddress = bitcoin.payments.p2tr({ internalPubkey: Buffer.from(pubKey), network: REGTEST }).address;
+      const btcAddress = getP2TRAddress(pubKey);
       const alphAddress = addressFromPublicKey(pubKeyHex, 'bip340-schnorr');
       const group = groupOfAddress(alphAddress);
 
@@ -174,11 +207,12 @@ async function handleApi(req, res, urlPath) {
         coinbaseTxid: null, coinbaseVout: null, coinbaseAmountSat: null,
       });
 
-      return json(res, { token, pubKeyHex, npub, btcAddress, alphAddress, group });
+      return json(res, { token, pubKeyHex, npub, btcAddress, alphAddress, group, network: NETWORK_MODE });
     }
 
     // ── Devnet: Fund ──
     if (urlPath === '/api/fund' && req.method === 'POST') {
+      if (isTestnet) return err(res, 'Funding not available on testnet. Use faucets: https://signetfaucet.com/ (BTC) and https://faucet.testnet.alephium.org/ (ALPH)');
       const s = getSession(body.token);
 
       // Fund ALPH from genesis
@@ -207,6 +241,7 @@ async function handleApi(req, res, urlPath) {
 
     // ── Devnet: Mine ──
     if (urlPath === '/api/mine' && req.method === 'POST') {
+      if (isTestnet) return err(res, 'Mining not available on testnet. Wait for signet block confirmation (~5 min).');
       const s = getSession(body.token);
       const blocks = body.blocks || 1;
       const hashes = await mineBlocks(blocks, s.btcAddress);
@@ -218,15 +253,22 @@ async function handleApi(req, res, urlPath) {
       const token = urlPath.split('/api/balance/')[1];
       const s = getSession(token);
       const alphBal = await getBalance(s.alphAddress);
-      let btcBal = 0;
+      let btcSat = 0;
       try {
-        const utxos = await bitcoinRpc('scantxoutset', ['start', [`addr(${s.btcAddress})`]]);
-        btcBal = utxos.total_amount || 0;
-      } catch { /* scan may not be available */ }
+        btcSat = await getBtcBalance(s.btcAddress);
+      } catch { /* balance query may fail */ }
       return json(res, {
         alph: (Number(alphBal.balance) / 1e18).toFixed(4),
-        btc: btcBal.toFixed(8),
+        btc: (btcSat / 1e8).toFixed(8),
       });
+    }
+
+    // ── UTXOs ──
+    if (urlPath.startsWith('/api/utxos/') && req.method === 'GET') {
+      const token = urlPath.split('/api/utxos/')[1];
+      const s = getSession(token);
+      const utxos = await getUtxos(s.btcAddress);
+      return json(res, utxos);
     }
 
     // ── Swap: Init ──
@@ -273,18 +315,43 @@ async function handleApi(req, res, urlPath) {
 
       const { address: swapBtcAddress } = createSwapOutput(aggPubkey, s.pubKey, s.csvTimeout);
 
+      // Determine UTXO to spend
+      let utxoTxid, utxoVout, utxoValue;
+      if (body.utxoTxid !== undefined) {
+        // Frontend provided a specific UTXO (testnet mode)
+        utxoTxid = body.utxoTxid;
+        utxoVout = body.utxoVout;
+        utxoValue = body.utxoValue;
+      } else if (isTestnet) {
+        // Auto-select UTXO on testnet
+        const fee = await estimateFee(200);
+        const utxo = await selectUtxo(s.btcAddress, s.btcSat + fee);
+        utxoTxid = utxo.txid;
+        utxoVout = utxo.vout;
+        utxoValue = utxo.value;
+      } else {
+        // Devnet: use pre-funded coinbase
+        utxoTxid = s.coinbaseTxid;
+        utxoVout = s.coinbaseVout;
+        utxoValue = s.coinbaseAmountSat;
+      }
+
+      const fee = await estimateFee(200);
       const { psbt: fundPsbt, sighash: fundSighash } = buildP2TRKeyPathSpend(
-        s.coinbaseTxid, s.coinbaseVout, s.coinbaseAmountSat,
-        swapBtcAddress, s.btcSat, s.pubKey,
+        utxoTxid, utxoVout, utxoValue,
+        swapBtcAddress, s.btcSat, s.pubKey, fee,
       );
       const bobTweakedKey = computeTweakedPrivateKey(s.secBytes, s.pubKey);
       const fundSig = schnorr.sign(fundSighash, bobTweakedKey);
       const fundTxHex = finalizeKeyPathSpend(fundPsbt, fundSig);
       const fundTxid = await broadcastTx(fundTxHex);
-      await mineBlocks(1, s.btcAddress);
 
-      const fundRawTx = await bitcoinRpc('getrawtransaction', [fundTxid, true]);
-      const fundVout = fundRawTx.vout.findIndex(o => o.scriptPubKey.address === swapBtcAddress);
+      if (!isTestnet) {
+        await mineBlocks(1, s.btcAddress);
+      }
+
+      // Find the vout for the swap address
+      const fundVout = await findVoutWithRetry(fundTxid, swapBtcAddress);
 
       s.btcLockTxid = fundTxid;
       s.btcLockVout = fundVout;
@@ -302,7 +369,7 @@ async function handleApi(req, res, urlPath) {
       const pubkeys = [s.pubKey, peerPub]; // [alice, bob]
       const { aggPubkey } = keyAgg(pubkeys);
       const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, s.csvTimeout);
-      await verifySwapOutput(body.txid, swapBtcAddress, s.btcAmount);
+      await verifySwapOutput(body.txid, swapBtcAddress, s.btcAmount, { allowUnconfirmed: isTestnet });
 
       return json(res, { valid: true });
     }
@@ -510,7 +577,10 @@ async function handleApi(req, res, urlPath) {
       );
       const signedTxHex = finalizeKeyPathSpend(psbt, btcFinalSig);
       const claimTxid = await broadcastTx(signedTxHex);
-      await mineBlocks(1, s.btcAddress);
+
+      if (!isTestnet) {
+        await mineBlocks(1, s.btcAddress);
+      }
 
       return json(res, { txid: claimTxid });
     }
@@ -570,7 +640,10 @@ async function handleApi(req, res, urlPath) {
       refundPsbt.finalizeAllInputs();
       const refundTxHex = refundPsbt.extractTransaction().toHex();
       const refundTxid = await broadcastTx(refundTxHex);
-      await mineBlocks(1, s.btcAddress);
+
+      if (!isTestnet) {
+        await mineBlocks(1, s.btcAddress);
+      }
 
       return json(res, { txid: refundTxid });
     }
@@ -610,23 +683,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 // ============================================================
-// WebSocket Relay (upgrade)
-// ============================================================
-
-const wss = new WebSocketServer({ noServer: true });
-attachRelay(wss);
-
-server.on('upgrade', (req, socket, head) => {
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req);
-  });
-});
-
-// ============================================================
 // Start
 // ============================================================
 
 server.listen(PORT, () => {
   console.log(`BTC-ALPH Swap UI: http://localhost:${PORT}`);
-  console.log(`Nostr relay:      ws://localhost:${PORT}`);
+  console.log(`Network mode:     ${NETWORK_MODE}${isTestnet ? ' (BTC signet + ALPH testnet)' : ' (BTC regtest + ALPH devnet)'}`);
 });

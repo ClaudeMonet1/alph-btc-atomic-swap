@@ -129,8 +129,27 @@
 
   .devnet-bar {
     display: flex; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #30363d;
-    background: #161b22; flex-shrink: 0;
+    background: #161b22; flex-shrink: 0; flex-wrap: wrap; align-items: center;
   }
+  .faucet-links { font-size: 11px; display: flex; gap: 12px; padding: 2px 0; }
+  .faucet-links a { color: #58a6ff; text-decoration: none; }
+  .faucet-links a:hover { text-decoration: underline; }
+  .utxo-bar {
+    display: flex; gap: 8px; padding: 6px 16px; border-bottom: 1px solid #30363d;
+    background: #161b22; flex-shrink: 0; align-items: center; font-size: 11px;
+  }
+  .utxo-bar select { flex: 1; font-size: 11px; }
+  .copy-btn {
+    padding: 2px 6px; font-size: 10px; cursor: pointer;
+    background: transparent; border: 1px solid #30363d; color: #8b949e; border-radius: 3px;
+  }
+  .copy-btn:hover { color: #e6edf3; border-color: #58a6ff; background: transparent; }
+  .network-badge {
+    font-size: 10px; padding: 2px 6px; border-radius: 3px;
+    font-weight: 700; text-transform: uppercase;
+  }
+  .network-badge.testnet { background: #9e6a0333; color: #bb8009; }
+  .network-badge.devnet { background: #1f6feb33; color: #58a6ff; }
 
   .steps { padding: 8px 16px; display: flex; flex-direction: column; gap: 6px; }
   .step {
@@ -164,20 +183,14 @@
 </head>
 <body>
 
-<!-- ===== Connect Screen ===== -->
+<!-- ===== Loading Screen ===== -->
 <div id="connect-screen">
   <h1><span class="btc" style="color:#f7931a">BTC</span> <span style="color:#8b949e">&harr;</span> <span class="alph" style="color:#00d4aa">ALPH</span> Swap</h1>
   <div class="subtitle">Atomic swap via MuSig2 adaptor signatures over Nostr</div>
-
-  <label>Secret Key (nsec or hex)</label>
-  <input type="password" id="nsec-input" placeholder="nsec1... or 64-char hex" autocomplete="off" spellcheck="false">
-
-  <label>Relay URL</label>
-  <input type="text" id="relay-input" value="ws://localhost:7778">
-
-  <div class="actions">
-    <button id="generate-btn">Generate Key</button>
-    <button id="connect-btn" class="primary">Connect</button>
+  <div id="connect-status" style="color:#8b949e; margin-top:16px; font-size:12px">Loading modules...</div>
+  <div id="connect-error" class="hidden" style="margin-top:16px">
+    <div style="color:#f85149; margin-bottom:12px; font-size:12px" id="connect-error-msg"></div>
+    <button id="retry-btn" class="primary">Retry</button>
   </div>
 </div>
 
@@ -185,16 +198,26 @@
 <div id="main-screen">
   <div class="topbar">
     <div class="title"><span style="color:#f7931a">BTC</span> <span style="color:#8b949e">&harr;</span> <span style="color:#00d4aa">ALPH</span></div>
+    <span id="network-badge" class="network-badge"></span>
     <div class="info">
       <span id="info-npub"></span>
-      <span id="info-btc" style="color:#f7931a"></span>
-      <span id="info-alph" style="color:#00d4aa"></span>
+      <span id="info-btc" style="color:#f7931a"></span><button class="copy-btn" data-copy="btc" title="Copy BTC address">copy</button>
+      <span id="info-alph" style="color:#00d4aa"></span><button class="copy-btn" data-copy="alph" title="Copy ALPH address">copy</button>
     </div>
     <div class="balance-area">
       <span class="btc-bal" id="bal-btc">-- BTC</span>
       <span class="alph-bal" id="bal-alph">-- ALPH</span>
       <button id="refresh-bal-btn" style="padding:4px 8px; font-size:10px">Refresh</button>
+      <button id="key-toggle-btn" style="padding:4px 8px; font-size:10px" title="Show/hide key info">Key</button>
+      <button id="reset-key-btn" style="padding:4px 8px; font-size:10px; color:#f85149" title="Generate new identity">Reset</button>
+      <span id="relay-status" style="font-size:10px; color:#8b949e" title="Connected Nostr relays"></span>
     </div>
+  </div>
+  <div id="key-info-bar" class="hidden" style="padding:6px 16px; background:#161b22; border-bottom:1px solid #30363d; font-size:11px; color:#8b949e; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+    <span>nsec:</span>
+    <code id="key-info-nsec" style="color:#e6edf3; word-break:break-all; flex:1; min-width:200px; user-select:all"></code>
+    <button class="copy-btn" data-copy="nsec" title="Copy nsec" style="flex-shrink:0">copy</button>
+    <span style="color:#484f58; font-size:10px">Stored in browser. Back it up to keep your identity.</span>
   </div>
 
   <div class="columns">
@@ -237,10 +260,20 @@
         </div>
       </div>
 
-      <div class="devnet-bar">
-        <button id="fund-btn" class="orange">Fund Wallet</button>
-        <button id="mine-btn">Mine 1 Block</button>
+      <div class="devnet-bar" id="devnet-bar">
+        <button id="fund-btn" class="orange devnet-only">Fund Wallet</button>
+        <button id="mine-btn" class="devnet-only">Mine 1 Block</button>
+        <div id="faucet-links" class="faucet-links hidden">
+          <a href="https://signetfaucet.com/" target="_blank">Signet BTC Faucet</a>
+          <a href="https://faucet.testnet.alephium.org/" target="_blank">ALPH Testnet Faucet</a>
+        </div>
+        <button id="refresh-utxos-btn" class="testnet-only hidden" style="font-size:10px; padding:4px 8px">Refresh UTXOs</button>
         <button id="start-swap-btn" class="primary">Start Swap</button>
+      </div>
+
+      <div class="utxo-bar hidden" id="utxo-bar">
+        <span style="color:#8b949e">UTXO:</span>
+        <select id="utxo-select"><option value="">Loading...</option></select>
       </div>
 
       <div class="steps" id="steps">
@@ -250,10 +283,20 @@
   </div>
 </div>
 
+<script>
+// Show error if module takes too long to load
+setTimeout(() => {
+  const s = document.getElementById('connect-status');
+  if (s && s.textContent === 'Loading modules...') {
+    s.textContent = 'Modules loading slowly... check browser console for errors.';
+    s.style.color = '#d29922';
+  }
+}, 15000);
+</script>
 <script type="module">
-import { schnorr } from 'https://esm.sh/@noble/curves@2.0.1/secp256k1';
-import { sha256 } from 'https://esm.sh/@noble/hashes@2.0.1/sha256';
-import { bytesToHex, hexToBytes } from 'https://esm.sh/@noble/hashes@2.0.1/utils';
+import { schnorr } from 'https://esm.sh/@noble/curves@1.8.1/secp256k1';
+import { sha256 } from 'https://esm.sh/@noble/hashes@1.7.1/sha256';
+import { bytesToHex, hexToBytes } from 'https://esm.sh/@noble/hashes@1.7.1/utils';
 
 // ============================================================
 // State
@@ -266,26 +309,50 @@ const state = {
   npub: null,
   btcAddress: null,
   alphAddress: null,
+  network: 'devnet',
   role: null,
   peerPubHex: null,
   sessionId: null,
-  ws: null,
+  relays: [],       // [{ws, url, ready}]
+  seenEvents: new Set(), // dedup event IDs across relays
   subscriptions: new Map(),
   msgFilter: 'all',
   stepData: {},
+  selectedUtxo: null,
 };
 
 // ============================================================
-// Nostr Client (browser-side, ~80 lines)
+// Multi-Relay Nostr Client
 // ============================================================
+
+const DEFAULT_RELAYS = [
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+];
 
 function connectRelay(url) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url);
-    ws.onopen = () => resolve(ws);
-    ws.onerror = (e) => reject(new Error('WebSocket error'));
-    setTimeout(() => reject(new Error('relay connect timeout')), 5000);
+    const timer = setTimeout(() => { ws.close(); reject(new Error(`timeout: ${url}`)); }, 8000);
+    ws.onopen = () => { clearTimeout(timer); resolve(ws); };
+    ws.onerror = () => { clearTimeout(timer); reject(new Error(`error: ${url}`)); };
   });
+}
+
+async function connectRelays(urls) {
+  const statusEl = document.getElementById('connect-status');
+  const results = await Promise.allSettled(urls.map(async (url) => {
+    if (statusEl) statusEl.textContent = `Connecting to ${url.replace('wss://','')}...`;
+    const ws = await connectRelay(url);
+    return { ws, url, ready: true };
+  }));
+  const connected = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+  const failed = results.filter(r => r.status === 'rejected').map((r, i) => urls[i]);
+  if (failed.length > 0) console.warn('Failed relays:', failed);
+  if (connected.length === 0) throw new Error('Could not connect to any relay. Check your network connection.');
+  state.relays = connected;
+  return connected;
 }
 
 function nostrSerialize(event) {
@@ -301,38 +368,66 @@ async function signEvent(template) {
   return event;
 }
 
+// Publish to all connected relays, resolve when at least one accepts
 function nostrPublish(event) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('publish timeout')), 5000);
-    const handler = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg[0] === 'OK' && msg[1] === event.id) {
-        state.ws.removeEventListener('message', handler);
-        clearTimeout(timeout);
-        resolve(msg[2]);
-      }
-    };
-    state.ws.addEventListener('message', handler);
-    state.ws.send(JSON.stringify(['EVENT', event]));
+    let resolved = false;
+    let errors = 0;
+    const timer = setTimeout(() => { if (!resolved) reject(new Error('publish timeout')); }, 10000);
+
+    for (const relay of state.relays) {
+      if (!relay.ready || relay.ws.readyState !== WebSocket.OPEN) { errors++; continue; }
+      const handler = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg[0] === 'OK' && msg[1] === event.id) {
+            relay.ws.removeEventListener('message', handler);
+            if (!resolved) { resolved = true; clearTimeout(timer); resolve(msg[2]); }
+          }
+        } catch {}
+      };
+      relay.ws.addEventListener('message', handler);
+      try { relay.ws.send(JSON.stringify(['EVENT', event])); }
+      catch { errors++; relay.ws.removeEventListener('message', handler); }
+    }
+    if (errors >= state.relays.length) {
+      clearTimeout(timer);
+      reject(new Error('No relays available'));
+    }
   });
 }
 
+// Subscribe on all relays with dedup
 function subscribe(subId, filters, onEvent) {
-  const handler = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg[0] === 'EVENT' && msg[1] === subId) onEvent(msg[2]);
-  };
-  state.ws.addEventListener('message', handler);
-  state.ws.send(JSON.stringify(['REQ', subId, ...filters]));
+  const handlers = [];
+  for (const relay of state.relays) {
+    if (!relay.ready || relay.ws.readyState !== WebSocket.OPEN) continue;
+    const handler = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg[0] === 'EVENT' && msg[1] === subId) {
+          const event = msg[2];
+          if (state.seenEvents.has(event.id)) return; // dedup
+          state.seenEvents.add(event.id);
+          onEvent(event);
+        }
+      } catch {}
+    };
+    relay.ws.addEventListener('message', handler);
+    try { relay.ws.send(JSON.stringify(['REQ', subId, ...filters])); } catch {}
+    handlers.push({ ws: relay.ws, handler });
+  }
   const unsub = () => {
-    state.ws.removeEventListener('message', handler);
-    state.ws.send(JSON.stringify(['CLOSE', subId]));
+    for (const { ws, handler } of handlers) {
+      ws.removeEventListener('message', handler);
+      try { ws.send(JSON.stringify(['CLOSE', subId])); } catch {}
+    }
   };
   state.subscriptions.set(subId, unsub);
   return unsub;
 }
 
-function waitForSwapEvent(kind, sessionId, fromPub, predicate = null, timeoutMs = 120000) {
+function waitForSwapEvent(kind, sessionId, fromPub, predicate = null, timeoutMs = state.network === 'testnet' ? 600000 : 120000) {
   return new Promise((resolve, reject) => {
     const subId = 'sw_' + Math.random().toString(36).slice(2, 10);
     const timeout = setTimeout(() => {
@@ -544,53 +639,52 @@ function updateStep(id, updates) {
 }
 
 // ============================================================
-// Connect
+// Auto-Connect (localStorage nsec, auto-generate if missing)
 // ============================================================
 
-document.getElementById('generate-btn').addEventListener('click', () => {
+const STORAGE_KEY = 'btc-alph-swap-nsec';
+
+function getOrCreateNsec() {
+  let hex = localStorage.getItem(STORAGE_KEY);
+  if (hex && hex.length === 64) return hex;
+  // Generate new key
   const sec = new Uint8Array(32);
   crypto.getRandomValues(sec);
-  document.getElementById('nsec-input').value = bytesToHex(sec);
-  document.getElementById('nsec-input').type = 'text';
-});
+  hex = bytesToHex(sec);
+  localStorage.setItem(STORAGE_KEY, hex);
+  return hex;
+}
 
-document.getElementById('connect-btn').addEventListener('click', async () => {
-  const nsecInput = document.getElementById('nsec-input').value.trim();
-  const relayUrl = document.getElementById('relay-input').value.trim();
-  if (!nsecInput) return alert('Please enter or generate a secret key');
+async function autoConnect() {
+  const statusEl = document.getElementById('connect-status');
+  const errorEl = document.getElementById('connect-error');
+  const errorMsgEl = document.getElementById('connect-error-msg');
+  statusEl.textContent = 'Connecting...';
+  errorEl.classList.add('hidden');
 
   try {
+    const nsecHex = getOrCreateNsec();
+
     // Create server session
-    const session = await apiPost('/api/session', { nsec: nsecInput });
+    statusEl.textContent = 'Creating session...';
+    const session = await apiPost('/api/session', { nsec: nsecHex });
     state.token = session.token;
     state.pubKeyHex = session.pubKeyHex;
     state.npub = session.npub;
     state.btcAddress = session.btcAddress;
     state.alphAddress = session.alphAddress;
+    state.secBytes = hexToBytes(nsecHex);
 
-    // Decode secret key for browser-side Nostr signing
-    if (nsecInput.startsWith('nsec')) {
-      // We don't have nip19 in browser, so re-derive from hex
-      // The server gave us the pubkey, derive secBytes from input
-      state.secBytes = hexToBytes(nsecInput.length === 64 ? nsecInput : session.pubKeyHex);
-    }
-    // If hex input
-    if (nsecInput.length === 64 && !nsecInput.startsWith('nsec')) {
-      state.secBytes = hexToBytes(nsecInput);
-    }
-    // For nsec, we need to decode it. Use a minimal bech32 decoder.
-    if (nsecInput.startsWith('nsec')) {
-      state.secBytes = bech32Decode(nsecInput);
-    }
+    // Detect network mode
+    statusEl.textContent = 'Detecting network...';
+    try {
+      const netInfo = await api('/api/network');
+      state.network = netInfo.network;
+    } catch { state.network = 'devnet'; }
 
-    // Verify we have valid sec bytes
-    const verifyPub = bytesToHex(schnorr.getPublicKey(state.secBytes));
-    if (verifyPub !== state.pubKeyHex) {
-      throw new Error('Secret key mismatch after decode');
-    }
-
-    // Connect to relay
-    state.ws = await connectRelay(relayUrl);
+    // Connect to relays
+    statusEl.textContent = 'Connecting to Nostr relays...';
+    const connected = await connectRelays(DEFAULT_RELAYS);
 
     // Update UI
     document.getElementById('connect-screen').style.display = 'none';
@@ -598,52 +692,137 @@ document.getElementById('connect-btn').addEventListener('click', async () => {
     document.getElementById('info-npub').textContent = state.npub.slice(0, 16) + '...';
     document.getElementById('info-btc').textContent = 'BTC:' + state.btcAddress.slice(0, 12) + '...';
     document.getElementById('info-alph').textContent = 'ALPH:' + state.alphAddress.slice(0, 12) + '...';
+    document.getElementById('key-info-nsec').textContent = nsecHex;
+
+    // Network badge
+    const badge = document.getElementById('network-badge');
+    badge.textContent = state.network;
+    badge.className = 'network-badge ' + state.network;
+
+    // Toggle devnet/testnet UI
+    applyNetworkUI();
 
     renderSteps();
     subscribeToEvents();
     refreshBalance();
 
-    addMessage('chat', `Connected as ${state.npub.slice(0, 20)}...`, 'System');
+    const relayNames = connected.map(r => r.url.replace('wss://', '')).join(', ');
+    updateRelayStatus();
+    addMessage('chat', `Connected via ${connected.length} relays: ${relayNames}`, 'System');
   } catch (e) {
-    alert('Connection failed: ' + e.message);
+    statusEl.textContent = '';
+    errorMsgEl.textContent = 'Connection failed: ' + e.message;
+    errorEl.classList.remove('hidden');
   }
+}
+
+function updateRelayStatus() {
+  const el = document.getElementById('relay-status');
+  const alive = state.relays.filter(r => r.ws.readyState === WebSocket.OPEN).length;
+  const total = state.relays.length;
+  el.textContent = `${alive}/${total} relays`;
+  el.style.color = alive === 0 ? '#f85149' : alive < total ? '#d29922' : '#2ea043';
+}
+
+// Periodically check relay health
+setInterval(() => {
+  if (state.relays.length > 0) updateRelayStatus();
+}, 10000);
+
+// Key info toggle
+document.getElementById('key-toggle-btn').addEventListener('click', () => {
+  document.getElementById('key-info-bar').classList.toggle('hidden');
 });
 
-// Minimal bech32 decode for nsec
-function bech32Decode(str) {
-  const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
-  const [hrp, dataPart] = str.toLowerCase().split('1');
-  const data = [];
-  for (const c of dataPart) {
-    const idx = CHARSET.indexOf(c);
-    if (idx === -1) throw new Error('invalid bech32');
-    data.push(idx);
+// Reset identity
+document.getElementById('reset-key-btn').addEventListener('click', () => {
+  if (!confirm('Generate a new identity? Your current key will be lost if not backed up.')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  location.reload();
+});
+
+// Retry button
+document.getElementById('retry-btn').addEventListener('click', () => autoConnect());
+
+// ============================================================
+// Network-aware UI
+// ============================================================
+
+function applyNetworkUI() {
+  const isTestnet = state.network === 'testnet';
+  // Hide devnet-only buttons on testnet
+  document.querySelectorAll('.devnet-only').forEach(el => {
+    el.classList.toggle('hidden', isTestnet);
+  });
+  // Show testnet-only elements
+  document.querySelectorAll('.testnet-only').forEach(el => {
+    el.classList.toggle('hidden', !isTestnet);
+  });
+  // Faucet links
+  document.getElementById('faucet-links').classList.toggle('hidden', !isTestnet);
+
+  if (isTestnet) {
+    refreshUtxos();
   }
-  // Remove checksum (last 6)
-  const payload = data.slice(0, -6);
-  // Convert from 5-bit to 8-bit
-  let acc = 0, bits = 0;
-  const bytes = [];
-  for (const val of payload) {
-    acc = (acc << 5) | val;
-    bits += 5;
-    while (bits >= 8) {
-      bits -= 8;
-      bytes.push((acc >> bits) & 0xff);
-    }
-  }
-  return new Uint8Array(bytes);
 }
+
+async function refreshUtxos() {
+  if (!state.token) return;
+  try {
+    const utxos = await api(`/api/utxos/${state.token}`);
+    const sel = document.getElementById('utxo-select');
+    sel.innerHTML = '<option value="">Auto-select best UTXO</option>';
+    for (const u of utxos) {
+      const conf = u.status?.confirmed ? 'conf' : 'unconf';
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify({ txid: u.txid, vout: u.vout, value: u.value });
+      opt.textContent = `${(u.value / 1e8).toFixed(8)} BTC  ${u.txid.slice(0, 12)}...:${u.vout} [${conf}]`;
+      sel.appendChild(opt);
+    }
+  } catch {}
+}
+
+document.getElementById('refresh-utxos-btn').addEventListener('click', refreshUtxos);
+
+document.getElementById('utxo-select').addEventListener('change', (e) => {
+  state.selectedUtxo = e.target.value ? JSON.parse(e.target.value) : null;
+});
+
+// Copy buttons
+document.querySelectorAll('.copy-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const which = btn.dataset.copy;
+    const text = which === 'btc' ? state.btcAddress : which === 'nsec' ? localStorage.getItem(STORAGE_KEY) : state.alphAddress;
+    if (text) {
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'ok!';
+        setTimeout(() => { btn.textContent = 'copy'; }, 1200);
+      });
+    }
+  });
+});
 
 // ============================================================
 // Event Subscription
 // ============================================================
 
 function subscribeToEvents() {
-  // Subscribe to all relevant events
-  subscribe('all_events', [
-    { kinds: [1, SWAP_SETUP_KIND, SWAP_NONCE_KIND, SWAP_PRESIG_KIND, SWAP_CLAIM_KIND] }
-  ], (event) => {
+  // Only subscribe to swap protocol events from us or our peer, tagged with our session
+  const authors = [state.pubKeyHex];
+  if (state.peerPubHex) authors.push(state.peerPubHex);
+
+  const filters = [
+    // Swap protocol events (always scoped to our authors)
+    { kinds: [SWAP_SETUP_KIND, SWAP_NONCE_KIND, SWAP_PRESIG_KIND, SWAP_CLAIM_KIND], authors },
+    // Our own chat messages tagged with atomicswap
+    { kinds: [1], authors: [state.pubKeyHex], '#t': ['atomicswap'] },
+  ];
+  // If we have a peer, also get their atomicswap chat
+  if (state.peerPubHex) {
+    filters.push({ kinds: [1], authors: [state.peerPubHex], '#t': ['atomicswap'] });
+  }
+
+  subscribe('swap_events', filters, (event) => {
     const isMine = event.pubkey === state.pubKeyHex;
     const authorLabel = isMine ? 'You' : event.pubkey.slice(0, 8) + '...';
 
@@ -653,6 +832,13 @@ function subscribeToEvents() {
       addProtocolMsg(event.kind, event.content, authorLabel);
     }
   });
+}
+
+// Re-subscribe when peer is set (to include their events)
+function resubscribeWithPeer() {
+  const unsub = state.subscriptions.get('swap_events');
+  if (unsub) unsub();
+  subscribeToEvents();
 }
 
 // ============================================================
@@ -738,9 +924,18 @@ document.getElementById('start-swap-btn').addEventListener('click', async () => 
 
   state.role = role;
   state.peerPubHex = peerPub;
+  resubscribeWithPeer();
 
   const btcAmount = parseFloat(document.getElementById('btc-amount').value) || 0.5;
   const alphAmount = (parseFloat(document.getElementById('alph-amount').value) || 10);
+
+  // Show UTXO selector for Bob on testnet
+  if (state.network === 'testnet' && role === 'bob') {
+    document.getElementById('utxo-bar').classList.remove('hidden');
+    refreshUtxos();
+  } else {
+    document.getElementById('utxo-bar').classList.add('hidden');
+  }
 
   addMessage('chat', `Starting swap as ${role}: ${btcAmount} BTC <-> ${alphAmount} ALPH`, 'System');
 
@@ -956,8 +1151,14 @@ async function executeStepBobLock() {
   const sid = state.sessionId;
   const peer = state.peerPubHex;
 
-  // Lock BTC
-  const lockResult = await apiPost('/api/swap/lock-btc', { token: state.token });
+  // Lock BTC — pass selected UTXO on testnet
+  const lockBody = { token: state.token };
+  if (state.network === 'testnet' && state.selectedUtxo) {
+    lockBody.utxoTxid = state.selectedUtxo.txid;
+    lockBody.utxoVout = state.selectedUtxo.vout;
+    lockBody.utxoValue = state.selectedUtxo.value;
+  }
+  const lockResult = await apiPost('/api/swap/lock-btc', lockBody);
   updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}... vout=${lockResult.vout}\nPublishing...` });
 
   // Publish btc_locked
@@ -1141,7 +1342,15 @@ async function executePresign() {
 // Init
 // ============================================================
 
-renderSteps();
+autoConnect().catch(e => {
+  console.error('autoConnect fatal:', e);
+  const s = document.getElementById('connect-status');
+  const em = document.getElementById('connect-error-msg');
+  const ee = document.getElementById('connect-error');
+  if (s) s.textContent = '';
+  if (em) em.textContent = 'Fatal: ' + e.message;
+  if (ee) ee.classList.remove('hidden');
+});
 
 </script>
 </body>
