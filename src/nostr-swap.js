@@ -737,7 +737,7 @@ async function testCrashRecovery() {
 
   // Alice will timeout waiting for alph_claimed — expected
   const alicePromise = aliceSideSwap(aliceWs, aliceSec, bobPubHex, sessionId).catch(e => {
-    if (e.message.includes('timeout') && e.message.includes('alph_claimed')) {
+    if (e.message.includes('timeout') && e.message.includes(`kind ${SWAP_CLAIM_KIND}`)) {
       log('ALICE', 'Timed out waiting for Bob\'s ALPH claim (Bob crashed — expected)');
       return 'timeout';
     }

@@ -22,11 +22,9 @@ function matchesFilter(event, filter) {
   return true;
 }
 
-export function startRelay(port) {
+export function attachRelay(wss) {
   const events = [];
   const subscriptions = new Map(); // ws -> Map<subId, filters[]>
-
-  const wss = new WebSocketServer({ port });
 
   wss.on('connection', (ws) => {
     const subs = new Map();
@@ -83,6 +81,11 @@ export function startRelay(port) {
       subscriptions.delete(ws);
     });
   });
+}
+
+export function startRelay(port) {
+  const wss = new WebSocketServer({ port });
+  attachRelay(wss);
 
   return {
     wss,

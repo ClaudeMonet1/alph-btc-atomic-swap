@@ -1,0 +1,1148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTC-ALPH Atomic Swap</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    background: #0d1117; color: #e6edf3; font-size: 13px; line-height: 1.5;
+  }
+  a { color: #58a6ff; }
+  button {
+    font-family: inherit; font-size: 12px; padding: 6px 14px;
+    background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+    border-radius: 4px; cursor: pointer; transition: background 0.15s;
+  }
+  button:hover { background: #30363d; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: #238636; border-color: #2ea043; }
+  button.primary:hover { background: #2ea043; }
+  button.orange { background: #9e6a03; border-color: #bb8009; }
+  button.orange:hover { background: #bb8009; }
+  input, select {
+    font-family: inherit; font-size: 12px; padding: 6px 10px;
+    background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+    border-radius: 4px; outline: none;
+  }
+  input:focus, select:focus { border-color: #58a6ff; }
+  input::placeholder { color: #484f58; }
+
+  /* Connect screen */
+  #connect-screen {
+    max-width: 480px; margin: 80px auto; padding: 32px;
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  }
+  #connect-screen h1 { font-size: 20px; margin-bottom: 4px; }
+  #connect-screen .subtitle { color: #8b949e; margin-bottom: 24px; font-size: 12px; }
+  #connect-screen label { display: block; color: #8b949e; margin-bottom: 4px; font-size: 11px; }
+  #connect-screen input { width: 100%; margin-bottom: 16px; }
+  #connect-screen .actions { display: flex; gap: 8px; margin-top: 8px; }
+  #connect-screen .actions button { flex: 1; }
+
+  /* Main screen */
+  #main-screen { display: none; height: 100vh; flex-direction: column; }
+  #main-screen.active { display: flex; }
+
+  /* Top bar */
+  .topbar {
+    display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+    background: #161b22; border-bottom: 1px solid #30363d; flex-shrink: 0;
+    overflow: hidden;
+  }
+  .topbar .title { font-weight: 700; font-size: 14px; white-space: nowrap; }
+  .topbar .btc { color: #f7931a; }
+  .topbar .alph { color: #00d4aa; }
+  .topbar .info { color: #8b949e; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .topbar .info span { margin-right: 12px; }
+  .topbar .balance-area { margin-left: auto; display: flex; gap: 12px; align-items: center; font-size: 11px; }
+  .topbar .balance-area .btc-bal { color: #f7931a; }
+  .topbar .balance-area .alph-bal { color: #00d4aa; }
+
+  /* Two-column layout */
+  .columns { display: flex; flex: 1; overflow: hidden; }
+
+  /* Left: Chat/events */
+  .col-left {
+    flex: 1; display: flex; flex-direction: column; border-right: 1px solid #30363d;
+    min-width: 0;
+  }
+  .tab-bar {
+    display: flex; gap: 0; border-bottom: 1px solid #30363d; flex-shrink: 0;
+    background: #161b22;
+  }
+  .tab-bar button {
+    border: none; border-radius: 0; padding: 8px 16px; font-size: 11px;
+    background: transparent; color: #8b949e; border-bottom: 2px solid transparent;
+  }
+  .tab-bar button.active { color: #e6edf3; border-bottom-color: #58a6ff; }
+  .tab-bar button:hover { color: #e6edf3; background: transparent; }
+
+  .messages {
+    flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .msg {
+    padding: 6px 10px; border-radius: 4px; background: #161b22;
+    border-left: 3px solid #30363d; font-size: 12px; word-break: break-all;
+  }
+  .msg.chat { border-left-color: #58a6ff; }
+  .msg.setup { border-left-color: #1f6feb; }
+  .msg.nonce { border-left-color: #8957e5; }
+  .msg.presig { border-left-color: #d29922; }
+  .msg.claim { border-left-color: #2ea043; }
+  .msg .tag {
+    display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 5px;
+    border-radius: 3px; margin-right: 6px; text-transform: uppercase;
+  }
+  .msg.chat .tag { background: #1f6feb33; color: #58a6ff; }
+  .msg.setup .tag { background: #1f6feb33; color: #1f6feb; }
+  .msg.nonce .tag { background: #8957e533; color: #8957e5; }
+  .msg.presig .tag { background: #d2992233; color: #d29922; }
+  .msg.claim .tag { background: #2ea04333; color: #2ea043; }
+  .msg .author { color: #8b949e; font-size: 11px; }
+  .msg .body { margin-top: 2px; }
+  .msg .hex { color: #8b949e; font-size: 11px; }
+
+  .chat-input {
+    display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid #30363d;
+    background: #161b22; flex-shrink: 0;
+  }
+  .chat-input input { flex: 1; }
+
+  /* Right: Swap control */
+  .col-right {
+    width: 380px; min-width: 380px; display: flex; flex-direction: column;
+    overflow-y: auto; background: #0d1117;
+  }
+  .swap-header {
+    padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
+    flex-shrink: 0;
+  }
+  .swap-header h2 { font-size: 14px; margin-bottom: 8px; }
+  .swap-config { display: flex; flex-direction: column; gap: 8px; }
+  .swap-config .row { display: flex; gap: 8px; align-items: center; }
+  .swap-config label { font-size: 11px; color: #8b949e; width: 48px; flex-shrink: 0; }
+  .swap-config input, .swap-config select { flex: 1; }
+  .swap-config .small-input { width: 80px; flex: none; }
+
+  .devnet-bar {
+    display: flex; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #30363d;
+    background: #161b22; flex-shrink: 0;
+  }
+
+  .steps { padding: 8px 16px; display: flex; flex-direction: column; gap: 6px; }
+  .step {
+    border: 1px solid #30363d; border-radius: 6px; background: #161b22;
+    overflow: hidden;
+  }
+  .step-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; font-size: 12px; font-weight: 600;
+  }
+  .step-header .status { font-size: 11px; font-weight: 400; }
+  .step-header .status.pending { color: #8b949e; }
+  .step-header .status.done { color: #2ea043; }
+  .step-header .status.active { color: #d29922; }
+  .step-header .status.error { color: #f85149; }
+  .step-body {
+    padding: 6px 12px 10px; border-top: 1px solid #30363d;
+    font-size: 11px; color: #8b949e;
+  }
+  .step-body .data { word-break: break-all; margin-top: 4px; }
+  .step-body button { margin-top: 6px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #0d1117; }
+  ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<!-- ===== Connect Screen ===== -->
+<div id="connect-screen">
+  <h1><span class="btc" style="color:#f7931a">BTC</span> <span style="color:#8b949e">&harr;</span> <span class="alph" style="color:#00d4aa">ALPH</span> Swap</h1>
+  <div class="subtitle">Atomic swap via MuSig2 adaptor signatures over Nostr</div>
+
+  <label>Secret Key (nsec or hex)</label>
+  <input type="password" id="nsec-input" placeholder="nsec1... or 64-char hex" autocomplete="off" spellcheck="false">
+
+  <label>Relay URL</label>
+  <input type="text" id="relay-input" value="ws://localhost:7778">
+
+  <div class="actions">
+    <button id="generate-btn">Generate Key</button>
+    <button id="connect-btn" class="primary">Connect</button>
+  </div>
+</div>
+
+<!-- ===== Main Screen ===== -->
+<div id="main-screen">
+  <div class="topbar">
+    <div class="title"><span style="color:#f7931a">BTC</span> <span style="color:#8b949e">&harr;</span> <span style="color:#00d4aa">ALPH</span></div>
+    <div class="info">
+      <span id="info-npub"></span>
+      <span id="info-btc" style="color:#f7931a"></span>
+      <span id="info-alph" style="color:#00d4aa"></span>
+    </div>
+    <div class="balance-area">
+      <span class="btc-bal" id="bal-btc">-- BTC</span>
+      <span class="alph-bal" id="bal-alph">-- ALPH</span>
+      <button id="refresh-bal-btn" style="padding:4px 8px; font-size:10px">Refresh</button>
+    </div>
+  </div>
+
+  <div class="columns">
+    <!-- Left: Messages -->
+    <div class="col-left">
+      <div class="tab-bar">
+        <button class="active" data-filter="all">All</button>
+        <button data-filter="chat">Chat</button>
+        <button data-filter="protocol">Protocol</button>
+      </div>
+      <div class="messages" id="messages"></div>
+      <div class="chat-input">
+        <input type="text" id="chat-msg" placeholder="Send a message..." autocomplete="off">
+        <button id="send-chat-btn">Send</button>
+      </div>
+    </div>
+
+    <!-- Right: Swap -->
+    <div class="col-right">
+      <div class="swap-header">
+        <h2>Swap Configuration</h2>
+        <div class="swap-config">
+          <div class="row">
+            <label>Role</label>
+            <select id="role-select">
+              <option value="alice">Alice (has ALPH, wants BTC)</option>
+              <option value="bob">Bob (has BTC, wants ALPH)</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>Peer</label>
+            <input type="text" id="peer-input" placeholder="Peer's pubkey hex">
+          </div>
+          <div class="row">
+            <label>BTC</label>
+            <input type="text" id="btc-amount" value="0.5" class="small-input">
+            <label>ALPH</label>
+            <input type="text" id="alph-amount" value="10" class="small-input">
+          </div>
+        </div>
+      </div>
+
+      <div class="devnet-bar">
+        <button id="fund-btn" class="orange">Fund Wallet</button>
+        <button id="mine-btn">Mine 1 Block</button>
+        <button id="start-swap-btn" class="primary">Start Swap</button>
+      </div>
+
+      <div class="steps" id="steps">
+        <!-- Steps are rendered by JS -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { schnorr } from 'https://esm.sh/@noble/curves@2.0.1/secp256k1';
+import { sha256 } from 'https://esm.sh/@noble/hashes@2.0.1/sha256';
+import { bytesToHex, hexToBytes } from 'https://esm.sh/@noble/hashes@2.0.1/utils';
+
+// ============================================================
+// State
+// ============================================================
+
+const state = {
+  token: null,
+  secBytes: null,
+  pubKeyHex: null,
+  npub: null,
+  btcAddress: null,
+  alphAddress: null,
+  role: null,
+  peerPubHex: null,
+  sessionId: null,
+  ws: null,
+  subscriptions: new Map(),
+  msgFilter: 'all',
+  stepData: {},
+};
+
+// ============================================================
+// Nostr Client (browser-side, ~80 lines)
+// ============================================================
+
+function connectRelay(url) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    ws.onopen = () => resolve(ws);
+    ws.onerror = (e) => reject(new Error('WebSocket error'));
+    setTimeout(() => reject(new Error('relay connect timeout')), 5000);
+  });
+}
+
+function nostrSerialize(event) {
+  return JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content]);
+}
+
+async function signEvent(template) {
+  const event = { ...template, pubkey: state.pubKeyHex };
+  const serialized = new TextEncoder().encode(nostrSerialize(event));
+  const id = bytesToHex(sha256(serialized));
+  event.id = id;
+  event.sig = bytesToHex(schnorr.sign(hexToBytes(id), state.secBytes));
+  return event;
+}
+
+function nostrPublish(event) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('publish timeout')), 5000);
+    const handler = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg[0] === 'OK' && msg[1] === event.id) {
+        state.ws.removeEventListener('message', handler);
+        clearTimeout(timeout);
+        resolve(msg[2]);
+      }
+    };
+    state.ws.addEventListener('message', handler);
+    state.ws.send(JSON.stringify(['EVENT', event]));
+  });
+}
+
+function subscribe(subId, filters, onEvent) {
+  const handler = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg[0] === 'EVENT' && msg[1] === subId) onEvent(msg[2]);
+  };
+  state.ws.addEventListener('message', handler);
+  state.ws.send(JSON.stringify(['REQ', subId, ...filters]));
+  const unsub = () => {
+    state.ws.removeEventListener('message', handler);
+    state.ws.send(JSON.stringify(['CLOSE', subId]));
+  };
+  state.subscriptions.set(subId, unsub);
+  return unsub;
+}
+
+function waitForSwapEvent(kind, sessionId, fromPub, predicate = null, timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    const subId = 'sw_' + Math.random().toString(36).slice(2, 10);
+    const timeout = setTimeout(() => {
+      unsub();
+      reject(new Error(`timeout waiting for kind ${kind}`));
+    }, timeoutMs);
+    const unsub = subscribe(subId,
+      [{ kinds: [kind], '#e': [sessionId], authors: [fromPub] }],
+      (event) => {
+        if (predicate && !predicate(event)) return;
+        unsub();
+        clearTimeout(timeout);
+        resolve(event);
+      });
+  });
+}
+
+// ============================================================
+// Event Kinds & Builders
+// ============================================================
+
+const SWAP_SETUP_KIND  = 38390;
+const SWAP_NONCE_KIND  = 38391;
+const SWAP_PRESIG_KIND = 38392;
+const SWAP_CLAIM_KIND  = 38393;
+
+async function createChatEvent(content) {
+  return signEvent({
+    kind: 1,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: state.sessionId ? [['e', state.sessionId], ['t', 'atomicswap']] : [['t', 'atomicswap']],
+    content,
+  });
+}
+
+async function createSwapSetup({ sessionId, recipientPubHex, msgType, ...data }) {
+  return signEvent({
+    kind: SWAP_SETUP_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', sessionId], ['p', recipientPubHex], ['d', `${sessionId}:${msgType}`]],
+    content: JSON.stringify({ type: msgType, ...data }),
+  });
+}
+
+async function createSwapNonce({ sessionId, recipientPubHex, phase, ...data }) {
+  return signEvent({
+    kind: SWAP_NONCE_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', sessionId], ['p', recipientPubHex], ['d', `${sessionId}:${phase}`]],
+    content: JSON.stringify({ phase, ...data }),
+  });
+}
+
+async function createSwapPresig({ sessionId, recipientPubHex, ...data }) {
+  return signEvent({
+    kind: SWAP_PRESIG_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', sessionId], ['p', recipientPubHex], ['d', sessionId]],
+    content: JSON.stringify(data),
+  });
+}
+
+async function createSwapClaim({ sessionId, recipientPubHex, claimType, ...data }) {
+  return signEvent({
+    kind: SWAP_CLAIM_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', sessionId], ['p', recipientPubHex], ['d', `${sessionId}:${claimType}`]],
+    content: JSON.stringify({ type: claimType, ...data }),
+  });
+}
+
+// ============================================================
+// API helpers
+// ============================================================
+
+const API = window.location.origin;
+
+async function api(path, body = {}) {
+  const res = await fetch(`${API}${path}`, {
+    method: body && Object.keys(body).length ? 'POST' : 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    body: body && Object.keys(body).length ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+async function apiPost(path, body) {
+  const res = await fetch(`${API}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+// ============================================================
+// UI: Messages
+// ============================================================
+
+const messagesEl = document.getElementById('messages');
+
+function addMessage(type, content, author = null) {
+  const div = document.createElement('div');
+  div.className = `msg ${type}`;
+  div.dataset.type = type === 'chat' ? 'chat' : 'protocol';
+
+  const tagNames = { chat: 'CHAT', setup: 'SETUP', nonce: 'NONCE', presig: 'PRESIG', claim: 'CLAIM' };
+  let html = `<span class="tag">${tagNames[type] || type}</span>`;
+  if (author) html += `<span class="author">${author}</span> `;
+  html += `<span class="body">${escapeHtml(content)}</span>`;
+  div.innerHTML = html;
+
+  messagesEl.appendChild(div);
+  applyFilter();
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function addProtocolMsg(kind, content, author) {
+  const kindMap = {
+    [SWAP_SETUP_KIND]: 'setup',
+    [SWAP_NONCE_KIND]: 'nonce',
+    [SWAP_PRESIG_KIND]: 'presig',
+    [SWAP_CLAIM_KIND]: 'claim',
+  };
+  const type = kindMap[kind] || 'setup';
+  let text = content;
+  try {
+    const parsed = JSON.parse(content);
+    text = Object.entries(parsed).map(([k, v]) => {
+      const vs = String(v);
+      return `${k}: ${vs.length > 24 ? vs.slice(0, 24) + '...' : vs}`;
+    }).join(' | ');
+  } catch {}
+  addMessage(type, text, author);
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function applyFilter() {
+  const filter = state.msgFilter;
+  messagesEl.querySelectorAll('.msg').forEach(el => {
+    if (filter === 'all') { el.style.display = ''; return; }
+    el.style.display = el.dataset.type === filter ? '' : 'none';
+  });
+}
+
+// Tab bar
+document.querySelectorAll('.tab-bar button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-bar button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.msgFilter = btn.dataset.filter;
+    applyFilter();
+  });
+});
+
+// ============================================================
+// UI: Steps
+// ============================================================
+
+const STEPS = [
+  { id: 'setup', name: '1. Setup', desc: 'Init roles, exchange adaptor point, lock BTC, deploy ALPH' },
+  { id: 'lock', name: '2. Lock', desc: 'Lock BTC (Bob) / Verify + Deploy ALPH (Alice)' },
+  { id: 'nonces', name: '3. Nonces', desc: 'Commit-then-reveal nonce exchange' },
+  { id: 'presign', name: '4. Pre-sign', desc: 'Adaptor pre-signature exchange and verification' },
+  { id: 'claim', name: '5. Claim', desc: 'Alice claims BTC, Bob extracts t and claims ALPH' },
+];
+
+const stepsEl = document.getElementById('steps');
+
+function renderSteps() {
+  stepsEl.innerHTML = '';
+  for (const step of STEPS) {
+    const sd = state.stepData[step.id] || {};
+    const status = sd.status || 'pending';
+    const statusLabels = { pending: '\u25fb Pending', done: '\u2713 Done', active: '\u25b6 Active', error: '\u2717 Error' };
+    const div = document.createElement('div');
+    div.className = 'step';
+    div.id = `step-${step.id}`;
+    let bodyHtml = `<div>${step.desc}</div>`;
+    if (sd.info) bodyHtml += `<div class="data">${escapeHtml(sd.info)}</div>`;
+    if (sd.error) bodyHtml += `<div class="data" style="color:#f85149">${escapeHtml(sd.error)}</div>`;
+    if (status === 'pending' || status === 'active') {
+      bodyHtml += `<button class="step-exec primary" data-step="${step.id}" ${status === 'active' ? 'disabled' : ''}>Execute</button>`;
+    }
+    div.innerHTML = `
+      <div class="step-header">
+        <span>${step.name}</span>
+        <span class="status ${status}">${statusLabels[status]}</span>
+      </div>
+      <div class="step-body">${bodyHtml}</div>`;
+    stepsEl.appendChild(div);
+  }
+  // Re-attach step buttons
+  stepsEl.querySelectorAll('.step-exec').forEach(btn => {
+    btn.addEventListener('click', () => executeStep(btn.dataset.step));
+  });
+}
+
+function updateStep(id, updates) {
+  state.stepData[id] = { ...state.stepData[id], ...updates };
+  renderSteps();
+}
+
+// ============================================================
+// Connect
+// ============================================================
+
+document.getElementById('generate-btn').addEventListener('click', () => {
+  const sec = new Uint8Array(32);
+  crypto.getRandomValues(sec);
+  document.getElementById('nsec-input').value = bytesToHex(sec);
+  document.getElementById('nsec-input').type = 'text';
+});
+
+document.getElementById('connect-btn').addEventListener('click', async () => {
+  const nsecInput = document.getElementById('nsec-input').value.trim();
+  const relayUrl = document.getElementById('relay-input').value.trim();
+  if (!nsecInput) return alert('Please enter or generate a secret key');
+
+  try {
+    // Create server session
+    const session = await apiPost('/api/session', { nsec: nsecInput });
+    state.token = session.token;
+    state.pubKeyHex = session.pubKeyHex;
+    state.npub = session.npub;
+    state.btcAddress = session.btcAddress;
+    state.alphAddress = session.alphAddress;
+
+    // Decode secret key for browser-side Nostr signing
+    if (nsecInput.startsWith('nsec')) {
+      // We don't have nip19 in browser, so re-derive from hex
+      // The server gave us the pubkey, derive secBytes from input
+      state.secBytes = hexToBytes(nsecInput.length === 64 ? nsecInput : session.pubKeyHex);
+    }
+    // If hex input
+    if (nsecInput.length === 64 && !nsecInput.startsWith('nsec')) {
+      state.secBytes = hexToBytes(nsecInput);
+    }
+    // For nsec, we need to decode it. Use a minimal bech32 decoder.
+    if (nsecInput.startsWith('nsec')) {
+      state.secBytes = bech32Decode(nsecInput);
+    }
+
+    // Verify we have valid sec bytes
+    const verifyPub = bytesToHex(schnorr.getPublicKey(state.secBytes));
+    if (verifyPub !== state.pubKeyHex) {
+      throw new Error('Secret key mismatch after decode');
+    }
+
+    // Connect to relay
+    state.ws = await connectRelay(relayUrl);
+
+    // Update UI
+    document.getElementById('connect-screen').style.display = 'none';
+    document.getElementById('main-screen').classList.add('active');
+    document.getElementById('info-npub').textContent = state.npub.slice(0, 16) + '...';
+    document.getElementById('info-btc').textContent = 'BTC:' + state.btcAddress.slice(0, 12) + '...';
+    document.getElementById('info-alph').textContent = 'ALPH:' + state.alphAddress.slice(0, 12) + '...';
+
+    renderSteps();
+    subscribeToEvents();
+    refreshBalance();
+
+    addMessage('chat', `Connected as ${state.npub.slice(0, 20)}...`, 'System');
+  } catch (e) {
+    alert('Connection failed: ' + e.message);
+  }
+});
+
+// Minimal bech32 decode for nsec
+function bech32Decode(str) {
+  const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+  const [hrp, dataPart] = str.toLowerCase().split('1');
+  const data = [];
+  for (const c of dataPart) {
+    const idx = CHARSET.indexOf(c);
+    if (idx === -1) throw new Error('invalid bech32');
+    data.push(idx);
+  }
+  // Remove checksum (last 6)
+  const payload = data.slice(0, -6);
+  // Convert from 5-bit to 8-bit
+  let acc = 0, bits = 0;
+  const bytes = [];
+  for (const val of payload) {
+    acc = (acc << 5) | val;
+    bits += 5;
+    while (bits >= 8) {
+      bits -= 8;
+      bytes.push((acc >> bits) & 0xff);
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+// ============================================================
+// Event Subscription
+// ============================================================
+
+function subscribeToEvents() {
+  // Subscribe to all relevant events
+  subscribe('all_events', [
+    { kinds: [1, SWAP_SETUP_KIND, SWAP_NONCE_KIND, SWAP_PRESIG_KIND, SWAP_CLAIM_KIND] }
+  ], (event) => {
+    const isMine = event.pubkey === state.pubKeyHex;
+    const authorLabel = isMine ? 'You' : event.pubkey.slice(0, 8) + '...';
+
+    if (event.kind === 1) {
+      addMessage('chat', event.content, authorLabel);
+    } else {
+      addProtocolMsg(event.kind, event.content, authorLabel);
+    }
+  });
+}
+
+// ============================================================
+// Chat
+// ============================================================
+
+document.getElementById('send-chat-btn').addEventListener('click', sendChat);
+document.getElementById('chat-msg').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendChat();
+});
+
+async function sendChat() {
+  const input = document.getElementById('chat-msg');
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  try {
+    const event = await createChatEvent(msg);
+    await nostrPublish(event);
+  } catch (e) {
+    addMessage('chat', `Error: ${e.message}`, 'System');
+  }
+}
+
+// ============================================================
+// Balance
+// ============================================================
+
+document.getElementById('refresh-bal-btn').addEventListener('click', refreshBalance);
+
+async function refreshBalance() {
+  if (!state.token) return;
+  try {
+    const res = await fetch(`${API}/api/balance/${state.token}`);
+    const bal = await res.json();
+    document.getElementById('bal-btc').textContent = `${bal.btc} BTC`;
+    document.getElementById('bal-alph').textContent = `${bal.alph} ALPH`;
+  } catch {}
+}
+
+// ============================================================
+// Devnet Helpers
+// ============================================================
+
+document.getElementById('fund-btn').addEventListener('click', async () => {
+  if (!state.token) return;
+  const btn = document.getElementById('fund-btn');
+  btn.disabled = true; btn.textContent = 'Funding...';
+  try {
+    // Set role first so server knows how much ALPH to fund
+    const role = document.getElementById('role-select').value;
+    state.role = role;
+    await apiPost('/api/swap/init', { token: state.token, role, peerPubHex: state.pubKeyHex, sessionId: 'temp' });
+
+    const result = await apiPost('/api/fund', { token: state.token });
+    addMessage('chat', `Funded: ${result.alphAmount ? (Number(BigInt(result.alphAmount)) / 1e18).toFixed(0) : '?'} ALPH + BTC coinbase (txid: ${result.coinbaseTxid.slice(0, 16)}...)`, 'System');
+    await refreshBalance();
+  } catch (e) {
+    addMessage('chat', `Fund error: ${e.message}`, 'System');
+  }
+  btn.disabled = false; btn.textContent = 'Fund Wallet';
+});
+
+document.getElementById('mine-btn').addEventListener('click', async () => {
+  if (!state.token) return;
+  try {
+    await apiPost('/api/mine', { token: state.token, blocks: 1 });
+    addMessage('chat', 'Mined 1 block', 'System');
+    await refreshBalance();
+  } catch (e) {
+    addMessage('chat', `Mine error: ${e.message}`, 'System');
+  }
+});
+
+// ============================================================
+// Start Swap
+// ============================================================
+
+document.getElementById('start-swap-btn').addEventListener('click', async () => {
+  const role = document.getElementById('role-select').value;
+  const peerPub = document.getElementById('peer-input').value.trim();
+  if (!peerPub) return alert('Enter peer pubkey');
+
+  state.role = role;
+  state.peerPubHex = peerPub;
+
+  const btcAmount = parseFloat(document.getElementById('btc-amount').value) || 0.5;
+  const alphAmount = (parseFloat(document.getElementById('alph-amount').value) || 10);
+
+  addMessage('chat', `Starting swap as ${role}: ${btcAmount} BTC <-> ${alphAmount} ALPH`, 'System');
+
+  // If Alice, create offer event as session anchor
+  if (role === 'alice') {
+    const offerEvent = await signEvent({
+      kind: 1,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['t', 'atomicswap']],
+      content: `Selling ${alphAmount} ALPH for ${btcAmount} BTC. DM me if interested.`,
+    });
+    await nostrPublish(offerEvent);
+    state.sessionId = offerEvent.id;
+    addMessage('chat', `Session ID: ${state.sessionId.slice(0, 16)}...`, 'System');
+  } else {
+    // Bob needs to enter session ID or we auto-discover
+    const sessionId = prompt('Enter session ID (Alice\'s offer event ID):');
+    if (!sessionId) return;
+    state.sessionId = sessionId;
+  }
+
+  // Init on server
+  try {
+    const initResult = await apiPost('/api/swap/init', {
+      token: state.token,
+      role,
+      peerPubHex: peerPub,
+      btcAmount,
+      alphAmount: String(BigInt(Math.round(alphAmount * 1e18))),
+      sessionId: state.sessionId,
+    });
+
+    if (role === 'alice') {
+      state.stepData.setup = { adaptorPoint: initResult.adaptorPoint };
+    }
+
+    updateStep('setup', { status: 'pending', info: role === 'alice' ? `adaptorPoint: ${initResult.adaptorPoint?.slice(0, 24)}...` : 'Ready to receive setup' });
+    addMessage('chat', `Swap initialized as ${role}`, 'System');
+  } catch (e) {
+    addMessage('chat', `Init error: ${e.message}`, 'System');
+  }
+});
+
+// ============================================================
+// Step Execution
+// ============================================================
+
+async function executeStep(stepId) {
+  updateStep(stepId, { status: 'active', error: null });
+  try {
+    if (state.role === 'alice') {
+      await executeStepAlice(stepId);
+    } else {
+      await executeStepBob(stepId);
+    }
+    updateStep(stepId, { status: 'done' });
+  } catch (e) {
+    updateStep(stepId, { status: 'error', error: e.message });
+    addMessage('chat', `Step ${stepId} error: ${e.message}`, 'System');
+  }
+}
+
+// ── Alice Steps ──
+
+async function executeStepAlice(stepId) {
+  const sid = state.sessionId;
+  const peer = state.peerPubHex;
+
+  if (stepId === 'setup') {
+    // Send confirmation with adaptor point
+    const ap = state.stepData.setup?.adaptorPoint;
+    const event = await createSwapSetup({
+      sessionId: sid, recipientPubHex: peer, msgType: 'confirm',
+      pubkey: state.pubKeyHex, adaptorPoint: ap,
+    });
+    await nostrPublish(event);
+    updateStep('setup', { info: `adaptorPoint: ${ap?.slice(0, 24)}...\nWaiting for Bob's BTC lock...` });
+
+    // Wait for btc_locked
+    const btcLockedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sid, peer,
+      (e) => JSON.parse(e.content).type === 'btc_locked');
+    const btcLocked = JSON.parse(btcLockedEvent.content);
+
+    // Verify BTC
+    await apiPost('/api/swap/verify-btc', {
+      token: state.token, txid: btcLocked.txid, vout: btcLocked.vout,
+    });
+
+    updateStep('setup', { info: `BTC locked: ${btcLocked.txid.slice(0, 16)}... vout=${btcLocked.vout}\nBTC verified. Deploying ALPH...` });
+    // Auto-advance to lock
+    updateStep('lock', { status: 'active' });
+    await executeStepAliceLock();
+    updateStep('lock', { status: 'done' });
+
+  } else if (stepId === 'lock') {
+    await executeStepAliceLock();
+
+  } else if (stepId === 'nonces') {
+    await executeNonces();
+
+  } else if (stepId === 'presign') {
+    await executePresign();
+
+  } else if (stepId === 'claim') {
+    // Claim BTC
+    const result = await apiPost('/api/swap/claim-btc', { token: state.token });
+    updateStep('claim', { info: `BTC claimed! txid: ${result.txid.slice(0, 24)}...` });
+
+    // Publish claim notification
+    const event = await createSwapClaim({
+      sessionId: sid, recipientPubHex: peer, claimType: 'btc_claimed',
+      txid: result.txid,
+    });
+    await nostrPublish(event);
+
+    // Wait for Bob's ALPH claim
+    updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nWaiting for Bob to claim ALPH...` });
+    const alphClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sid, peer,
+      (e) => JSON.parse(e.content).type === 'alph_claimed');
+    const alphClaimed = JSON.parse(alphClaimedEvent.content);
+    updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nBob claimed ALPH: ${alphClaimed.txid.slice(0, 16)}...` });
+    await refreshBalance();
+  }
+}
+
+async function executeStepAliceLock() {
+  const sid = state.sessionId;
+  const peer = state.peerPubHex;
+
+  // Deploy ALPH contract
+  const deployResult = await apiPost('/api/swap/deploy-alph', { token: state.token });
+  updateStep('lock', { info: `ALPH deployed: ${deployResult.contractAddress.slice(0, 16)}...\nSending contract info...` });
+
+  // Send contract info
+  const event = await createSwapSetup({
+    sessionId: sid, recipientPubHex: peer, msgType: 'alph_deployed',
+    contractId: deployResult.contractId, contractAddress: deployResult.contractAddress,
+  });
+  await nostrPublish(event);
+
+  // Wait for Bob's verification
+  updateStep('lock', { info: `ALPH deployed: ${deployResult.contractAddress.slice(0, 16)}...\nWaiting for Bob to verify...` });
+  await waitForSwapEvent(SWAP_SETUP_KIND, sid, peer,
+    (e) => JSON.parse(e.content).type === 'verified');
+
+  // Compute context
+  await apiPost('/api/swap/compute-context', { token: state.token });
+  updateStep('lock', { info: `ALPH: ${deployResult.contractAddress.slice(0, 16)}... | Bob verified | Context computed` });
+}
+
+// ── Bob Steps ──
+
+async function executeStepBob(stepId) {
+  const sid = state.sessionId;
+  const peer = state.peerPubHex;
+
+  if (stepId === 'setup') {
+    // Wait for Alice's confirmation
+    updateStep('setup', { info: 'Waiting for Alice\'s confirmation...' });
+    const confirmEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sid, peer,
+      (e) => JSON.parse(e.content).type === 'confirm');
+    const confirm = JSON.parse(confirmEvent.content);
+
+    // Store adaptor point on server
+    await apiPost('/api/swap/init', {
+      token: state.token, role: 'bob', peerPubHex: peer,
+      adaptorPoint: confirm.adaptorPoint, sessionId: sid,
+    });
+
+    updateStep('setup', { info: `adaptorPoint: ${confirm.adaptorPoint.slice(0, 24)}...\nLocking BTC...` });
+
+    // Auto-advance to lock
+    updateStep('lock', { status: 'active' });
+    await executeStepBobLock();
+    updateStep('lock', { status: 'done' });
+
+  } else if (stepId === 'lock') {
+    await executeStepBobLock();
+
+  } else if (stepId === 'nonces') {
+    await executeNonces();
+
+  } else if (stepId === 'presign') {
+    await executePresign();
+
+  } else if (stepId === 'claim') {
+    // Wait for Alice's BTC claim
+    updateStep('claim', { info: 'Waiting for Alice to claim BTC...' });
+    const btcClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sid, peer,
+      (e) => JSON.parse(e.content).type === 'btc_claimed');
+    const btcClaimed = JSON.parse(btcClaimedEvent.content);
+
+    updateStep('claim', { info: `Alice claimed BTC: ${btcClaimed.txid.slice(0, 16)}...\nExtracting secret and claiming ALPH...` });
+
+    // Claim ALPH (server extracts t and claims)
+    const result = await apiPost('/api/swap/claim-alph', {
+      token: state.token, btcClaimTxid: btcClaimed.txid,
+    });
+
+    // Publish claim notification
+    const event = await createSwapClaim({
+      sessionId: sid, recipientPubHex: peer, claimType: 'alph_claimed',
+      txid: result.txid,
+    });
+    await nostrPublish(event);
+
+    updateStep('claim', { info: `Alice BTC: ${btcClaimed.txid.slice(0, 16)}...\nALPH claimed: ${result.txid.slice(0, 16)}...` });
+    await refreshBalance();
+  }
+}
+
+async function executeStepBobLock() {
+  const sid = state.sessionId;
+  const peer = state.peerPubHex;
+
+  // Lock BTC
+  const lockResult = await apiPost('/api/swap/lock-btc', { token: state.token });
+  updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}... vout=${lockResult.vout}\nPublishing...` });
+
+  // Publish btc_locked
+  const event = await createSwapSetup({
+    sessionId: sid, recipientPubHex: peer, msgType: 'btc_locked',
+    txid: lockResult.txid, vout: lockResult.vout, amountSat: lockResult.amountSat,
+  });
+  await nostrPublish(event);
+
+  // Wait for ALPH deployment
+  updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}...\nWaiting for Alice to deploy ALPH...` });
+  const alphDeployedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sid, peer,
+    (e) => JSON.parse(e.content).type === 'alph_deployed');
+  const alphDeployed = JSON.parse(alphDeployedEvent.content);
+
+  // Verify ALPH
+  await apiPost('/api/swap/verify-alph', {
+    token: state.token,
+    contractId: alphDeployed.contractId,
+    contractAddress: alphDeployed.contractAddress,
+  });
+
+  // Send verified
+  const verifiedEvent = await createSwapSetup({
+    sessionId: sid, recipientPubHex: peer, msgType: 'verified',
+  });
+  await nostrPublish(verifiedEvent);
+
+  // Compute context
+  await apiPost('/api/swap/compute-context', { token: state.token });
+  updateStep('lock', { info: `BTC: ${lockResult.txid.slice(0, 16)}... | ALPH: ${alphDeployed.contractAddress.slice(0, 12)}... | Verified` });
+}
+
+// ── Shared Steps ──
+
+async function executeNonces() {
+  const sid = state.sessionId;
+  const peer = state.peerPubHex;
+  const isAlice = state.role === 'alice';
+
+  // Generate nonce commitments
+  const commitResult = await apiPost('/api/swap/nonce-commit', { token: state.token });
+
+  if (isAlice) {
+    // Alice sends first
+    const commitEvent = await createSwapNonce({
+      sessionId: sid, recipientPubHex: peer, phase: 'commit',
+      btcNonceHash: commitResult.btcNonceHash, alphNonceHash: commitResult.alphNonceHash,
+    });
+    await nostrPublish(commitEvent);
+    updateStep('nonces', { info: 'Commitment sent. Waiting for peer...' });
+
+    // Wait for peer commit
+    const peerCommitEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sid, peer,
+      (e) => JSON.parse(e.content).phase === 'commit');
+    const peerCommit = JSON.parse(peerCommitEvent.content);
+
+    // Reveal
+    const revealResult = await apiPost('/api/swap/nonce-reveal', {
+      token: state.token,
+      peerBtcNonceHash: peerCommit.btcNonceHash,
+      peerAlphNonceHash: peerCommit.alphNonceHash,
+    });
+
+    const revealEvent = await createSwapNonce({
+      sessionId: sid, recipientPubHex: peer, phase: 'reveal',
+      btcPubNonce: revealResult.btcPubNonce, alphPubNonce: revealResult.alphPubNonce,
+    });
+    await nostrPublish(revealEvent);
+    updateStep('nonces', { info: 'Nonces revealed. Waiting for peer reveal...' });
+
+    // Wait for peer reveal
+    const peerRevealEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sid, peer,
+      (e) => JSON.parse(e.content).phase === 'reveal');
+    const peerReveal = JSON.parse(peerRevealEvent.content);
+
+    // Verify
+    await apiPost('/api/swap/nonce-verify', {
+      token: state.token,
+      peerBtcPubNonce: peerReveal.btcPubNonce,
+      peerAlphPubNonce: peerReveal.alphPubNonce,
+    });
+
+  } else {
+    // Bob waits first
+    updateStep('nonces', { info: 'Waiting for Alice\'s commitment...' });
+    const peerCommitEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sid, peer,
+      (e) => JSON.parse(e.content).phase === 'commit');
+    const peerCommit = JSON.parse(peerCommitEvent.content);
+
+    // Send our commit
+    const commitEvent = await createSwapNonce({
+      sessionId: sid, recipientPubHex: peer, phase: 'commit',
+      btcNonceHash: commitResult.btcNonceHash, alphNonceHash: commitResult.alphNonceHash,
+    });
+    await nostrPublish(commitEvent);
+
+    // Wait for peer reveal
+    updateStep('nonces', { info: 'Commitment exchanged. Waiting for peer reveal...' });
+    const peerRevealEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sid, peer,
+      (e) => JSON.parse(e.content).phase === 'reveal');
+    const peerReveal = JSON.parse(peerRevealEvent.content);
+
+    // Send our reveal
+    const revealResult = await apiPost('/api/swap/nonce-reveal', {
+      token: state.token,
+      peerBtcNonceHash: peerCommit.btcNonceHash,
+      peerAlphNonceHash: peerCommit.alphNonceHash,
+    });
+
+    const revealEvent = await createSwapNonce({
+      sessionId: sid, recipientPubHex: peer, phase: 'reveal',
+      btcPubNonce: revealResult.btcPubNonce, alphPubNonce: revealResult.alphPubNonce,
+    });
+    await nostrPublish(revealEvent);
+
+    // Verify peer
+    await apiPost('/api/swap/nonce-verify', {
+      token: state.token,
+      peerBtcPubNonce: peerReveal.btcPubNonce,
+      peerAlphPubNonce: peerReveal.alphPubNonce,
+    });
+  }
+
+  updateStep('nonces', { info: 'Nonces committed, revealed, verified, and aggregated' });
+}
+
+async function executePresign() {
+  const sid = state.sessionId;
+  const peer = state.peerPubHex;
+  const isAlice = state.role === 'alice';
+
+  // Generate our presigs
+  const presigResult = await apiPost('/api/swap/presign', { token: state.token });
+
+  if (isAlice) {
+    // Alice sends first
+    const presigEvent = await createSwapPresig({
+      sessionId: sid, recipientPubHex: peer,
+      btcPresig: presigResult.btcPresig, alphPresig: presigResult.alphPresig,
+    });
+    await nostrPublish(presigEvent);
+    updateStep('presign', { info: 'Pre-signatures sent. Waiting for peer...' });
+
+    // Wait for peer presigs
+    const peerPresigEvent = await waitForSwapEvent(SWAP_PRESIG_KIND, sid, peer);
+    const peerPresigs = JSON.parse(peerPresigEvent.content);
+
+    // Verify and aggregate
+    await apiPost('/api/swap/verify-presig', {
+      token: state.token,
+      peerBtcPresig: peerPresigs.btcPresig,
+      peerAlphPresig: peerPresigs.alphPresig,
+    });
+
+  } else {
+    // Bob waits first
+    updateStep('presign', { info: 'Waiting for Alice\'s pre-signatures...' });
+    const peerPresigEvent = await waitForSwapEvent(SWAP_PRESIG_KIND, sid, peer);
+    const peerPresigs = JSON.parse(peerPresigEvent.content);
+
+    // Verify peer's presigs
+    await apiPost('/api/swap/verify-presig', {
+      token: state.token,
+      peerBtcPresig: peerPresigs.btcPresig,
+      peerAlphPresig: peerPresigs.alphPresig,
+    });
+
+    // Send our presigs
+    const presigEvent = await createSwapPresig({
+      sessionId: sid, recipientPubHex: peer,
+      btcPresig: presigResult.btcPresig, alphPresig: presigResult.alphPresig,
+    });
+    await nostrPublish(presigEvent);
+  }
+
+  updateStep('presign', { info: 'Pre-signatures exchanged, verified, aggregated with taproot tweak' });
+}
+
+// ============================================================
+// Init
+// ============================================================
+
+renderSteps();
+
+</script>
+</body>
+</html>

@@ -6,6 +6,7 @@
   "scripts": {
     "swap": "node src/atomic-swap.js",
     "nostr-swap": "node src/nostr-swap.js",
+    "web": "node src/server.js",
     "reset": "rm -rf devnet/bitcoin/regtest devnet/alephium/.alephium .swap-state.json && echo 'Chain data and swap state cleared.'"
   },
   "keywords": [
