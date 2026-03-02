@@ -16,11 +16,11 @@ import { nip19 } from 'nostr-tools';
 
 import {
   keyAgg, nonceGen, nonceAgg,
-  taggedHash, lift_x, hasEvenY, getPlainPubkey,
+  taggedHash, lift_x, hasEvenY, getPlainPubkey, bytesToNum, numTo32b,
 } from './musig2.js';
 import {
   adaptorSign, adaptorVerify, adaptorAggregate, completeAdaptorSig,
-  G, Fn, n, numTo32b, bytesToNum, pointToBytes,
+  G, Fn, n, pointToBytes,
 } from './adaptor.js';
 import {
   bitcoinRpc, createSwapOutput, verifySwapOutput,
@@ -227,9 +227,15 @@ async function main() {
   log('KEYAGG', 'Computing MuSig2 key aggregation...');
 
   // Alice generates adaptor secret t, shares T = t*G
-  const tBytes = schnorr.utils.randomSecretKey();
-  const t = bytesToNum(tBytes);
-  const T = G.multiply(t);
+  // Normalize T to even Y for x-only serialization (lift_x always returns even Y)
+  let tBytes = schnorr.utils.randomSecretKey();
+  let t = bytesToNum(tBytes);
+  let T = G.multiply(t);
+  if (!hasEvenY(T)) {
+    T = T.negate();
+    t = Fn.neg(t);
+    tBytes = numTo32b(t);
+  }
   log('KEYAGG', `Adaptor point T: ${bytesToHex(pointToBytes(T)).slice(0, 16)}...`);
 
   // P_swap = MuSig2_KeyAgg(P_alice, P_bob)
