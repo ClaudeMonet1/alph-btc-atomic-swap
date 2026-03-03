@@ -6,12 +6,8 @@ const { web3, ONE_ALPH, DUST_AMOUNT, addressFromPublicKey, groupOfAddress, build
 import alphWallet from '@alephium/web3-wallet';
 const { PrivateKeyWallet } = alphWallet;
 
-const ALPH_NODE_URL = 'https://node.testnet.alephium.org';
+export const ALPH_NODE_URL = 'https://node.testnet.alephium.org';
 web3.setCurrentNodeProvider(ALPH_NODE_URL);
-
-export function ensureNodeProvider() {
-  web3.setCurrentNodeProvider(ALPH_NODE_URL);
-}
 
 // ---- Node API helpers ----
 
