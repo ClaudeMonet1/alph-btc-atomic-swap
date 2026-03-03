@@ -2,12 +2,13 @@
 // Testnet-only (public node)
 
 import alphWeb3 from '@alephium/web3';
-const { web3, ONE_ALPH, DUST_AMOUNT, addressFromPublicKey, groupOfAddress, buildContractByteCode, buildScriptByteCode } = alphWeb3;
+const { web3, NodeProvider, ONE_ALPH, DUST_AMOUNT, addressFromPublicKey, groupOfAddress, buildContractByteCode, buildScriptByteCode } = alphWeb3;
 import alphWallet from '@alephium/web3-wallet';
 const { PrivateKeyWallet } = alphWallet;
 
-export const ALPH_NODE_URL = 'https://node.testnet.alephium.org';
+const ALPH_NODE_URL = 'https://node.testnet.alephium.org';
 web3.setCurrentNodeProvider(ALPH_NODE_URL);
+export const alphNodeProvider = new NodeProvider(ALPH_NODE_URL);
 
 // ---- Node API helpers ----
 

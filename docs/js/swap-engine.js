@@ -23,7 +23,7 @@ import {
 } from './btc.js';
 import {
   compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
-  getBalance, waitForTx, transferAlph, ALPH_NODE_URL,
+  getBalance, waitForTx, transferAlph, alphNodeProvider,
   web3, ONE_ALPH, PrivateKeyWallet, addressFromPublicKey, groupOfAddress,
 } from './alph.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
@@ -266,7 +266,7 @@ export class SwapEngine {
   // ── Swap: Deploy ALPH (Alice) ──
 
   async deployAlph() {
-    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeUrl: ALPH_NODE_URL });
+    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeProvider: alphNodeProvider });
     const compiled = await compileSwapContract();
     this.compiled = compiled;
 
@@ -307,7 +307,7 @@ export class SwapEngine {
     const pubkeys = [peerPub, this.pubKey];
     const { aggPubkey } = keyAgg(pubkeys);
 
-    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeUrl: ALPH_NODE_URL });
+    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeProvider: alphNodeProvider });
     const aliceAlphAddress = addressFromPublicKey(this.peerPubHex, 'bip340-schnorr');
 
     await verifyContractState(
@@ -480,7 +480,7 @@ export class SwapEngine {
     if (!schnorr.verify(alphFinalSig, this.ctx.alphMsg, this.ctx.aggPubkey))
       throw new Error('ALPH completed signature invalid');
 
-    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeUrl: ALPH_NODE_URL });
+    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeProvider: alphNodeProvider });
     await new Promise(r => setTimeout(r, 2000));
     const alphClaimResult = await claimSwap(wallet, this.contractId, bytesToHex(alphFinalSig), this.compiled, wallet.group);
     await waitForTx(alphClaimResult.txId);
@@ -491,7 +491,7 @@ export class SwapEngine {
   // ── Swap: Refund ALPH (Alice) ──
 
   async refundAlph() {
-    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeUrl: ALPH_NODE_URL });
+    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeProvider: alphNodeProvider });
     const result = await refundSwap(wallet, this.contractId, this.compiled);
     await waitForTx(result.txId);
     return { txid: result.txId };
@@ -510,7 +510,7 @@ export class SwapEngine {
   // ── Sweep: Send all ALPH ──
 
   async sweepAlph(destAddress) {
-    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeUrl: ALPH_NODE_URL });
+    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeProvider: alphNodeProvider });
     const bal = await getBalance(this.alphAddress);
     const available = bal.balance - bal.lockedBalance;
     // Reserve gas: 0.002 ALPH (20000 gas * 100 gwei)
