@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTC-ALPH Atomic Swap</title>
+<script type="importmap">
+{
+  "imports": {
+    "@noble/curves/secp256k1": "https://esm.sh/@noble/curves@1.8.1/secp256k1",
+    "@noble/curves/utils": "https://esm.sh/@noble/curves@1.8.1/abstract/utils",
+    "@noble/hashes/sha256": "https://esm.sh/@noble/hashes@1.7.1/sha256",
+    "@noble/hashes/utils": "https://esm.sh/@noble/hashes@1.7.1/utils",
+    "buffer": "https://esm.sh/buffer@6.0.3",
+    "bitcoinjs-lib": "https://esm.sh/bitcoinjs-lib@7.0.1",
+    "tiny-secp256k1": "https://esm.sh/@bitcoinerlab/secp256k1@1.2.0",
+    "@alephium/web3": "https://esm.sh/@alephium/web3@2.0.8",
+    "@alephium/web3-wallet": "https://esm.sh/@alephium/web3-wallet@2.0.8?external=@alephium/web3",
+    "bech32": "https://esm.sh/bech32@2.0.0",
+    "qrcode-generator": "https://esm.sh/qrcode-generator@1.4.4"
+  }
+}
+</script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    background: #0d1117; color: #e6edf3; font-size: 13px; line-height: 1.5;
+  }
+  a { color: #58a6ff; }
+  button {
+    font-family: inherit; font-size: 12px; padding: 6px 14px;
+    background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+    border-radius: 4px; cursor: pointer; transition: background 0.15s;
+  }
+  button:hover { background: #30363d; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: #238636; border-color: #2ea043; }
+  button.primary:hover { background: #2ea043; }
+  button.orange { background: #9e6a03; border-color: #bb8009; }
+  button.orange:hover { background: #bb8009; }
+  button.danger { background: #da3633; border-color: #f85149; }
+  button.danger:hover { background: #f85149; }
+  button.sm { padding: 3px 8px; font-size: 11px; }
+  input, select {
+    font-family: inherit; font-size: 12px; padding: 6px 10px;
+    background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
+    border-radius: 4px; outline: none;
+  }
+  input:focus, select:focus { border-color: #58a6ff; }
+  input::placeholder { color: #484f58; }
+
+  /* Connect screen */
+  #connect-screen {
+    max-width: 480px; margin: 80px auto; padding: 32px;
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  }
+  #connect-screen h1 { font-size: 20px; margin-bottom: 4px; }
+  #connect-screen .subtitle { color: #8b949e; margin-bottom: 24px; font-size: 12px; }
+
+  /* Main screen */
+  #main-screen { display: none; height: 100vh; flex-direction: column; }
+  #main-screen.active { display: flex; }
+
+  /* Header */
+  .header-row {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 16px; padding: 10px 16px 6px;
+    background: #161b22; border-bottom: 1px solid #30363d; flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .header-left { display: flex; flex-direction: column; gap: 2px; }
+  .header-title { font-weight: 700; font-size: 18px; white-space: nowrap; }
+  .header-subtitle { font-size: 11px; color: #8b949e; display: flex; align-items: center; gap: 8px; }
+  .balance-area { display: flex; gap: 12px; align-items: center; font-size: 11px; flex-wrap: wrap; }
+  .balance-area .btc-bal { color: #f7931a; transition: color 0.3s; }
+  .balance-area .alph-bal { color: #00d4aa; transition: color 0.3s; }
+  @keyframes pulse-pending { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+  .balance-area .btc-bal.pending { color: #ffd33d; animation: pulse-pending 2s ease-in-out infinite; }
+  .balance-area .alph-bal.pending { color: #7ee787; animation: pulse-pending 2s ease-in-out infinite; }
+  .network-badge {
+    font-size: 10px; padding: 2px 6px; border-radius: 3px;
+    font-weight: 700; text-transform: uppercase;
+  }
+  .network-badge.testnet { background: #9e6a0333; color: #bb8009; }
+  .copy-btn {
+    padding: 2px 6px; font-size: 10px; cursor: pointer;
+    background: transparent; border: 1px solid #30363d; color: #8b949e; border-radius: 3px;
+  }
+  .copy-btn:hover { color: #e6edf3; border-color: #58a6ff; background: transparent; }
+
+  /* Identity Panel */
+  .identity-panel {
+    padding: 6px 16px; background: #161b22; border-bottom: 1px solid #30363d;
+    display: flex; flex-direction: column; gap: 3px; flex-shrink: 0;
+  }
+  .addr-line {
+    display: flex; align-items: center; gap: 6px; font-size: 11px;
+    flex-wrap: wrap;
+  }
+  .addr-label {
+    font-weight: 700; font-size: 10px; width: 36px; flex-shrink: 0; text-transform: uppercase;
+  }
+  .addr-value {
+    font-size: 11px; color: #e6edf3; word-break: break-all; flex: 1; min-width: 0;
+    user-select: all; line-height: 1.3;
+  }
+  .addr-btns {
+    display: flex; gap: 4px; align-items: center; flex-shrink: 0;
+  }
+  .qr-btn, .recv-btn, .send-btn, .faucet-btn {
+    padding: 2px 6px; font-size: 10px; cursor: pointer;
+    background: transparent; border: 1px solid #30363d; color: #8b949e; border-radius: 3px;
+    flex-shrink: 0; white-space: nowrap;
+  }
+  .qr-btn:hover, .recv-btn:hover, .send-btn:hover, .faucet-btn:hover {
+    color: #e6edf3; border-color: #58a6ff; background: transparent;
+  }
+  .faucet-btn { color: #bb8009; border-color: #9e6a03; text-decoration: none; }
+  .faucet-btn:hover { color: #f7931a; border-color: #f7931a; }
+
+  /* Key Section */
+  .key-section {
+    padding: 6px 16px 8px; background: #161b22; border-bottom: 1px solid #30363d;
+    flex-shrink: 0;
+  }
+  .key-icon { font-size: 13px; flex-shrink: 0; }
+  .key-masked { color: #484f58; letter-spacing: 2px; }
+  .key-row {
+    display: flex; align-items: center; gap: 8px; font-size: 11px;
+    padding: 4px 8px; border: 1px solid #30363d; border-radius: 4px;
+  }
+  .key-row.blink {
+    animation: blink-warn 1.5s ease-in-out infinite;
+  }
+  @keyframes blink-warn {
+    0%, 100% { border-color: #d29922; background: #d2992211; }
+    50% { border-color: #f8514966; background: #f8514911; }
+  }
+  .key-value {
+    font-size: 11px; color: #e6edf3; word-break: break-all; flex: 1; min-width: 0;
+    user-select: all; line-height: 1.3;
+  }
+  .key-warning {
+    font-size: 10px; color: #d29922; margin-top: 4px; padding-left: 8px;
+  }
+  .key-warning.hidden-warn { display: none; }
+  #backup-btn { white-space: nowrap; }
+  #backup-btn.confirmed { background: #238636; border-color: #2ea043; color: #e6edf3; }
+
+  /* Receive Popup */
+  .receive-popup {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .receive-popup.hidden { display: none !important; }
+  .receive-popup-inner {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 20px; text-align: center; max-width: 320px;
+  }
+  .receive-popup-title {
+    font-size: 13px; font-weight: 700; margin-bottom: 12px; color: #e6edf3;
+  }
+  .receive-popup-qr {
+    cursor: pointer; display: inline-block;
+  }
+  .receive-popup-qr canvas { display: block; margin: 0 auto; image-rendering: pixelated; }
+  .receive-popup-qr img { display: block; margin: 0 auto; image-rendering: pixelated; }
+  .receive-popup-addr {
+    font-size: 11px; color: #8b949e; margin-top: 10px; word-break: break-all;
+    cursor: pointer; padding: 6px 8px; border: 1px solid #30363d; border-radius: 4px;
+    transition: border-color 0.15s;
+  }
+  .receive-popup-addr:hover { border-color: #58a6ff; color: #e6edf3; }
+  .receive-popup-status {
+    font-size: 11px; margin-top: 8px; min-height: 16px;
+    color: #2ea043;
+  }
+
+  /* Send Modal */
+  .send-modal {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .send-modal.hidden { display: none !important; }
+  .send-modal-inner {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 24px; max-width: 400px; width: 90%;
+  }
+  .send-modal-inner h3 { font-size: 14px; margin-bottom: 12px; }
+  .send-modal-balance {
+    font-size: 12px; color: #8b949e; margin-bottom: 12px;
+  }
+  .send-modal-inner input[type="text"] {
+    width: 100%; margin-bottom: 8px;
+  }
+  .send-modal-error {
+    font-size: 11px; color: #f85149; margin-bottom: 8px;
+  }
+  .send-modal-error.hidden { display: none; }
+  .send-modal-actions {
+    display: flex; gap: 8px; margin-top: 8px;
+  }
+  .send-modal-status {
+    font-size: 11px; color: #2ea043; margin-top: 8px; word-break: break-all;
+  }
+  .send-modal-status.hidden { display: none; }
+
+  /* Two-column layout */
+  .columns { display: flex; flex: 1; overflow: hidden; }
+
+  /* Left: Main content */
+  .col-left {
+    flex: 1; display: flex; flex-direction: column; border-right: 1px solid #30363d;
+    min-width: 0; overflow-y: auto;
+  }
+
+  /* Offer form */
+  .offer-form {
+    padding: 16px; background: #161b22; border-bottom: 1px solid #30363d;
+  }
+  .offer-form h3 { font-size: 13px; margin-bottom: 10px; }
+  .offer-form .form-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .offer-form label { font-size: 11px; color: #8b949e; width: 50px; flex-shrink: 0; }
+  .offer-form input { width: 120px; }
+  .offer-form .rate-display { font-size: 11px; color: #8b949e; margin-bottom: 8px; }
+  .offer-form .form-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .direction-toggle {
+    display: flex; border: 1px solid #30363d; border-radius: 4px; overflow: hidden;
+  }
+  .direction-toggle button {
+    border: none; border-radius: 0; padding: 6px 12px; font-size: 11px;
+    background: transparent; color: #8b949e;
+  }
+  .direction-toggle button.active { background: #21262d; color: #e6edf3; }
+  .direction-toggle button.active.sell { color: #f7931a; }
+  .direction-toggle button.active.buy { color: #00d4aa; }
+
+  /* Offers list */
+  .offers-section {
+    padding: 12px 16px; flex: 1;
+  }
+  .offers-section h3 { font-size: 13px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .offers-section h3 .count { font-size: 11px; color: #8b949e; font-weight: 400; }
+  .offer-card {
+    border: 1px solid #30363d; border-radius: 6px; background: #161b22;
+    margin-bottom: 8px; overflow: hidden;
+  }
+  .offer-card.sell { border-left: 3px solid #f7931a; }
+  .offer-card.buy { border-left: 3px solid #00d4aa; }
+  .offer-card.mine { border-left: 3px solid #58a6ff; }
+  .offer-card.cancelled { opacity: 0.4; }
+  .offer-card.accepted { border-left-color: #2ea043; }
+  .offer-card .card-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; font-size: 12px;
+  }
+  .offer-card .card-header .dir-badge {
+    font-size: 10px; font-weight: 700; padding: 1px 6px;
+    border-radius: 3px; text-transform: uppercase; margin-right: 6px;
+  }
+  .offer-card .dir-badge.sell { background: #f7931a22; color: #f7931a; }
+  .offer-card .dir-badge.buy { background: #00d4aa22; color: #00d4aa; }
+  .offer-card .card-header .amount { font-weight: 600; }
+  .offer-card .card-header .amount .btc { color: #f7931a; }
+  .offer-card .card-header .amount .alph { color: #00d4aa; }
+  .offer-card .card-body {
+    padding: 4px 12px 8px; font-size: 11px; color: #8b949e;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .offer-card .card-body .peer { overflow: hidden; text-overflow: ellipsis; }
+  .offer-card .card-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .offer-card .status-badge {
+    font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600;
+  }
+  .status-badge.accepted { background: #2ea04333; color: #2ea043; }
+  .status-badge.cancelled { background: #f8514933; color: #f85149; }
+  .status-badge.expired { background: #8b949e33; color: #8b949e; }
+
+  /* Counter form (inline) */
+  .counter-form {
+    padding: 8px 12px; border-top: 1px solid #30363d; background: #0d1117;
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  }
+  .counter-form input { width: 100px; }
+  .counter-form label { font-size: 10px; color: #8b949e; }
+
+  /* Counters list */
+  .counters-list {
+    padding: 4px 12px 8px; border-top: 1px solid #21262d;
+  }
+  .counter-item {
+    font-size: 11px; padding: 4px 0; display: flex; align-items: center;
+    justify-content: space-between; gap: 8px;
+    border-bottom: 1px solid #21262d;
+  }
+  .counter-item:last-child { border-bottom: none; }
+  .counter-item .counter-info { color: #8b949e; }
+  .counter-item .counter-amounts { color: #e6edf3; }
+
+  /* Collapsible protocol log */
+  .log-section {
+    border-top: 1px solid #30363d; flex-shrink: 0;
+  }
+  .log-toggle {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px; cursor: pointer; background: #161b22;
+    border: none; width: 100%; font-size: 12px; color: #8b949e;
+    border-radius: 0;
+  }
+  .log-toggle:hover { background: #1c2129; color: #e6edf3; }
+  .log-toggle .arrow { transition: transform 0.2s; }
+  .log-toggle.open .arrow { transform: rotate(90deg); }
+  .log-content { display: none; max-height: 250px; overflow-y: auto; }
+  .log-content.open { display: block; }
+  .log-filter-bar {
+    display: flex; gap: 0; border-bottom: 1px solid #30363d;
+    background: #0d1117; flex-shrink: 0;
+  }
+  .log-filter-bar button {
+    border: none; border-radius: 0; padding: 4px 12px; font-size: 10px;
+    background: transparent; color: #8b949e; border-bottom: 2px solid transparent;
+  }
+  .log-filter-bar button.active { color: #e6edf3; border-bottom-color: #58a6ff; }
+  .log-filter-bar button:hover { color: #e6edf3; background: transparent; }
+  .log-messages { padding: 8px 16px; display: flex; flex-direction: column; gap: 4px; }
+  .msg {
+    padding: 4px 8px; border-radius: 3px; background: #0d1117;
+    border-left: 3px solid #30363d; font-size: 11px; word-break: break-all;
+  }
+  .msg.system { border-left-color: #8b949e; }
+  .msg.setup { border-left-color: #1f6feb; }
+  .msg.nonce { border-left-color: #8957e5; }
+  .msg.presig { border-left-color: #d29922; }
+  .msg.claim { border-left-color: #2ea043; }
+  .msg .tag {
+    display: inline-block; font-size: 9px; font-weight: 700; padding: 0px 4px;
+    border-radius: 2px; margin-right: 4px; text-transform: uppercase;
+  }
+  .msg.system .tag { background: #8b949e33; color: #8b949e; }
+  .msg.setup .tag { background: #1f6feb33; color: #1f6feb; }
+  .msg.nonce .tag { background: #8957e533; color: #8957e5; }
+  .msg.presig .tag { background: #d2992233; color: #d29922; }
+  .msg.claim .tag { background: #2ea04333; color: #2ea043; }
+
+  /* Right: Swap panel */
+  .col-right {
+    width: 380px; min-width: 320px; display: flex; flex-direction: column;
+    overflow-y: auto; background: #0d1117; flex-shrink: 0;
+  }
+  .swap-panel-header {
+    padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
+    flex-shrink: 0;
+  }
+  .swap-panel-header h2 { font-size: 14px; }
+  .swap-placeholder {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: #484f58; font-size: 12px; text-align: center; padding: 24px;
+  }
+  .swap-info {
+    padding: 12px 16px; border-bottom: 1px solid #30363d; font-size: 12px;
+  }
+  .swap-info .row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .swap-info .row .label { color: #8b949e; }
+  .swap-info .row .value { font-weight: 600; }
+  .swap-info .row .btc { color: #f7931a; }
+  .swap-info .row .alph { color: #00d4aa; }
+
+  .steps { padding: 8px 16px; display: flex; flex-direction: column; gap: 6px; }
+  .step {
+    border: 1px solid #30363d; border-radius: 6px; background: #161b22;
+    overflow: hidden;
+  }
+  .step-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; font-size: 12px; font-weight: 600;
+  }
+  .step-header .status { font-size: 11px; font-weight: 400; }
+  .step-header .status.pending { color: #8b949e; }
+  .step-header .status.done { color: #2ea043; }
+  .step-header .status.active { color: #d29922; }
+  .step-header .status.error { color: #f85149; }
+  .step-body {
+    padding: 6px 12px 10px; border-top: 1px solid #30363d;
+    font-size: 11px; color: #8b949e;
+  }
+  .step-body .data { word-break: break-all; margin-top: 4px; }
+  .step-body button { margin-top: 6px; }
+  .swap-actions {
+    padding: 12px 16px; border-top: 1px solid #30363d;
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .swap-complete {
+    padding: 16px; text-align: center; background: #2ea04311;
+    border: 1px solid #2ea04333; border-radius: 6px; margin: 12px 16px;
+  }
+  .swap-complete h3 { color: #2ea043; font-size: 14px; margin-bottom: 4px; }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    .columns { flex-direction: column; }
+    .col-right { width: 100% !important; min-width: unset !important; border-top: 1px solid #30363d; border-left: none; }
+    .col-left { border-right: none; }
+    .header-row { flex-wrap: wrap; }
+    .identity-panel .addr-value { font-size: 10px; }
+  }
+  @media (max-width: 480px) {
+    .header-row { padding: 8px; }
+    .identity-panel .addr-value { font-size: 9px; }
+    .offer-form .form-row { flex-wrap: wrap; }
+    .offer-form input { width: 100%; }
+    .addr-line { gap: 4px; }
+    .addr-btns { flex-wrap: wrap; }
+    .key-row { flex-wrap: wrap; }
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: #0d1117; }
+  ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<!-- ===== Loading Screen ===== -->
+<div id="connect-screen">
+  <h1><span style="color:#f7931a">BTC</span> <span style="color:#8b949e">&harr;</span> <span style="color:#00d4aa">ALPH</span> Atomic Swap</h1>
+  <div class="subtitle">Nostr-based protocol &mdash; testnet</div>
+  <div id="connect-status" style="color:#8b949e; margin-top:16px; font-size:12px">Loading modules...</div>
+  <div id="connect-error" class="hidden" style="margin-top:16px">
+    <div style="color:#f85149; margin-bottom:12px; font-size:12px" id="connect-error-msg"></div>
+    <button id="retry-btn" class="primary">Retry</button>
+  </div>
+</div>
+
+<!-- ===== Main Screen ===== -->
+<div id="main-screen">
+  <!-- Header -->
+  <div class="header-row">
+    <div class="header-left">
+      <div class="header-title"><span style="color:#f7931a">BTC</span> <span style="color:#8b949e">&harr;</span> <span style="color:#00d4aa">ALPH</span> Atomic Swap</div>
+      <div class="header-subtitle">Nostr-based protocol <span id="network-badge" class="network-badge testnet">testnet</span></div>
+    </div>
+    <div class="balance-area">
+      <span class="btc-bal" id="bal-btc">-- BTC</span>
+      <span class="alph-bal" id="bal-alph">-- ALPH</span>
+      <button id="refresh-bal-btn" style="padding:4px 8px; font-size:10px">Refresh</button>
+      <span id="relay-status" style="font-size:10px; color:#8b949e" title="Connected Nostr relays"></span>
+    </div>
+  </div>
+
+  <!-- Identity Panel -->
+  <div class="identity-panel" id="identity-panel">
+    <div class="addr-line">
+      <span class="addr-label" style="color:#e6edf3">npub</span>
+      <code class="addr-value" id="info-npub"></code>
+      <span class="addr-btns">
+        <button class="copy-btn" data-copy="npub" title="Copy npub">copy</button>
+        <button class="qr-btn" data-qr="npub" title="Show QR code">QR</button>
+      </span>
+    </div>
+    <div class="addr-line">
+      <span class="addr-label" style="color:#f7931a">BTC</span>
+      <code class="addr-value" id="info-btc"></code>
+      <span class="addr-btns">
+        <a class="faucet-btn" href="https://signetfaucet.com/" target="_blank" title="BTC Signet Faucet">Faucet</a>
+        <button class="copy-btn" data-copy="btc" title="Copy BTC address">copy</button>
+        <button class="recv-btn" data-recv="btc" title="Receive BTC">Receive</button>
+        <button class="send-btn" data-send="btc" title="Send BTC">Send</button>
+      </span>
+    </div>
+    <div class="addr-line">
+      <span class="addr-label" style="color:#00d4aa">ALPH</span>
+      <code class="addr-value" id="info-alph"></code>
+      <span class="addr-btns">
+        <button class="faucet-btn" id="alph-faucet-btn" title="ALPH Testnet Faucet">Faucet</button>
+        <button class="copy-btn" data-copy="alph" title="Copy ALPH address">copy</button>
+        <button class="recv-btn" data-recv="alph" title="Receive ALPH">Receive</button>
+        <button class="send-btn" data-send="alph" title="Send ALPH">Send</button>
+      </span>
+    </div>
+  </div>
+
+  <!-- Key Section -->
+  <div class="key-section" id="key-section">
+    <div class="key-row" id="key-row">
+      <span class="key-icon">&#128273;</span>
+      <code class="key-value key-masked" id="key-info-nsec">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</code>
+      <button class="copy-btn" id="nsec-reveal-btn" title="Show/hide private key">show</button>
+      <button class="copy-btn" data-copy="nsec" title="Copy nsec">copy</button>
+      <button class="sm" id="backup-btn">Backed Up</button>
+      <button class="sm danger" id="reset-key-btn">Reset</button>
+    </div>
+    <div class="key-warning" id="key-warning">Back up this key! Funds will be lost without it.</div>
+  </div>
+
+  <!-- Receive Popup (QR + address, both copyable) -->
+  <div class="receive-popup hidden" id="receive-popup">
+    <div class="receive-popup-inner">
+      <div class="receive-popup-title" id="receive-popup-title"></div>
+      <div class="receive-popup-qr" id="receive-popup-qr" title="Click to copy QR as image"></div>
+      <div class="receive-popup-addr" id="receive-popup-addr" title="Click to copy address"></div>
+      <div class="receive-popup-status" id="receive-popup-status"></div>
+    </div>
+  </div>
+
+  <!-- Send Modal -->
+  <div class="send-modal hidden" id="send-modal">
+    <div class="send-modal-inner">
+      <h3 id="send-modal-title">Send BTC</h3>
+      <div class="send-modal-balance" id="send-modal-balance"></div>
+      <input type="text" id="send-dest-addr" placeholder="Destination address">
+      <div class="send-modal-error hidden" id="send-modal-error"></div>
+      <div class="send-modal-actions">
+        <button class="danger" id="send-confirm-btn">Sweep All</button>
+        <button id="send-cancel-btn">Cancel</button>
+      </div>
+      <div class="send-modal-status hidden" id="send-modal-status"></div>
+    </div>
+  </div>
+
+  <div class="columns">
+    <!-- Left: Offers + Log -->
+    <div class="col-left">
+      <!-- Create Offer Form -->
+      <div class="offer-form" id="offer-form">
+        <h3>Create Offer</h3>
+        <div class="form-row">
+          <label>Type</label>
+          <div class="direction-toggle" id="direction-toggle">
+            <button class="active sell" data-dir="sell_alph">Sell ALPH</button>
+            <button data-dir="buy_alph">Buy ALPH</button>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>ALPH</label>
+          <input type="text" id="offer-alph" value="10" placeholder="ALPH amount">
+          <label style="width:auto; margin-left:8px">BTC sat</label>
+          <input type="text" id="offer-btc-sat" value="50000" placeholder="satoshis">
+        </div>
+        <div class="rate-display" id="rate-display">Rate: 200,000 ALPH/BTC</div>
+        <div class="form-actions">
+          <button id="refresh-utxos-btn" style="font-size:10px; padding:4px 8px">UTXOs</button>
+          <button id="publish-offer-btn" class="primary">Publish Offer</button>
+        </div>
+      </div>
+
+      <!-- UTXO bar (Bob) -->
+      <div class="hidden" id="utxo-bar" style="display:flex; gap:8px; padding:6px 16px; border-bottom:1px solid #30363d; background:#161b22; align-items:center; font-size:11px;">
+        <span style="color:#8b949e">UTXO:</span>
+        <select id="utxo-select" style="flex:1; font-size:11px"><option value="">Auto-select best UTXO</option></select>
+      </div>
+
+      <!-- Open Offers List -->
+      <div class="offers-section" id="offers-section">
+        <h3>Open Offers <span class="count" id="offers-count">(0)</span></h3>
+        <div id="offers-list">
+          <div style="color:#484f58; font-size:12px; text-align:center; padding:24px;">
+            No offers yet. Create one or wait for offers to appear.
+          </div>
+        </div>
+      </div>
+
+      <!-- Collapsible Protocol Log -->
+      <div class="log-section" id="log-section">
+        <button class="log-toggle" id="log-toggle">
+          <span>Protocol Log</span>
+          <span class="arrow">&#9654;</span>
+        </button>
+        <div class="log-content" id="log-content">
+          <div class="log-filter-bar">
+            <button class="active" data-filter="all">All</button>
+            <button data-filter="protocol">Protocol</button>
+            <button data-filter="system">System</button>
+          </div>
+          <div class="log-messages" id="log-messages"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Active Swap Panel -->
+    <div class="col-right">
+      <div class="swap-panel-header">
+        <h2>Active Swap</h2>
+      </div>
+      <div id="swap-placeholder" class="swap-placeholder">
+        No active swap.<br>Publish or accept an offer to start.
+      </div>
+      <div id="swap-active" class="hidden">
+        <div class="swap-info" id="swap-info"></div>
+        <div class="steps" id="steps"></div>
+        <div class="swap-actions" id="swap-actions"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Show warning if module takes too long to load
+setTimeout(() => {
+  const s = document.getElementById('connect-status');
+  if (s && s.textContent === 'Loading modules...') {
+    s.textContent = 'Modules loading slowly... check browser console for errors.';
+    s.style.color = '#d29922';
+  }
+}, 15000);
+</script>
+<script type="module">
+  // Buffer polyfill — must be global before any module that uses Buffer.from()
+  const { Buffer } = await import('buffer');
+  globalThis.Buffer = Buffer;
+  // Now load the app
+  await import('./js/app.js');
+</script>
+</body>
+</html>

@@ -86,3 +86,21 @@ The open boundary (tokens entering via `start`, leaving via `-> ()`) enables com
 - **Alephium chain net**: Block production, P2SH state, Ralph script execution
 
 Each environment net interfaces through shared places at the boundary.
+
+## Nostr Event Mapping
+
+The protocol phases map to structured Nostr events:
+
+| Phase | Kind | Action | Content |
+|-------|------|--------|---------|
+| Discovery | 38389 | `offer` | Public offer: amounts, direction, npub |
+| Discovery | 38389 | `accept` | Offer acceptance, triggers swap |
+| `negotiate` | 38390 | `setup` | Role, adaptor point T, swap parameters |
+| `lock_btc` / `lock_alph` | 38390 | `locked` | Funding txid, contract address |
+| `exchange_presigs` | 38391 | `nonce-commit` | Hash of nonce (commit phase) |
+| `exchange_presigs` | 38391 | `nonce-reveal` | MuSig2 public nonces |
+| `exchange_presigs` | 38392 | `presig` | Adaptor pre-signatures |
+| `alice_claims_btc` | 38393 | `claim-btc` | BTC claim txid (reveals t) |
+| `bob_claims_alph` | 38393 | `claim-alph` | ALPH claim txid |
+
+Offer events (38389) are public. All other events are NIP-44 encrypted between the two swap parties.

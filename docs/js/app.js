@@ -1,0 +1,1784 @@
+// BTC-ALPH Atomic Swap — Static/Browser App
+// Replaces server API calls with direct SwapEngine usage.
+
+import { schnorr } from '@noble/curves/secp256k1';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
+import { bech32 } from 'bech32';
+import qrcode from 'qrcode-generator';
+import { SwapEngine } from './swap-engine.js';
+
+// ============================================================
+// State
+// ============================================================
+
+const state = {
+  // Identity
+  engine: null,
+  secBytes: null,
+  pubKeyHex: null,
+  npub: null,
+  btcAddress: null,
+  alphAddress: null,
+  nsecBech32: null,
+  network: 'testnet',
+  // Relays
+  relays: [],
+  seenEvents: new Set(),
+  subscriptions: new Map(),
+  // Offers
+  offers: new Map(),
+  myOffers: new Set(),
+  // Active swap
+  activeSwap: null,
+  // Swap execution
+  stepData: {},
+  selectedUtxo: null,
+  logFilter: 'all',
+};
+
+// ============================================================
+// Multi-Relay Nostr Client
+// ============================================================
+
+const DEFAULT_RELAYS = [
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+];
+
+function connectRelay(url) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    const timer = setTimeout(() => { ws.close(); reject(new Error(`timeout: ${url}`)); }, 8000);
+    ws.onopen = () => { clearTimeout(timer); resolve(ws); };
+    ws.onerror = () => { clearTimeout(timer); reject(new Error(`error: ${url}`)); };
+  });
+}
+
+async function connectRelays(urls) {
+  const statusEl = document.getElementById('connect-status');
+  const results = await Promise.allSettled(urls.map(async (url) => {
+    if (statusEl) statusEl.textContent = `Connecting to ${url.replace('wss://','')}...`;
+    const ws = await connectRelay(url);
+    return { ws, url, ready: true };
+  }));
+  const connected = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+  const failed = results.filter(r => r.status === 'rejected').map((r, i) => urls[i]);
+  if (failed.length > 0) console.warn('Failed relays:', failed);
+  if (connected.length === 0) throw new Error('Could not connect to any relay. Check your network connection.');
+  state.relays = connected;
+  return connected;
+}
+
+function nostrSerialize(event) {
+  return JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content]);
+}
+
+async function signEvent(template) {
+  const event = { ...template, pubkey: state.pubKeyHex };
+  const serialized = new TextEncoder().encode(nostrSerialize(event));
+  const id = bytesToHex(sha256(serialized));
+  event.id = id;
+  event.sig = bytesToHex(schnorr.sign(hexToBytes(id), state.secBytes));
+  return event;
+}
+
+function nostrPublish(event) {
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+    let errors = 0;
+    const timer = setTimeout(() => { if (!resolved) reject(new Error('publish timeout')); }, 10000);
+
+    for (const relay of state.relays) {
+      if (!relay.ready || relay.ws.readyState !== WebSocket.OPEN) { errors++; continue; }
+      const handler = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg[0] === 'OK' && msg[1] === event.id) {
+            relay.ws.removeEventListener('message', handler);
+            if (!resolved) { resolved = true; clearTimeout(timer); resolve(msg[2]); }
+          }
+        } catch {}
+      };
+      relay.ws.addEventListener('message', handler);
+      try { relay.ws.send(JSON.stringify(['EVENT', event])); }
+      catch { errors++; relay.ws.removeEventListener('message', handler); }
+    }
+    if (errors >= state.relays.length) {
+      clearTimeout(timer);
+      reject(new Error('No relays available'));
+    }
+  });
+}
+
+function subscribe(subId, filters, onEvent) {
+  const handlers = [];
+  for (const relay of state.relays) {
+    if (!relay.ready || relay.ws.readyState !== WebSocket.OPEN) continue;
+    const handler = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg[0] === 'EVENT' && msg[1] === subId) {
+          const event = msg[2];
+          if (state.seenEvents.has(event.id)) return;
+          state.seenEvents.add(event.id);
+          onEvent(event);
+        }
+      } catch {}
+    };
+    relay.ws.addEventListener('message', handler);
+    try { relay.ws.send(JSON.stringify(['REQ', subId, ...filters])); } catch {}
+    handlers.push({ ws: relay.ws, handler });
+  }
+  const unsub = () => {
+    for (const { ws, handler } of handlers) {
+      ws.removeEventListener('message', handler);
+      try { ws.send(JSON.stringify(['CLOSE', subId])); } catch {}
+    }
+  };
+  state.subscriptions.set(subId, unsub);
+  return unsub;
+}
+
+const swapEventWaiters = [];
+
+function waitForSwapEvent(kind, sessionId, fromPub, predicate = null, timeoutMs = 600000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const idx = swapEventWaiters.findIndex(w => w.resolve === resolve);
+      if (idx >= 0) swapEventWaiters.splice(idx, 1);
+      reject(new Error(`timeout waiting for kind ${kind}`));
+    }, timeoutMs);
+    swapEventWaiters.push({ kind, fromPub, predicate, resolve, timer });
+  });
+}
+
+// ============================================================
+// Event Kinds & Builders
+// ============================================================
+
+const SWAP_OFFER_KIND = 38389;
+const SWAP_SETUP_KIND = 38390;
+const SWAP_NONCE_KIND = 38391;
+const SWAP_PRESIG_KIND = 38392;
+const SWAP_CLAIM_KIND = 38393;
+
+function generateUUID() {
+  return crypto.randomUUID ? crypto.randomUUID() : bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+}
+
+async function createOfferEvent({ offerId, direction, alphAmount, btcSat, expiresAt }) {
+  return signEvent({
+    kind: SWAP_OFFER_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['t', 'atomicswap'], ['t', 'offer'], ['d', offerId]],
+    content: JSON.stringify({
+      action: 'offer',
+      offerId,
+      direction,
+      alphAmount: String(alphAmount),
+      btcSat,
+      network: state.network,
+      expiresAt,
+    }),
+  });
+}
+
+async function createCounterEvent({ offerId, offerEventId, offerCreator, index, alphAmount, btcSat, message }) {
+  return signEvent({
+    kind: SWAP_OFFER_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['t', 'atomicswap'], ['t', 'counter'], ['e', offerEventId], ['p', offerCreator], ['d', `${offerId}:counter:${index}`]],
+    content: JSON.stringify({
+      action: 'counter',
+      offerId,
+      alphAmount: String(alphAmount),
+      btcSat,
+      message: message || '',
+    }),
+  });
+}
+
+async function createAcceptEvent({ offerId, offerEventId, offerCreator, alphAmount, btcSat }) {
+  return signEvent({
+    kind: SWAP_OFFER_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['t', 'atomicswap'], ['t', 'accept'], ['e', offerEventId], ['p', offerCreator], ['d', `${offerId}:accept`]],
+    content: JSON.stringify({
+      action: 'accept',
+      offerId,
+      alphAmount: String(alphAmount),
+      btcSat,
+    }),
+  });
+}
+
+async function createCancelEvent({ offerId, offerEventId }) {
+  return signEvent({
+    kind: SWAP_OFFER_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['t', 'atomicswap'], ['t', 'cancel'], ['e', offerEventId], ['d', `${offerId}:cancel`]],
+    content: JSON.stringify({
+      action: 'cancel',
+      offerId,
+    }),
+  });
+}
+
+async function createSwapSetup({ sessionId, recipientPubHex, msgType, ...data }) {
+  return signEvent({
+    kind: SWAP_SETUP_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', sessionId], ['p', recipientPubHex], ['d', `${sessionId}:${msgType}`]],
+    content: JSON.stringify({ type: msgType, ...data }),
+  });
+}
+
+async function createSwapNonce({ sessionId, recipientPubHex, phase, ...data }) {
+  return signEvent({
+    kind: SWAP_NONCE_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', sessionId], ['p', recipientPubHex], ['d', `${sessionId}:${phase}`]],
+    content: JSON.stringify({ phase, ...data }),
+  });
+}
+
+async function createSwapPresig({ sessionId, recipientPubHex, ...data }) {
+  return signEvent({
+    kind: SWAP_PRESIG_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', sessionId], ['p', recipientPubHex], ['d', sessionId]],
+    content: JSON.stringify(data),
+  });
+}
+
+async function createSwapClaim({ sessionId, recipientPubHex, claimType, ...data }) {
+  return signEvent({
+    kind: SWAP_CLAIM_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', sessionId], ['p', recipientPubHex], ['d', `${sessionId}:${claimType}`]],
+    content: JSON.stringify({ type: claimType, ...data }),
+  });
+}
+
+// ============================================================
+// UI: Protocol Log
+// ============================================================
+
+const logMessagesEl = document.getElementById('log-messages');
+
+function addLogMsg(type, content, author = null) {
+  const div = document.createElement('div');
+  div.className = `msg ${type}`;
+  div.dataset.type = type === 'system' ? 'system' : 'protocol';
+
+  const tagNames = { system: 'SYS', setup: 'SETUP', nonce: 'NONCE', presig: 'PRESIG', claim: 'CLAIM' };
+  let html = `<span class="tag">${tagNames[type] || type}</span>`;
+  if (author) html += `<span style="color:#8b949e; font-size:10px">${author}</span> `;
+  html += `<span>${escapeHtml(content)}</span>`;
+  div.innerHTML = html;
+
+  logMessagesEl.appendChild(div);
+  applyLogFilter();
+  logMessagesEl.scrollTop = logMessagesEl.scrollHeight;
+}
+
+function addProtocolMsg(kind, content, author) {
+  const kindMap = {
+    [SWAP_SETUP_KIND]: 'setup',
+    [SWAP_NONCE_KIND]: 'nonce',
+    [SWAP_PRESIG_KIND]: 'presig',
+    [SWAP_CLAIM_KIND]: 'claim',
+  };
+  const type = kindMap[kind] || 'setup';
+  let text = content;
+  try {
+    const parsed = JSON.parse(content);
+    text = Object.entries(parsed).map(([k, v]) => {
+      const vs = String(v);
+      return `${k}: ${vs.length > 24 ? vs.slice(0, 24) + '...' : vs}`;
+    }).join(' | ');
+  } catch {}
+  addLogMsg(type, text, author);
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function applyLogFilter() {
+  const filter = state.logFilter;
+  logMessagesEl.querySelectorAll('.msg').forEach(el => {
+    if (filter === 'all') { el.style.display = ''; return; }
+    el.style.display = el.dataset.type === filter ? '' : 'none';
+  });
+}
+
+document.getElementById('log-toggle').addEventListener('click', () => {
+  const btn = document.getElementById('log-toggle');
+  const content = document.getElementById('log-content');
+  btn.classList.toggle('open');
+  content.classList.toggle('open');
+});
+
+document.querySelectorAll('.log-filter-bar button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.log-filter-bar button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.logFilter = btn.dataset.filter;
+    applyLogFilter();
+  });
+});
+
+// ============================================================
+// UI: Swap Steps
+// ============================================================
+
+const STEPS = [
+  { id: 'setup', name: '1. Setup', desc: 'Init roles, exchange adaptor point' },
+  { id: 'lock', name: '2. Lock', desc: 'Lock BTC + deploy ALPH contract' },
+  { id: 'nonces', name: '3. Nonces', desc: 'Commit-then-reveal nonce exchange' },
+  { id: 'presign', name: '4. Pre-sign', desc: 'Adaptor pre-signature exchange' },
+  { id: 'claim', name: '5. Claim', desc: 'Claim assets on both chains' },
+];
+
+const stepsEl = document.getElementById('steps');
+
+function renderSteps() {
+  stepsEl.innerHTML = '';
+  for (const step of STEPS) {
+    const sd = state.stepData[step.id] || {};
+    const status = sd.status || 'pending';
+    const statusLabels = { pending: '\u25fb Pending', done: '\u2713 Done', active: '\u25b6 Active', error: '\u2717 Error' };
+    const div = document.createElement('div');
+    div.className = 'step';
+    div.id = `step-${step.id}`;
+    let bodyHtml = `<div>${step.desc}</div>`;
+    if (sd.info) bodyHtml += `<div class="data">${escapeHtml(sd.info)}</div>`;
+    if (sd.error) bodyHtml += `<div class="data" style="color:#f85149">${escapeHtml(sd.error)}</div>`;
+    if (status === 'error') {
+      bodyHtml += `<button class="sm orange step-retry" data-step="${step.id}" style="margin-top:6px">Retry</button>`;
+    }
+    div.innerHTML = `
+      <div class="step-header">
+        <span>${step.name}</span>
+        <span class="status ${status}">${statusLabels[status]}</span>
+      </div>
+      <div class="step-body">${bodyHtml}</div>`;
+    stepsEl.appendChild(div);
+  }
+  stepsEl.querySelectorAll('.step-retry').forEach(btn => {
+    btn.addEventListener('click', () => retryStep(btn.dataset.step));
+  });
+  renderSwapActions();
+}
+
+function updateStep(id, updates) {
+  state.stepData[id] = { ...state.stepData[id], ...updates };
+  renderSteps();
+}
+
+function renderSwapActions() {
+  const actionsEl = document.getElementById('swap-actions');
+  if (!state.activeSwap) { actionsEl.innerHTML = ''; return; }
+
+  let html = '';
+  const hasError = Object.values(state.stepData).some(s => s.status === 'error');
+  const lockDone = state.stepData.lock?.status === 'done';
+
+  if (hasError && lockDone) {
+    if (state.activeSwap.role === 'alice') {
+      html += '<button class="danger sm" id="refund-alph-btn">Refund ALPH</button>';
+    } else {
+      html += '<button class="danger sm" id="refund-btc-btn">Refund BTC</button>';
+    }
+  }
+  actionsEl.innerHTML = html;
+
+  const refundAlphBtn = document.getElementById('refund-alph-btn');
+  if (refundAlphBtn) refundAlphBtn.addEventListener('click', refundAlph);
+  const refundBtcBtn = document.getElementById('refund-btc-btn');
+  if (refundBtcBtn) refundBtcBtn.addEventListener('click', refundBtc);
+}
+
+// ============================================================
+// Offer State Management
+// ============================================================
+
+function handleOfferEvent(event) {
+  let content;
+  try { content = JSON.parse(event.content); } catch { return; }
+
+  if (content.network && content.network !== state.network) return;
+
+  const action = content.action;
+  if (action === 'offer') handleNewOffer(event, content);
+  else if (action === 'counter') handleCounter(event, content);
+  else if (action === 'accept') handleAcceptEvent(event, content);
+  else if (action === 'cancel') handleCancelEvent(event, content);
+}
+
+function handleNewOffer(event, content) {
+  const offerId = content.offerId;
+  if (state.offers.has(offerId)) return;
+
+  const offer = {
+    id: offerId,
+    eventId: event.id,
+    pubkey: event.pubkey,
+    direction: content.direction,
+    alphAmount: content.alphAmount,
+    btcSat: content.btcSat,
+    network: content.network,
+    expiresAt: content.expiresAt,
+    createdAt: event.created_at,
+    status: 'open',
+    counters: [],
+    acceptEvent: null,
+    isMine: event.pubkey === state.pubKeyHex,
+  };
+
+  state.offers.set(offerId, offer);
+  if (offer.isMine) state.myOffers.add(offerId);
+
+  if (offer.expiresAt && offer.expiresAt < Math.floor(Date.now() / 1000)) {
+    offer.status = 'expired';
+  }
+
+  addLogMsg('system', `New offer: ${offer.direction === 'sell_alph' ? 'Sell' : 'Buy'} ${formatAlph(offer.alphAmount)} ALPH for ${offer.btcSat} sat`, offer.isMine ? 'You' : event.pubkey.slice(0, 8) + '...');
+  renderOffersList();
+}
+
+function handleCounter(event, content) {
+  const offer = state.offers.get(content.offerId);
+  if (!offer) return;
+  if (offer.status === 'accepted' || offer.status === 'cancelled') return;
+
+  const counter = {
+    eventId: event.id,
+    pubkey: event.pubkey,
+    alphAmount: content.alphAmount,
+    btcSat: content.btcSat,
+    message: content.message || '',
+    isMine: event.pubkey === state.pubKeyHex,
+  };
+
+  offer.counters.push(counter);
+  offer.status = 'countered';
+
+  addLogMsg('system', `Counter-offer on ${content.offerId.slice(0, 8)}...: ${formatAlph(content.alphAmount)} ALPH for ${content.btcSat} sat`, counter.isMine ? 'You' : event.pubkey.slice(0, 8) + '...');
+  renderOffersList();
+}
+
+function handleAcceptEvent(event, content) {
+  const offer = state.offers.get(content.offerId);
+  if (!offer) return;
+  if (offer.status === 'accepted' || offer.status === 'cancelled') return;
+
+  offer.status = 'accepted';
+  offer.acceptEvent = event;
+
+  const isMine = event.pubkey === state.pubKeyHex;
+  addLogMsg('system', `Offer ${content.offerId.slice(0, 8)}... accepted!`, isMine ? 'You' : event.pubkey.slice(0, 8) + '...');
+  renderOffersList();
+
+  const involvesUs = offer.isMine || isMine;
+  if (involvesUs && !state.activeSwap) {
+    startSwapFromAccept(offer, event, content);
+  }
+}
+
+function handleCancelEvent(event, content) {
+  const offer = state.offers.get(content.offerId);
+  if (!offer) return;
+  if (event.pubkey !== offer.pubkey) return;
+  if (offer.status === 'accepted') return;
+
+  offer.status = 'cancelled';
+  addLogMsg('system', `Offer ${content.offerId.slice(0, 8)}... cancelled`, event.pubkey === state.pubKeyHex ? 'You' : event.pubkey.slice(0, 8) + '...');
+  renderOffersList();
+}
+
+setInterval(() => {
+  const now = Math.floor(Date.now() / 1000);
+  let changed = false;
+  for (const [, offer] of state.offers) {
+    if (offer.status === 'open' || offer.status === 'countered') {
+      if (offer.expiresAt && offer.expiresAt < now) {
+        offer.status = 'expired';
+        changed = true;
+      }
+    }
+  }
+  if (changed) renderOffersList();
+}, 30000);
+
+// ============================================================
+// UI: Offers List
+// ============================================================
+
+function formatAlph(attoAlph) {
+  const n = Number(BigInt(attoAlph)) / 1e18;
+  return n % 1 === 0 ? n.toFixed(0) : n.toFixed(4);
+}
+
+function formatSat(sat) {
+  return Number(sat).toLocaleString();
+}
+
+function renderOffersList() {
+  const listEl = document.getElementById('offers-list');
+  const countEl = document.getElementById('offers-count');
+
+  const sorted = [...state.offers.values()].sort((a, b) => {
+    const statusOrder = { open: 0, countered: 0, accepted: 1, cancelled: 2, expired: 2 };
+    const oa = statusOrder[a.status] ?? 3;
+    const ob = statusOrder[b.status] ?? 3;
+    if (oa !== ob) return oa - ob;
+    return (b.createdAt || 0) - (a.createdAt || 0);
+  });
+
+  const activeCount = sorted.filter(o => o.status === 'open' || o.status === 'countered').length;
+  countEl.textContent = `(${activeCount})`;
+
+  if (sorted.length === 0) {
+    listEl.innerHTML = '<div style="color:#484f58; font-size:12px; text-align:center; padding:24px;">No offers yet. Create one or wait for offers to appear.</div>';
+    return;
+  }
+
+  listEl.innerHTML = '';
+  for (const offer of sorted) {
+    const card = document.createElement('div');
+    const isSell = offer.direction === 'sell_alph';
+    let cardClass = 'offer-card';
+    if (offer.isMine) cardClass += ' mine';
+    else cardClass += isSell ? ' sell' : ' buy';
+    if (offer.status === 'cancelled' || offer.status === 'expired') cardClass += ' cancelled';
+    if (offer.status === 'accepted') cardClass += ' accepted';
+    card.className = cardClass;
+
+    const dirLabel = isSell ? 'SELL' : 'BUY';
+    const dirClass = isSell ? 'sell' : 'buy';
+    const preposition = isSell ? 'for' : 'with';
+    const peerLabel = offer.isMine ? 'You' : offer.pubkey.slice(0, 12) + '...';
+
+    let statusBadge = '';
+    if (offer.status === 'accepted') statusBadge = '<span class="status-badge accepted">Accepted</span>';
+    else if (offer.status === 'cancelled') statusBadge = '<span class="status-badge cancelled">Cancelled</span>';
+    else if (offer.status === 'expired') statusBadge = '<span class="status-badge expired">Expired</span>';
+
+    let actionsHtml = '';
+    const isActive = offer.status === 'open' || offer.status === 'countered';
+    if (isActive && !state.activeSwap) {
+      if (offer.isMine) {
+        actionsHtml = `<button class="sm danger cancel-offer-btn" data-offer="${offer.id}">Cancel</button>`;
+      } else {
+        actionsHtml = `<button class="sm primary accept-offer-btn" data-offer="${offer.id}">Accept</button>
+                       <button class="sm counter-offer-btn" data-offer="${offer.id}">Counter</button>`;
+      }
+    }
+
+    let html = `
+      <div class="card-header">
+        <span class="amount">
+          <span class="dir-badge ${dirClass}">${dirLabel}</span>
+          <span class="alph">${formatAlph(offer.alphAmount)} ALPH</span>
+          <span style="color:#8b949e"> ${preposition} </span>
+          <span class="btc">${formatSat(offer.btcSat)} sat</span>
+        </span>
+        ${statusBadge}
+      </div>
+      <div class="card-body">
+        <span class="peer">by ${peerLabel}</span>
+        <span class="card-actions">${actionsHtml}</span>
+      </div>`;
+
+    if (offer.counters.length > 0) {
+      html += '<div class="counters-list">';
+      offer.counters.forEach((c, idx) => {
+        const cPeer = c.isMine ? 'You' : c.pubkey.slice(0, 8) + '...';
+        let counterActions = '';
+        if (isActive && !state.activeSwap) {
+          if (offer.isMine && !c.isMine) {
+            counterActions = `<button class="sm primary accept-counter-btn" data-offer="${offer.id}" data-counter="${idx}">Accept</button>`;
+          }
+        }
+        html += `<div class="counter-item">
+          <span class="counter-info">Counter from ${cPeer}:</span>
+          <span class="counter-amounts">${formatAlph(c.alphAmount)} ALPH / ${formatSat(c.btcSat)} sat</span>
+          ${counterActions}
+        </div>`;
+      });
+      html += '</div>';
+    }
+
+    card.innerHTML = html;
+    listEl.appendChild(card);
+  }
+
+  listEl.querySelectorAll('.accept-offer-btn').forEach(btn => {
+    btn.addEventListener('click', () => acceptOffer(btn.dataset.offer));
+  });
+  listEl.querySelectorAll('.counter-offer-btn').forEach(btn => {
+    btn.addEventListener('click', () => showCounterForm(btn.dataset.offer));
+  });
+  listEl.querySelectorAll('.cancel-offer-btn').forEach(btn => {
+    btn.addEventListener('click', () => cancelOffer(btn.dataset.offer));
+  });
+  listEl.querySelectorAll('.accept-counter-btn').forEach(btn => {
+    btn.addEventListener('click', () => acceptCounter(btn.dataset.offer, parseInt(btn.dataset.counter)));
+  });
+}
+
+// ============================================================
+// Offer Actions
+// ============================================================
+
+async function publishOffer() {
+  const btn = document.getElementById('publish-offer-btn');
+  btn.disabled = true; btn.textContent = 'Publishing...';
+
+  try {
+    const direction = document.querySelector('#direction-toggle button.active').dataset.dir;
+    const alphVal = parseFloat(document.getElementById('offer-alph').value) || 10;
+    const btcSat = parseInt(document.getElementById('offer-btc-sat').value) || 50000;
+    const alphAmount = BigInt(Math.round(alphVal * 1e18));
+    const offerId = generateUUID();
+    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+
+    const event = await createOfferEvent({ offerId, direction, alphAmount, btcSat, expiresAt });
+    await nostrPublish(event);
+
+    addLogMsg('system', `Published offer: ${direction === 'sell_alph' ? 'Sell' : 'Buy'} ${alphVal} ALPH for ${btcSat} sat (expires in 1h)`, 'You');
+  } catch (e) {
+    addLogMsg('system', `Publish error: ${e.message}`, 'Error');
+  }
+
+  btn.disabled = false; btn.textContent = 'Publish Offer';
+}
+
+async function acceptOffer(offerId) {
+  const offer = state.offers.get(offerId);
+  if (!offer) return;
+
+  try {
+    const event = await createAcceptEvent({
+      offerId,
+      offerEventId: offer.eventId,
+      offerCreator: offer.pubkey,
+      alphAmount: offer.alphAmount,
+      btcSat: offer.btcSat,
+    });
+    await nostrPublish(event);
+  } catch (e) {
+    addLogMsg('system', `Accept error: ${e.message}`, 'Error');
+  }
+}
+
+async function acceptCounter(offerId, counterIndex) {
+  const offer = state.offers.get(offerId);
+  if (!offer || !offer.counters[counterIndex]) return;
+  const counter = offer.counters[counterIndex];
+
+  try {
+    const event = await createAcceptEvent({
+      offerId,
+      offerEventId: offer.eventId,
+      offerCreator: offer.pubkey,
+      alphAmount: counter.alphAmount,
+      btcSat: counter.btcSat,
+    });
+    await nostrPublish(event);
+  } catch (e) {
+    addLogMsg('system', `Accept counter error: ${e.message}`, 'Error');
+  }
+}
+
+function showCounterForm(offerId) {
+  const offer = state.offers.get(offerId);
+  if (!offer) return;
+
+  const cards = document.querySelectorAll('.offer-card');
+  for (const card of cards) {
+    const btn = card.querySelector(`.counter-offer-btn[data-offer="${offerId}"]`);
+    if (!btn) continue;
+    if (card.querySelector('.counter-form')) return;
+
+    const form = document.createElement('div');
+    form.className = 'counter-form';
+    form.innerHTML = `
+      <label>ALPH</label>
+      <input type="text" class="counter-alph" value="${formatAlph(offer.alphAmount)}">
+      <label>sat</label>
+      <input type="text" class="counter-sat" value="${offer.btcSat}">
+      <button class="sm primary submit-counter-btn" data-offer="${offerId}">Send</button>
+      <button class="sm cancel-counter-form-btn">X</button>
+    `;
+    card.appendChild(form);
+
+    form.querySelector('.submit-counter-btn').addEventListener('click', async () => {
+      const alphVal = parseFloat(form.querySelector('.counter-alph').value) || 0;
+      const btcSat = parseInt(form.querySelector('.counter-sat').value) || 0;
+      if (!alphVal || !btcSat) return;
+
+      try {
+        const event = await createCounterEvent({
+          offerId,
+          offerEventId: offer.eventId,
+          offerCreator: offer.pubkey,
+          index: offer.counters.length,
+          alphAmount: BigInt(Math.round(alphVal * 1e18)),
+          btcSat,
+        });
+        await nostrPublish(event);
+        form.remove();
+      } catch (e) {
+        addLogMsg('system', `Counter error: ${e.message}`, 'Error');
+      }
+    });
+
+    form.querySelector('.cancel-counter-form-btn').addEventListener('click', () => form.remove());
+    break;
+  }
+}
+
+async function cancelOffer(offerId) {
+  const offer = state.offers.get(offerId);
+  if (!offer) return;
+
+  try {
+    const event = await createCancelEvent({ offerId, offerEventId: offer.eventId });
+    await nostrPublish(event);
+  } catch (e) {
+    addLogMsg('system', `Cancel error: ${e.message}`, 'Error');
+  }
+}
+
+// ============================================================
+// Accept -> Auto-Execute Swap
+// ============================================================
+
+function startSwapFromAccept(offer, acceptEvent, acceptContent) {
+  const iAmCreator = offer.isMine;
+
+  let role, peerPubHex;
+  if (offer.direction === 'sell_alph') {
+    role = iAmCreator ? 'alice' : 'bob';
+    peerPubHex = iAmCreator ? acceptEvent.pubkey : offer.pubkey;
+  } else {
+    role = iAmCreator ? 'bob' : 'alice';
+    peerPubHex = iAmCreator ? acceptEvent.pubkey : offer.pubkey;
+  }
+
+  const sessionId = acceptEvent.id;
+  const alphAmount = acceptContent.alphAmount;
+  const btcSat = acceptContent.btcSat;
+
+  state.activeSwap = {
+    offerId: offer.id,
+    role,
+    peerPubHex,
+    sessionId,
+    alphAmount,
+    btcSat,
+  };
+
+  state.stepData = {};
+
+  document.getElementById('swap-placeholder').classList.add('hidden');
+  document.getElementById('swap-active').classList.remove('hidden');
+
+  const infoEl = document.getElementById('swap-info');
+  const alphDisplay = formatAlph(alphAmount);
+  infoEl.innerHTML = `
+    <div class="row"><span class="label">Role</span><span class="value">${role === 'alice' ? 'Alice (ALPH seller)' : 'Bob (BTC seller)'}</span></div>
+    <div class="row"><span class="label">Amount</span><span class="value"><span class="alph">${alphDisplay} ALPH</span> &harr; <span class="btc">${formatSat(btcSat)} sat</span></span></div>
+    <div class="row"><span class="label">Peer</span><span class="value" style="font-size:10px">${peerPubHex.slice(0, 16)}...</span></div>
+    <div class="row"><span class="label">Session</span><span class="value" style="font-size:10px">${sessionId.slice(0, 16)}...</span></div>
+  `;
+
+  renderSteps();
+
+  // Show UTXO bar for Bob
+  if (role === 'bob') {
+    document.getElementById('utxo-bar').classList.remove('hidden');
+    refreshUtxos();
+  } else {
+    document.getElementById('utxo-bar').classList.add('hidden');
+  }
+
+  subscribeToSwap(sessionId, peerPubHex);
+
+  document.getElementById('log-toggle').classList.add('open');
+  document.getElementById('log-content').classList.add('open');
+
+  addLogMsg('system', `Swap started as ${role}: ${alphDisplay} ALPH <-> ${formatSat(btcSat)} sat`, 'System');
+
+  autoExecuteSwap();
+}
+
+function subscribeToSwap(sessionId, peerPubHex) {
+  const existing = state.subscriptions.get('active_swap');
+  if (existing) existing();
+
+  swapEventWaiters.length = 0;
+
+  subscribe('active_swap', [{
+    kinds: [SWAP_SETUP_KIND, SWAP_NONCE_KIND, SWAP_PRESIG_KIND, SWAP_CLAIM_KIND],
+    '#e': [sessionId],
+    authors: [state.pubKeyHex, peerPubHex],
+  }], (event) => {
+    const isMine = event.pubkey === state.pubKeyHex;
+    const authorLabel = isMine ? 'You' : event.pubkey.slice(0, 8) + '...';
+    addProtocolMsg(event.kind, event.content, authorLabel);
+
+    for (let i = swapEventWaiters.length - 1; i >= 0; i--) {
+      const w = swapEventWaiters[i];
+      if (event.kind === w.kind && event.pubkey === w.fromPub) {
+        if (!w.predicate || w.predicate(event)) {
+          clearTimeout(w.timer);
+          swapEventWaiters.splice(i, 1);
+          w.resolve(event);
+        }
+      }
+    }
+  });
+}
+
+// ============================================================
+// Auto-Execute Swap
+// ============================================================
+
+async function autoExecuteSwap() {
+  if (!state.activeSwap) return;
+  const { role } = state.activeSwap;
+
+  try {
+    updateStep('setup', { status: 'active' });
+    if (role === 'alice') {
+      await executeSetupAlice();
+    } else {
+      await executeSetupBob();
+    }
+    updateStep('setup', { status: 'done' });
+
+    if (state.stepData.lock?.status !== 'done') {
+      updateStep('lock', { status: 'active' });
+      if (role === 'alice') {
+        await executeLockAlice();
+      } else {
+        await executeLockBob();
+      }
+      updateStep('lock', { status: 'done' });
+    }
+
+    updateStep('nonces', { status: 'active' });
+    await executeNonces();
+    updateStep('nonces', { status: 'done' });
+
+    updateStep('presign', { status: 'active' });
+    await executePresign();
+    updateStep('presign', { status: 'done' });
+
+    updateStep('claim', { status: 'active' });
+    if (role === 'alice') {
+      await executeClaimAlice();
+    } else {
+      await executeClaimBob();
+    }
+    updateStep('claim', { status: 'done' });
+
+    showSwapComplete();
+
+  } catch (e) {
+    addLogMsg('system', `Swap error: ${e.message}`, 'Error');
+  }
+}
+
+async function retryStep(stepId) {
+  if (!state.activeSwap) return;
+  const { role } = state.activeSwap;
+
+  updateStep(stepId, { status: 'active', error: null });
+
+  try {
+    const stepFns = {
+      alice: { setup: executeSetupAlice, lock: executeLockAlice, nonces: executeNonces, presign: executePresign, claim: executeClaimAlice },
+      bob: { setup: executeSetupBob, lock: executeLockBob, nonces: executeNonces, presign: executePresign, claim: executeClaimBob },
+    };
+    await stepFns[role][stepId]();
+    updateStep(stepId, { status: 'done' });
+
+    const stepOrder = ['setup', 'lock', 'nonces', 'presign', 'claim'];
+    const idx = stepOrder.indexOf(stepId);
+    for (let i = idx + 1; i < stepOrder.length; i++) {
+      const nextStep = stepOrder[i];
+      if (state.stepData[nextStep]?.status === 'done') continue;
+      updateStep(nextStep, { status: 'active' });
+      await stepFns[role][nextStep]();
+      updateStep(nextStep, { status: 'done' });
+    }
+    showSwapComplete();
+  } catch (e) {
+    addLogMsg('system', `Retry error: ${e.message}`, 'Error');
+  }
+}
+
+// ============================================================
+// Step Execution: Alice
+// ============================================================
+
+async function executeSetupAlice() {
+  const { sessionId, peerPubHex, btcSat, alphAmount } = state.activeSwap;
+  const btcAmount = btcSat / 1e8;
+
+  try {
+    const initResult = state.engine.initSwap('alice', peerPubHex, btcAmount, String(alphAmount), sessionId);
+
+    state.stepData.setup = { ...state.stepData.setup, adaptorPoint: initResult.adaptorPoint };
+    updateStep('setup', { info: `adaptorPoint: ${initResult.adaptorPoint?.slice(0, 24)}...\nSending to peer...` });
+
+    const event = await createSwapSetup({
+      sessionId, recipientPubHex: peerPubHex, msgType: 'confirm',
+      pubkey: state.pubKeyHex, adaptorPoint: initResult.adaptorPoint,
+    });
+    await nostrPublish(event);
+
+    updateStep('setup', { info: `adaptorPoint sent. Waiting for Bob's BTC lock...` });
+
+    const btcLockedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'btc_locked');
+    const btcLocked = JSON.parse(btcLockedEvent.content);
+
+    await state.engine.verifyBtc(btcLocked.txid, btcLocked.vout);
+
+    updateStep('setup', { info: `BTC locked: ${btcLocked.txid.slice(0, 16)}... verified` });
+  } catch (e) {
+    updateStep('setup', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+async function executeLockAlice() {
+  const { sessionId, peerPubHex } = state.activeSwap;
+
+  try {
+    const deployResult = await state.engine.deployAlph();
+    updateStep('lock', { info: `ALPH deployed: ${deployResult.contractAddress.slice(0, 16)}...\nSending to peer...` });
+
+    const event = await createSwapSetup({
+      sessionId, recipientPubHex: peerPubHex, msgType: 'alph_deployed',
+      contractId: deployResult.contractId, contractAddress: deployResult.contractAddress,
+    });
+    await nostrPublish(event);
+
+    updateStep('lock', { info: `ALPH: ${deployResult.contractAddress.slice(0, 16)}...\nWaiting for Bob to verify...` });
+    await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'verified');
+
+    state.engine.computeContext();
+    updateStep('lock', { info: `ALPH: ${deployResult.contractAddress.slice(0, 16)}... | Bob verified | Context computed` });
+  } catch (e) {
+    updateStep('lock', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+async function executeClaimAlice() {
+  const { sessionId, peerPubHex } = state.activeSwap;
+
+  try {
+    const result = await state.engine.claimBtc();
+    updateStep('claim', { info: `BTC claimed! txid: ${result.txid.slice(0, 24)}...` });
+
+    const event = await createSwapClaim({
+      sessionId, recipientPubHex: peerPubHex, claimType: 'btc_claimed',
+      txid: result.txid,
+    });
+    await nostrPublish(event);
+
+    updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nWaiting for Bob to claim ALPH...` });
+    const alphClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'alph_claimed');
+    const alphClaimed = JSON.parse(alphClaimedEvent.content);
+    updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nBob claimed ALPH: ${alphClaimed.txid.slice(0, 16)}...` });
+    await refreshBalance();
+  } catch (e) {
+    updateStep('claim', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+// ============================================================
+// Step Execution: Bob
+// ============================================================
+
+async function executeSetupBob() {
+  const { sessionId, peerPubHex, btcSat, alphAmount } = state.activeSwap;
+  const btcAmount = btcSat / 1e8;
+
+  try {
+    updateStep('setup', { info: 'Waiting for Alice\'s confirmation...' });
+    const confirmEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'confirm');
+    const confirm = JSON.parse(confirmEvent.content);
+
+    state.engine.initSwap('bob', peerPubHex, btcAmount, String(alphAmount), sessionId);
+    state.engine.setAdaptorPoint(confirm.adaptorPoint);
+
+    updateStep('setup', { info: `adaptorPoint: ${confirm.adaptorPoint.slice(0, 24)}...` });
+  } catch (e) {
+    updateStep('setup', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+async function executeLockBob() {
+  const { sessionId, peerPubHex } = state.activeSwap;
+
+  try {
+    const utxo = state.selectedUtxo || null;
+    const lockResult = await state.engine.lockBtc(utxo);
+    updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}... vout=${lockResult.vout}\nPublishing...` });
+
+    const event = await createSwapSetup({
+      sessionId, recipientPubHex: peerPubHex, msgType: 'btc_locked',
+      txid: lockResult.txid, vout: lockResult.vout, amountSat: lockResult.amountSat,
+    });
+    await nostrPublish(event);
+
+    updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}...\nWaiting for Alice to deploy ALPH...` });
+    const alphDeployedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'alph_deployed');
+    const alphDeployed = JSON.parse(alphDeployedEvent.content);
+
+    await state.engine.verifyAlph(alphDeployed.contractId, alphDeployed.contractAddress);
+
+    const verifiedEvent = await createSwapSetup({
+      sessionId, recipientPubHex: peerPubHex, msgType: 'verified',
+    });
+    await nostrPublish(verifiedEvent);
+
+    state.engine.computeContext();
+    updateStep('lock', { info: `BTC: ${lockResult.txid.slice(0, 16)}... | ALPH: ${alphDeployed.contractAddress.slice(0, 12)}... | Verified` });
+  } catch (e) {
+    updateStep('lock', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+async function executeClaimBob() {
+  const { sessionId, peerPubHex } = state.activeSwap;
+
+  try {
+    updateStep('claim', { info: 'Waiting for Alice to claim BTC...' });
+    const btcClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'btc_claimed');
+    const btcClaimed = JSON.parse(btcClaimedEvent.content);
+
+    updateStep('claim', { info: `Alice claimed BTC: ${btcClaimed.txid.slice(0, 16)}...\nExtracting secret and claiming ALPH...` });
+
+    const result = await state.engine.claimAlph(btcClaimed.txid);
+
+    const event = await createSwapClaim({
+      sessionId, recipientPubHex: peerPubHex, claimType: 'alph_claimed',
+      txid: result.txid,
+    });
+    await nostrPublish(event);
+
+    updateStep('claim', { info: `Alice BTC: ${btcClaimed.txid.slice(0, 16)}...\nALPH claimed: ${result.txid.slice(0, 16)}...` });
+    await refreshBalance();
+  } catch (e) {
+    updateStep('claim', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+// ============================================================
+// Shared Steps: Nonces & Pre-sign
+// ============================================================
+
+async function executeNonces() {
+  const { sessionId, peerPubHex, role } = state.activeSwap;
+  const isAlice = role === 'alice';
+
+  try {
+    const commitResult = state.engine.nonceCommit();
+
+    if (isAlice) {
+      const commitEvent = await createSwapNonce({
+        sessionId, recipientPubHex: peerPubHex, phase: 'commit',
+        btcNonceHash: commitResult.btcNonceHash, alphNonceHash: commitResult.alphNonceHash,
+      });
+      await nostrPublish(commitEvent);
+      updateStep('nonces', { info: 'Commitment sent. Waiting for peer...' });
+
+      const peerCommitEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sessionId, peerPubHex,
+        (e) => JSON.parse(e.content).phase === 'commit');
+      const peerCommit = JSON.parse(peerCommitEvent.content);
+
+      const revealResult = state.engine.nonceReveal(peerCommit.btcNonceHash, peerCommit.alphNonceHash);
+
+      const revealEvent = await createSwapNonce({
+        sessionId, recipientPubHex: peerPubHex, phase: 'reveal',
+        btcPubNonce: revealResult.btcPubNonce, alphPubNonce: revealResult.alphPubNonce,
+      });
+      await nostrPublish(revealEvent);
+      updateStep('nonces', { info: 'Nonces revealed. Waiting for peer reveal...' });
+
+      const peerRevealEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sessionId, peerPubHex,
+        (e) => JSON.parse(e.content).phase === 'reveal');
+      const peerReveal = JSON.parse(peerRevealEvent.content);
+
+      state.engine.nonceVerify(peerReveal.btcPubNonce, peerReveal.alphPubNonce);
+    } else {
+      updateStep('nonces', { info: 'Waiting for Alice\'s commitment...' });
+      const peerCommitEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sessionId, peerPubHex,
+        (e) => JSON.parse(e.content).phase === 'commit');
+      const peerCommit = JSON.parse(peerCommitEvent.content);
+
+      const commitEvent = await createSwapNonce({
+        sessionId, recipientPubHex: peerPubHex, phase: 'commit',
+        btcNonceHash: commitResult.btcNonceHash, alphNonceHash: commitResult.alphNonceHash,
+      });
+      await nostrPublish(commitEvent);
+
+      updateStep('nonces', { info: 'Commitment exchanged. Waiting for peer reveal...' });
+      const peerRevealEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sessionId, peerPubHex,
+        (e) => JSON.parse(e.content).phase === 'reveal');
+      const peerReveal = JSON.parse(peerRevealEvent.content);
+
+      const revealResult = state.engine.nonceReveal(peerCommit.btcNonceHash, peerCommit.alphNonceHash);
+
+      const revealEvent = await createSwapNonce({
+        sessionId, recipientPubHex: peerPubHex, phase: 'reveal',
+        btcPubNonce: revealResult.btcPubNonce, alphPubNonce: revealResult.alphPubNonce,
+      });
+      await nostrPublish(revealEvent);
+
+      state.engine.nonceVerify(peerReveal.btcPubNonce, peerReveal.alphPubNonce);
+    }
+
+    updateStep('nonces', { info: 'Nonces committed, revealed, verified, and aggregated' });
+  } catch (e) {
+    updateStep('nonces', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+async function executePresign() {
+  const { sessionId, peerPubHex, role } = state.activeSwap;
+  const isAlice = role === 'alice';
+
+  try {
+    const presigResult = state.engine.presign();
+
+    if (isAlice) {
+      const presigEvent = await createSwapPresig({
+        sessionId, recipientPubHex: peerPubHex,
+        btcPresig: presigResult.btcPresig, alphPresig: presigResult.alphPresig,
+      });
+      await nostrPublish(presigEvent);
+      updateStep('presign', { info: 'Pre-signatures sent. Waiting for peer...' });
+
+      const peerPresigEvent = await waitForSwapEvent(SWAP_PRESIG_KIND, sessionId, peerPubHex);
+      const peerPresigs = JSON.parse(peerPresigEvent.content);
+
+      state.engine.verifyPresig(peerPresigs.btcPresig, peerPresigs.alphPresig);
+    } else {
+      updateStep('presign', { info: 'Waiting for Alice\'s pre-signatures...' });
+      const peerPresigEvent = await waitForSwapEvent(SWAP_PRESIG_KIND, sessionId, peerPubHex);
+      const peerPresigs = JSON.parse(peerPresigEvent.content);
+
+      state.engine.verifyPresig(peerPresigs.btcPresig, peerPresigs.alphPresig);
+
+      const presigEvent = await createSwapPresig({
+        sessionId, recipientPubHex: peerPubHex,
+        btcPresig: presigResult.btcPresig, alphPresig: presigResult.alphPresig,
+      });
+      await nostrPublish(presigEvent);
+    }
+
+    updateStep('presign', { info: 'Pre-signatures exchanged, verified, aggregated with taproot tweak' });
+  } catch (e) {
+    updateStep('presign', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+// ============================================================
+// Refund
+// ============================================================
+
+async function refundAlph() {
+  try {
+    addLogMsg('system', 'Refunding ALPH...', 'System');
+    const result = await state.engine.refundAlph();
+    addLogMsg('system', `ALPH refunded! txid: ${result.txid.slice(0, 24)}...`, 'System');
+    await refreshBalance();
+  } catch (e) {
+    addLogMsg('system', `Refund error: ${e.message}`, 'Error');
+  }
+}
+
+async function refundBtc() {
+  try {
+    addLogMsg('system', 'Refunding BTC (requires CSV timeout)...', 'System');
+    const result = await state.engine.refundBtc();
+    addLogMsg('system', `BTC refunded! txid: ${result.txid.slice(0, 24)}...`, 'System');
+    await refreshBalance();
+  } catch (e) {
+    addLogMsg('system', `Refund error: ${e.message}`, 'Error');
+  }
+}
+
+// ============================================================
+// Swap Complete
+// ============================================================
+
+function showSwapComplete() {
+  const { alphAmount, btcSat, role } = state.activeSwap;
+  const actionsEl = document.getElementById('swap-actions');
+  actionsEl.innerHTML = `
+    <div class="swap-complete" style="width:100%">
+      <h3>Swap Complete!</h3>
+      <div style="color:#8b949e; font-size:12px; margin-top:4px">
+        ${role === 'alice' ? 'Received' : 'Sent'} ${formatSat(btcSat)} sat &harr;
+        ${role === 'alice' ? 'Sent' : 'Received'} ${formatAlph(alphAmount)} ALPH
+      </div>
+      <button class="sm" id="new-swap-btn" style="margin-top:12px">New Swap</button>
+    </div>
+  `;
+  document.getElementById('new-swap-btn').addEventListener('click', resetSwap);
+}
+
+function resetSwap() {
+  const unsub = state.subscriptions.get('active_swap');
+  if (unsub) unsub();
+  swapEventWaiters.forEach(w => clearTimeout(w.timer));
+  swapEventWaiters.length = 0;
+
+  state.activeSwap = null;
+  state.stepData = {};
+  state.selectedUtxo = null;
+
+  // Re-create engine for fresh swap state (keeps same keys)
+  state.engine = new SwapEngine(state.secBytes, hexToBytes(state.pubKeyHex));
+
+  document.getElementById('swap-placeholder').classList.remove('hidden');
+  document.getElementById('swap-active').classList.add('hidden');
+  document.getElementById('utxo-bar').classList.add('hidden');
+
+  renderOffersList();
+  refreshBalance();
+}
+
+// ============================================================
+// Auto-Connect
+// ============================================================
+
+const STORAGE_KEY = 'btc-alph-swap-nsec';
+const BACKUP_CONFIRMED_KEY = 'btc-alph-swap-backup-confirmed';
+
+function getOrCreateNsec() {
+  let hex = localStorage.getItem(STORAGE_KEY);
+  if (hex && hex.length === 64) return hex;
+  const sec = new Uint8Array(32);
+  crypto.getRandomValues(sec);
+  hex = bytesToHex(sec);
+  localStorage.setItem(STORAGE_KEY, hex);
+  return hex;
+}
+
+function npubEncode(pubKeyHex) {
+  const pubKeyBytes = hexToBytes(pubKeyHex);
+  const words = bech32.toWords(pubKeyBytes);
+  return bech32.encode('npub', words, 90);
+}
+
+function nsecEncode(secHex) {
+  const secBytes = hexToBytes(secHex);
+  const words = bech32.toWords(secBytes);
+  return bech32.encode('nsec', words, 90);
+}
+
+async function autoConnect() {
+  const statusEl = document.getElementById('connect-status');
+  const errorEl = document.getElementById('connect-error');
+  const errorMsgEl = document.getElementById('connect-error-msg');
+  statusEl.textContent = 'Connecting...';
+  errorEl.classList.add('hidden');
+
+  try {
+    const nsecHex = getOrCreateNsec();
+    state.secBytes = hexToBytes(nsecHex);
+
+    statusEl.textContent = 'Deriving identity...';
+    const pubKey = schnorr.getPublicKey(state.secBytes);
+    state.pubKeyHex = bytesToHex(pubKey);
+    state.npub = npubEncode(state.pubKeyHex);
+
+    // Create the swap engine
+    state.engine = new SwapEngine(state.secBytes, pubKey);
+    state.btcAddress = state.engine.btcAddress;
+    state.alphAddress = state.engine.alphAddress;
+    state.network = 'testnet';
+
+    statusEl.textContent = 'Connecting to Nostr relays...';
+    const connected = await connectRelays(DEFAULT_RELAYS);
+
+    // Update UI
+    document.getElementById('connect-screen').style.display = 'none';
+    document.getElementById('main-screen').classList.add('active');
+    document.getElementById('info-npub').textContent = state.npub;
+    document.getElementById('info-btc').textContent = state.btcAddress;
+    document.getElementById('info-alph').textContent = state.alphAddress;
+
+    // nsec in bech32 (stored in state, shown only when revealed)
+    state.nsecBech32 = nsecEncode(nsecHex);
+
+    const badge = document.getElementById('network-badge');
+    badge.textContent = 'testnet';
+    badge.className = 'network-badge testnet';
+
+    // Backup state
+    initBackupState();
+
+    subscribeToOffers();
+    refreshBalance();
+
+    const relayNames = connected.map(r => r.url.replace('wss://', '')).join(', ');
+    updateRelayStatus();
+    addLogMsg('system', `Connected via ${connected.length} relays: ${relayNames}`, 'System');
+  } catch (e) {
+    statusEl.textContent = '';
+    errorMsgEl.textContent = 'Connection failed: ' + e.message;
+    errorEl.classList.remove('hidden');
+  }
+}
+
+// ============================================================
+// Subscriptions
+// ============================================================
+
+function subscribeToOffers() {
+  subscribe('offer_feed', [{
+    kinds: [SWAP_OFFER_KIND],
+    '#t': ['atomicswap'],
+    since: Math.floor(Date.now() / 1000) - 86400,
+  }], handleOfferEvent);
+}
+
+// ============================================================
+// UTXOs
+// ============================================================
+
+async function refreshUtxos() {
+  if (!state.engine) return;
+  try {
+    const utxos = await state.engine.getUtxoList();
+    const sel = document.getElementById('utxo-select');
+    sel.innerHTML = '<option value="">Auto-select best UTXO</option>';
+    for (const u of utxos) {
+      const conf = u.status?.confirmed ? 'conf' : 'unconf';
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify({ txid: u.txid, vout: u.vout, value: u.value });
+      opt.textContent = `${(u.value / 1e8).toFixed(8)} BTC  ${u.txid.slice(0, 12)}...:${u.vout} [${conf}]`;
+      sel.appendChild(opt);
+    }
+  } catch {}
+}
+
+// ============================================================
+// Relay Health
+// ============================================================
+
+function updateRelayStatus() {
+  const el = document.getElementById('relay-status');
+  const alive = state.relays.filter(r => r.ws.readyState === WebSocket.OPEN).length;
+  const total = state.relays.length;
+  el.textContent = `${alive}/${total} relays`;
+  el.style.color = alive === 0 ? '#f85149' : alive < total ? '#d29922' : '#2ea043';
+}
+
+setInterval(() => {
+  if (state.relays.length > 0) updateRelayStatus();
+}, 10000);
+
+// ============================================================
+// Balance
+// ============================================================
+
+let balancePollTimer = null;
+
+async function refreshBalance() {
+  if (!state.engine) return;
+  try {
+    const bal = await state.engine.getBalances();
+
+    const btcEl = document.getElementById('bal-btc');
+    const alphEl = document.getElementById('bal-alph');
+
+    btcEl.textContent = `${bal.btc} BTC`;
+    alphEl.textContent = `${bal.alph} ALPH`;
+
+    const hasPendingBtc = (bal.btcUnconfirmedSat || 0) > 0;
+    btcEl.classList.toggle('pending', hasPendingBtc);
+    if (hasPendingBtc) btcEl.title = `${(bal.btcConfirmedSat / 1e8).toFixed(8)} confirmed + ${(bal.btcUnconfirmedSat / 1e8).toFixed(8)} unconfirmed`;
+    else btcEl.title = '';
+
+    if (hasPendingBtc && !balancePollTimer) {
+      balancePollTimer = setInterval(async () => {
+        await refreshBalance();
+      }, 10000);
+    } else if (!hasPendingBtc && balancePollTimer) {
+      clearInterval(balancePollTimer);
+      balancePollTimer = null;
+    }
+  } catch {}
+}
+
+// ============================================================
+// UI Event Handlers
+// ============================================================
+
+document.getElementById('refresh-bal-btn').addEventListener('click', refreshBalance);
+
+// Reset key — strong confirmation
+document.getElementById('reset-key-btn').addEventListener('click', () => {
+  const msg = 'WARNING: This will permanently delete your current key.\n\n' +
+    'All funds (BTC and ALPH) associated with this identity will be LOST ' +
+    'unless you have backed up your nsec.\n\n' +
+    'Type "RESET" to confirm:';
+  const input = prompt(msg);
+  if (input !== 'RESET') return;
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(BACKUP_CONFIRMED_KEY);
+  location.reload();
+});
+
+document.getElementById('retry-btn').addEventListener('click', () => autoConnect());
+
+// Copy buttons (npub, btc, alph, nsec)
+document.querySelectorAll('.copy-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const which = btn.dataset.copy;
+    let text;
+    if (which === 'btc') text = state.btcAddress;
+    else if (which === 'alph') text = state.alphAddress;
+    else if (which === 'npub') text = state.npub;
+    else if (which === 'nsec') text = state.nsecBech32;
+    if (text) {
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'ok!';
+        setTimeout(() => { btn.textContent = 'copy'; }, 1200);
+      });
+    }
+  });
+});
+
+// ---- Receive popup (QR + address, both copyable) ----
+
+let receivePopupAddress = null;
+
+function showReceivePopup(title, text) {
+  receivePopupAddress = text;
+  const popup = document.getElementById('receive-popup');
+  const titleEl = document.getElementById('receive-popup-title');
+  const qrEl = document.getElementById('receive-popup-qr');
+  const addrEl = document.getElementById('receive-popup-addr');
+  const statusEl = document.getElementById('receive-popup-status');
+
+  titleEl.textContent = title;
+  addrEl.textContent = text;
+  statusEl.textContent = '';
+
+  // Generate QR as canvas for copy-as-image support
+  const qr = qrcode(0, 'M');
+  qr.addData(text);
+  qr.make();
+
+  const cellSize = 5;
+  const margin = 8;
+  const moduleCount = qr.getModuleCount();
+  const size = moduleCount * cellSize + margin * 2;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = '#000000';
+  for (let row = 0; row < moduleCount; row++) {
+    for (let col = 0; col < moduleCount; col++) {
+      if (qr.isDark(row, col)) {
+        ctx.fillRect(col * cellSize + margin, row * cellSize + margin, cellSize, cellSize);
+      }
+    }
+  }
+
+  qrEl.innerHTML = '';
+  qrEl.appendChild(canvas);
+  popup.classList.remove('hidden');
+}
+
+// Click QR to copy as image
+document.getElementById('receive-popup-qr').addEventListener('click', async () => {
+  const statusEl = document.getElementById('receive-popup-status');
+  const canvas = document.querySelector('#receive-popup-qr canvas');
+  if (!canvas) return;
+  try {
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    statusEl.textContent = 'Copied QR image!';
+    setTimeout(() => { statusEl.textContent = ''; }, 2000);
+  } catch {
+    statusEl.textContent = 'Copy image not supported in this browser';
+    setTimeout(() => { statusEl.textContent = ''; }, 2000);
+  }
+});
+
+// Click address to copy text
+document.getElementById('receive-popup-addr').addEventListener('click', () => {
+  const statusEl = document.getElementById('receive-popup-status');
+  if (!receivePopupAddress) return;
+  navigator.clipboard.writeText(receivePopupAddress).then(() => {
+    statusEl.textContent = 'Copied address!';
+    setTimeout(() => { statusEl.textContent = ''; }, 2000);
+  });
+});
+
+// Close on click outside
+document.getElementById('receive-popup').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) {
+    document.getElementById('receive-popup').classList.add('hidden');
+  }
+});
+
+// npub QR button
+document.querySelector('.qr-btn[data-qr="npub"]').addEventListener('click', () => {
+  if (state.npub) showReceivePopup('npub', state.npub);
+});
+
+// Receive buttons (BTC, ALPH)
+document.querySelectorAll('.recv-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const which = btn.dataset.recv;
+    if (which === 'btc' && state.btcAddress) showReceivePopup('Receive BTC', state.btcAddress);
+    else if (which === 'alph' && state.alphAddress) showReceivePopup('Receive ALPH', state.alphAddress);
+  });
+});
+
+// ---- Send modal ----
+
+let sendChain = null;
+
+function showSendModal(chain) {
+  sendChain = chain;
+  const modal = document.getElementById('send-modal');
+  const titleEl = document.getElementById('send-modal-title');
+  const balEl = document.getElementById('send-modal-balance');
+  const inputEl = document.getElementById('send-dest-addr');
+  const errorEl = document.getElementById('send-modal-error');
+  const statusEl = document.getElementById('send-modal-status');
+  const confirmBtn = document.getElementById('send-confirm-btn');
+
+  titleEl.textContent = chain === 'btc' ? 'Send BTC' : 'Send ALPH';
+  balEl.textContent = chain === 'btc'
+    ? `Balance: ${document.getElementById('bal-btc').textContent}`
+    : `Balance: ${document.getElementById('bal-alph').textContent}`;
+  inputEl.value = '';
+  inputEl.placeholder = chain === 'btc' ? 'tb1... destination address' : 'ALPH destination address';
+  errorEl.textContent = '';
+  errorEl.classList.add('hidden');
+  statusEl.textContent = '';
+  statusEl.classList.add('hidden');
+  confirmBtn.disabled = false;
+  confirmBtn.textContent = 'Sweep All';
+  modal.classList.remove('hidden');
+  inputEl.focus();
+}
+
+async function executeSend() {
+  const destAddress = document.getElementById('send-dest-addr').value.trim();
+  const errorEl = document.getElementById('send-modal-error');
+  const statusEl = document.getElementById('send-modal-status');
+  const confirmBtn = document.getElementById('send-confirm-btn');
+
+  if (!destAddress) {
+    errorEl.textContent = 'Please enter a destination address';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  // Validate address
+  if (sendChain === 'btc') {
+    if (!SwapEngine.validateBtcAddress(destAddress)) {
+      errorEl.textContent = 'Invalid BTC address for signet/testnet';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+  } else {
+    if (!SwapEngine.validateAlphAddress(destAddress)) {
+      errorEl.textContent = 'Invalid ALPH address';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+  }
+
+  errorEl.classList.add('hidden');
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Sending...';
+  statusEl.textContent = 'Broadcasting transaction...';
+  statusEl.classList.remove('hidden');
+
+  try {
+    let txid;
+    if (sendChain === 'btc') {
+      txid = await state.engine.sweepBtc(destAddress);
+    } else {
+      txid = await state.engine.sweepAlph(destAddress);
+    }
+    statusEl.textContent = `Sent! txid: ${txid}`;
+    confirmBtn.textContent = 'Done';
+    addLogMsg('system', `${sendChain.toUpperCase()} sweep to ${destAddress.slice(0, 16)}...: ${txid}`, 'You');
+    setTimeout(() => refreshBalance(), 3000);
+  } catch (e) {
+    errorEl.textContent = e.message;
+    errorEl.classList.remove('hidden');
+    statusEl.classList.add('hidden');
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Sweep All';
+  }
+}
+
+// Send buttons
+document.querySelectorAll('.send-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    showSendModal(btn.dataset.send);
+  });
+});
+
+document.getElementById('send-confirm-btn').addEventListener('click', executeSend);
+document.getElementById('send-cancel-btn').addEventListener('click', () => {
+  document.getElementById('send-modal').classList.add('hidden');
+});
+document.getElementById('send-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) {
+    document.getElementById('send-modal').classList.add('hidden');
+  }
+});
+
+// nsec reveal/hide toggle
+let nsecRevealed = false;
+document.getElementById('nsec-reveal-btn').addEventListener('click', () => {
+  const el = document.getElementById('key-info-nsec');
+  const btn = document.getElementById('nsec-reveal-btn');
+  nsecRevealed = !nsecRevealed;
+  if (nsecRevealed) {
+    el.textContent = state.nsecBech32 || '';
+    el.classList.remove('key-masked');
+    btn.textContent = 'hide';
+  } else {
+    el.textContent = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+    el.classList.add('key-masked');
+    btn.textContent = 'show';
+  }
+});
+
+// Backup confirmation
+function initBackupState() {
+  const confirmed = localStorage.getItem(BACKUP_CONFIRMED_KEY) === 'true';
+  const keyRow = document.getElementById('key-row');
+  const backupBtn = document.getElementById('backup-btn');
+  const warning = document.getElementById('key-warning');
+
+  if (confirmed) {
+    keyRow.classList.remove('blink');
+    backupBtn.textContent = '\u2713 Backed Up';
+    backupBtn.classList.add('confirmed');
+    warning.classList.add('hidden-warn');
+  } else {
+    keyRow.classList.add('blink');
+    backupBtn.textContent = 'Backed Up';
+    backupBtn.classList.remove('confirmed');
+    warning.classList.remove('hidden-warn');
+  }
+}
+
+document.getElementById('backup-btn').addEventListener('click', () => {
+  const confirmed = confirm(
+    'Have you saved your nsec (private key) somewhere safe?\n\n' +
+    'Without this key, all BTC and ALPH funds in this wallet will be permanently lost.\n\n' +
+    'Click OK to confirm you have backed it up.'
+  );
+  if (!confirmed) return;
+  localStorage.setItem(BACKUP_CONFIRMED_KEY, 'true');
+  initBackupState();
+});
+
+document.getElementById('utxo-select').addEventListener('change', (e) => {
+  state.selectedUtxo = e.target.value ? JSON.parse(e.target.value) : null;
+});
+
+document.getElementById('refresh-utxos-btn').addEventListener('click', refreshUtxos);
+
+document.querySelectorAll('#direction-toggle button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#direction-toggle button').forEach(b => {
+      b.classList.remove('active', 'sell', 'buy');
+    });
+    btn.classList.add('active');
+    btn.classList.add(btn.dataset.dir === 'sell_alph' ? 'sell' : 'buy');
+    updateRateDisplay();
+  });
+});
+
+function updateRateDisplay() {
+  const alphVal = parseFloat(document.getElementById('offer-alph').value) || 0;
+  const btcSat = parseInt(document.getElementById('offer-btc-sat').value) || 0;
+  const el = document.getElementById('rate-display');
+  if (alphVal > 0 && btcSat > 0) {
+    const rate = (alphVal / (btcSat / 1e8)).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    el.textContent = `Rate: ${rate} ALPH/BTC`;
+  } else {
+    el.textContent = 'Rate: --';
+  }
+}
+
+document.getElementById('offer-alph').addEventListener('input', updateRateDisplay);
+document.getElementById('offer-btc-sat').addEventListener('input', updateRateDisplay);
+updateRateDisplay();
+
+document.getElementById('publish-offer-btn').addEventListener('click', publishOffer);
+
+// Testnet: ALPH faucet
+document.getElementById('alph-faucet-btn').addEventListener('click', async () => {
+  if (!state.engine) return;
+  const btn = document.getElementById('alph-faucet-btn');
+  btn.disabled = true; btn.textContent = 'Wait...';
+  try {
+    const result = await state.engine.requestAlphFaucet();
+    addLogMsg('system', `ALPH faucet: ${result.message}`, 'System');
+    setTimeout(() => refreshBalance(), 5000);
+  } catch (e) {
+    addLogMsg('system', `ALPH faucet error: ${e.message}`, 'Error');
+  }
+  btn.disabled = false; btn.textContent = 'Faucet';
+});
+
+// ============================================================
+// Init
+// ============================================================
+
+autoConnect().catch(e => {
+  console.error('autoConnect fatal:', e);
+  const s = document.getElementById('connect-status');
+  const em = document.getElementById('connect-error-msg');
+  const ee = document.getElementById('connect-error');
+  if (s) s.textContent = '';
+  if (em) em.textContent = 'Fatal: ' + e.message;
+  if (ee) ee.classList.remove('hidden');
+});

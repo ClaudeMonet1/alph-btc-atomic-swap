@@ -100,3 +100,56 @@ Everything needed already exists in the Alephium VM:
 | Contract deployment | Fund and deploy in one transaction |
 
 No protocol changes, no new opcodes, no forks required.
+
+## Static Browser Deployment
+
+The `docs/` directory contains a fully static version of the swap app that runs entirely in the browser. No server, no build step, no bundler — just ES modules loaded via import maps from esm.sh CDN.
+
+### Why Static
+
+The server (`src/server.js`) is an unnecessary trust boundary. It holds the user's private key and performs all signing server-side. The static version moves all logic to the browser: keys are generated and used client-side, signing happens in JavaScript, and chain interactions go directly to public APIs (Esplora for Bitcoin, REST API for Alephium). This eliminates the server as an attack surface.
+
+### Browser Compatibility
+
+The crypto modules (`musig2.js`, `adaptor.js`, `taproot-utils.js`) use `@noble/curves` which is designed for both Node.js and browsers. The main porting challenge was API surface differences in the esm.sh build:
+
+- **`schnorr.Point`** does not exist in the browser build. Replaced with `secp256k1.ProjectivePoint` and manual scalar field arithmetic (`Fn` object).
+- **`schnorr.Point.fromBytes()`** replaced with `ProjectivePoint.fromHex()` (accepts both hex strings and Uint8Array).
+- **`point.toBytes(true)`** replaced with `point.toRawBytes(true)` (33-byte compressed) and `.slice(1)` for 32-byte x-only.
+- **`tiny-secp256k1`** uses WASM which fails to initialize in the browser via esm.sh. Replaced with `@bitcoinerlab/secp256k1` which wraps `@noble/curves` in the interface that `bitcoinjs-lib` expects.
+- **`@alephium/web3`** exports only a default export on esm.sh. Imported as `import alphWeb3 from '@alephium/web3'` then destructured.
+
+### Import Map + Buffer Polyfill
+
+The app uses an HTML import map to resolve bare specifiers (`'@noble/curves/secp256k1'` etc.) to esm.sh CDN URLs. A Buffer polyfill is loaded before any modules via top-level `await` in the bootstrap script, since `bitcoinjs-lib` uses `Buffer.from()` internally.
+
+### CORS
+
+All external APIs used by the static app have permissive CORS headers:
+- `mempool.space/signet/api` — Bitcoin signet Esplora (`access-control-allow-origin: *`)
+- `node.testnet.alephium.org` — Alephium testnet node (`access-control-allow-origin: *`)
+- `faucet.testnet.alephium.org` — Alephium testnet faucet (`access-control-allow-origin: *`)
+
+### SwapEngine
+
+The `SwapEngine` class (`docs/js/swap-engine.js`) is a direct translation of all 18 API handlers from `server.js` into a single client-side class. Each method operates on `this.state` instead of a server-side session map. The swap protocol logic is identical — only the HTTP wrapper is removed.
+
+### Testnet Only
+
+The static version is hardcoded to Bitcoin signet + Alephium testnet. Devnet requires local blockchain nodes which can't be accessed from a browser. The Node.js server version supports both devnet and testnet.
+
+### Identity Panel & Wallet Operations
+
+The identity panel displays three address lines — npub, BTC (signet), and ALPH (testnet) — each with contextual action buttons:
+
+- **npub**: `[copy] [QR]` — QR shows a receive popup with canvas-rendered QR code (click to copy as image) and address text (click to copy).
+- **BTC**: `[Faucet] [copy] [Receive] [Send]` — Faucet links to signetfaucet.com. Receive shows QR popup. Send opens a sweep-all modal.
+- **ALPH**: `[Faucet] [copy] [Receive] [Send]` — Faucet calls the Alephium testnet faucet API. Send sweeps all ALPH minus gas reserve.
+
+The **private key** (nsec) is masked by default (`••••••••`) with a `[show]` toggle to reveal the bech32-encoded nsec. The key row blinks when backup has not been confirmed. The `[Backed Up]` button requires an explicit confirmation dialog before dismissing the warning.
+
+**Send (sweep)** validates destination addresses before broadcasting:
+- BTC: `bitcoin.address.toOutputScript(addr, NETWORK)` — covers tb1p, tb1q, 2-prefix, m/n on testnet/signet
+- ALPH: `groupOfAddress(addr)` — throws on invalid format
+
+The sweep functions (`sweepBtc`, `sweepAlph` in `swap-engine.js`) sign all confirmed UTXOs or transfer the full balance minus gas, using the same tweaked-key signing path as the swap protocol.
