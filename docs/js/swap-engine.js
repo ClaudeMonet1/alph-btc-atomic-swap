@@ -186,7 +186,8 @@ export class SwapEngine {
     const result = { role: this.role };
 
     if (this.role === 'alice') {
-      let tBytes = schnorr.utils.randomSecretKey();
+      let tBytes = new Uint8Array(32);
+      crypto.getRandomValues(tBytes);
       let t = bytesToNum(tBytes);
       let T = G.multiply(t);
       if (!hasEvenY(T)) {
