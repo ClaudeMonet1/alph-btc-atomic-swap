@@ -49,10 +49,9 @@ export async function getUtxos(address) {
 
 export async function selectUtxo(address, minValue) {
   const utxos = await getUtxos(address);
-  const confirmed = utxos.filter(u => u.status?.confirmed !== false);
-  confirmed.sort((a, b) => a.value - b.value);
-  const pick = confirmed.find(u => u.value >= minValue);
-  if (!pick) throw new Error(`No UTXO >= ${minValue} sat for ${address} (have ${confirmed.length} UTXOs)`);
+  utxos.sort((a, b) => a.value - b.value);
+  const pick = utxos.find(u => u.value >= minValue);
+  if (!pick) throw new Error(`No UTXO >= ${minValue} sat for ${address} (have ${utxos.length} UTXOs)`);
   return pick;
 }
 
@@ -292,10 +291,9 @@ export async function extractSignatureFromTx(txid) {
 
 export async function sweepBtc(address, destAddress, senderPubkey, signCallback) {
   const utxos = await getUtxos(address);
-  const confirmed = utxos.filter(u => u.status?.confirmed !== false);
-  if (confirmed.length === 0) throw new Error('No confirmed UTXOs to sweep');
+  if (utxos.length === 0) throw new Error('No UTXOs to sweep');
 
-  const totalInput = confirmed.reduce((sum, u) => sum + u.value, 0);
+  const totalInput = utxos.reduce((sum, u) => sum + u.value, 0);
 
   const p2tr = bitcoin.payments.p2tr({
     internalPubkey: Buffer.from(senderPubkey),
@@ -304,7 +302,7 @@ export async function sweepBtc(address, destAddress, senderPubkey, signCallback)
 
   const psbt = new bitcoin.Psbt({ network: NETWORK });
 
-  for (const utxo of confirmed) {
+  for (const utxo of utxos) {
     psbt.addInput({
       hash: utxo.txid,
       index: utxo.vout,
@@ -317,7 +315,7 @@ export async function sweepBtc(address, destAddress, senderPubkey, signCallback)
   }
 
   // Estimate fee: ~58 vB per input + ~43 vB overhead + ~43 vB output
-  const estVBytes = 43 + confirmed.length * 58 + 43;
+  const estVBytes = 43 + utxos.length * 58 + 43;
   const fee = await estimateFee(estVBytes);
   const sendAmount = totalInput - fee;
   if (sendAmount <= 546) throw new Error(`Balance too low to cover fee (${totalInput} sat, fee ${fee} sat)`);
@@ -326,11 +324,11 @@ export async function sweepBtc(address, destAddress, senderPubkey, signCallback)
 
   // Sign each input
   const tx = psbt.__CACHE.__TX;
-  for (let i = 0; i < confirmed.length; i++) {
+  for (let i = 0; i < utxos.length; i++) {
     const sighash = tx.hashForWitnessV1(
       i,
-      confirmed.map(() => p2tr.output),
-      confirmed.map(u => BigInt(u.value)),
+      utxos.map(() => p2tr.output),
+      utxos.map(u => BigInt(u.value)),
       bitcoin.Transaction.SIGHASH_DEFAULT,
     );
     const sig = signCallback(new Uint8Array(sighash));
