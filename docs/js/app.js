@@ -1723,8 +1723,6 @@ document.getElementById('utxo-select').addEventListener('change', (e) => {
   state.selectedUtxo = e.target.value ? JSON.parse(e.target.value) : null;
 });
 
-document.getElementById('refresh-utxos-btn').addEventListener('click', refreshUtxos);
-
 document.querySelectorAll('#direction-toggle button').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('#direction-toggle button').forEach(b => {
