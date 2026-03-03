@@ -9,6 +9,10 @@ const { PrivateKeyWallet } = alphWallet;
 const ALPH_NODE_URL = 'https://node.testnet.alephium.org';
 web3.setCurrentNodeProvider(ALPH_NODE_URL);
 
+export function ensureNodeProvider() {
+  web3.setCurrentNodeProvider(ALPH_NODE_URL);
+}
+
 // ---- Node API helpers ----
 
 async function nodeApi(path, method = 'GET', body = null) {

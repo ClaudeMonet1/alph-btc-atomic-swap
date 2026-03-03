@@ -23,7 +23,7 @@ import {
 } from './btc.js';
 import {
   compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
-  getBalance, waitForTx, transferAlph,
+  getBalance, waitForTx, transferAlph, ensureNodeProvider,
   web3, ONE_ALPH, PrivateKeyWallet, addressFromPublicKey, groupOfAddress,
 } from './alph.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
@@ -266,6 +266,7 @@ export class SwapEngine {
   // ── Swap: Deploy ALPH (Alice) ──
 
   async deployAlph() {
+    ensureNodeProvider();
     const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr' });
     const compiled = await compileSwapContract();
     this.compiled = compiled;
@@ -297,6 +298,7 @@ export class SwapEngine {
   // ── Swap: Verify ALPH (Bob) ──
 
   async verifyAlph(contractId, contractAddress) {
+    ensureNodeProvider();
     this.contractId = contractId;
     this.contractAddress = contractAddress;
 
@@ -480,6 +482,7 @@ export class SwapEngine {
     if (!schnorr.verify(alphFinalSig, this.ctx.alphMsg, this.ctx.aggPubkey))
       throw new Error('ALPH completed signature invalid');
 
+    ensureNodeProvider();
     const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr' });
     await new Promise(r => setTimeout(r, 2000));
     const alphClaimResult = await claimSwap(wallet, this.contractId, bytesToHex(alphFinalSig), this.compiled, wallet.group);
@@ -491,6 +494,7 @@ export class SwapEngine {
   // ── Swap: Refund ALPH (Alice) ──
 
   async refundAlph() {
+    ensureNodeProvider();
     const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr' });
     const result = await refundSwap(wallet, this.contractId, this.compiled);
     await waitForTx(result.txId);
@@ -510,6 +514,7 @@ export class SwapEngine {
   // ── Sweep: Send all ALPH ──
 
   async sweepAlph(destAddress) {
+    ensureNodeProvider();
     const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr' });
     const bal = await getBalance(this.alphAddress);
     const available = bal.balance - bal.lockedBalance;
