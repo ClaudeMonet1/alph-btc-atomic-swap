@@ -1759,10 +1759,15 @@ document.getElementById('alph-faucet-btn').addEventListener('click', async () =>
   btn.disabled = true; btn.textContent = 'Wait...';
   try {
     const result = await state.engine.requestAlphFaucet();
-    addLogMsg('system', `ALPH faucet: ${result.message}`, 'System');
+    addLogMsg('system', `ALPH faucet: tokens on the way!`, 'System');
     setTimeout(() => refreshBalance(), 5000);
   } catch (e) {
-    addLogMsg('system', `ALPH faucet error: ${e.message}`, 'Error');
+    const msg = e.message || '';
+    if (msg.includes('429') || msg.toLowerCase().includes('throttl') || msg.toLowerCase().includes('rate')) {
+      addLogMsg('system', `ALPH faucet: throttled — you already requested tokens from this IP. Try again later.`, 'System');
+    } else {
+      addLogMsg('system', `ALPH faucet error: ${msg}`, 'Error');
+    }
   }
   btn.disabled = false; btn.textContent = 'Faucet';
 });
