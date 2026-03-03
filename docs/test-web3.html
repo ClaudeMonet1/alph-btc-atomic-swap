@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script type="importmap">
+{
+  "imports": {
+    "@alephium/web3": "https://esm.sh/@alephium/web3@2.0.8",
+    "@alephium/web3-wallet": "https://esm.sh/@alephium/web3-wallet@2.0.8?external=@alephium/web3"
+  }
+}
+</script>
+</head>
+<body>
+<pre id="out"></pre>
+<script type="module">
+const out = document.getElementById('out');
+function log(msg) { out.textContent += msg + '\n'; }
+
+try {
+  const alphWeb3 = await import('@alephium/web3');
+  const defaultExport = alphWeb3.default;
+
+  log('=== alphWeb3 keys (top-level) ===');
+  log(Object.keys(alphWeb3).join(', '));
+
+  log('\n=== default export type: ' + typeof defaultExport);
+  if (defaultExport && typeof defaultExport === 'object') {
+    const keys = Object.keys(defaultExport);
+    log('=== default export keys (' + keys.length + ') ===');
+    log(keys.filter(k => /node|provider|web3/i.test(k)).join(', '));
+    log('\nNodeProvider: ' + typeof defaultExport.NodeProvider);
+    log('web3: ' + typeof defaultExport.web3);
+    if (defaultExport.web3) {
+      log('web3.setCurrentNodeProvider: ' + typeof defaultExport.web3.setCurrentNodeProvider);
+      log('web3.getCurrentNodeProvider: ' + typeof defaultExport.web3.getCurrentNodeProvider);
+    }
+
+    // Try to create a NodeProvider
+    if (typeof defaultExport.NodeProvider === 'function') {
+      const np = new defaultExport.NodeProvider('https://node.testnet.alephium.org');
+      log('\nNodeProvider instance created: ' + typeof np);
+      log('np.contracts: ' + typeof np.contracts);
+    } else {
+      log('\nNodeProvider is NOT a constructor on default export');
+    }
+  }
+
+  // Try web3-wallet
+  const alphWallet = await import('@alephium/web3-wallet');
+  log('\n=== web3-wallet keys ===');
+  log(Object.keys(alphWallet).join(', '));
+  const walletDefault = alphWallet.default;
+  if (walletDefault) {
+    log('wallet default keys: ' + Object.keys(walletDefault).filter(k => /private|wallet/i.test(k)).join(', '));
+  }
+} catch(e) {
+  log('ERROR: ' + e.message + '\n' + e.stack);
+}
+</script>
+</body>
+</html>
