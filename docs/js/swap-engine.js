@@ -468,7 +468,17 @@ export class SwapEngine {
   // ── Swap: Claim ALPH (Bob) ──
 
   async claimAlph(btcClaimTxid) {
-    const onChainSig = await extractSignatureFromTx(btcClaimTxid);
+    // Retry extractSignatureFromTx — tx may still be propagating to Esplora mempool
+    let onChainSig;
+    for (let i = 0; i < 15; i++) {
+      try {
+        onChainSig = await extractSignatureFromTx(btcClaimTxid);
+        break;
+      } catch (e) {
+        if (i === 14) throw new Error(`Cannot fetch BTC claim tx after 15 attempts: ${e.message}`);
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
     const extractedTBytes = adaptorExtract(
       onChainSig.slice(32, 64), this.btcTweakedAgg.s, this.btcTweakedAgg.negR,
     );
@@ -480,7 +490,6 @@ export class SwapEngine {
     if (!schnorr.verify(alphFinalSig, this.ctx.alphMsg, this.ctx.aggPubkey))
       throw new Error('ALPH completed signature invalid');
 
-    await new Promise(r => setTimeout(r, 2000));
     const alphClaimResult = await claimSwap(this.pubKeyHex, this.secBytes, this.contractId, bytesToHex(alphFinalSig), this.compiled);
     await waitForTx(alphClaimResult.txId);
 

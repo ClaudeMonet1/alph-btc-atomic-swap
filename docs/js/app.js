@@ -1372,7 +1372,7 @@ function stopTimeoutMonitor() {
 }
 
 function stopBtcClaimPoller() {
-  if (btcClaimPollerInterval) { clearInterval(btcClaimPollerInterval); btcClaimPollerInterval = null; }
+  if (btcClaimPollerInterval) { clearTimeout(btcClaimPollerInterval); btcClaimPollerInterval = null; }
 }
 
 function renderSwapInfo(activeSwap) {
@@ -1549,19 +1549,41 @@ async function findBtcClaimTx() {
   return null;
 }
 
+function onBtcClaimDetected(txid) {
+  if (state.engine.btcClaimTxid) return; // already handled
+  stopBtcClaimPoller();
+  state.engine.btcClaimTxid = txid;
+  saveSwapState();
+  addLogMsg('claim', `Detected BTC claim: ${txid.slice(0, 24)}...`, 'System');
+  renderRecoveryActions('btc_claimed');
+}
+
 function pollForBtcClaim() {
   stopBtcClaimPoller();
-  addLogMsg('system', 'Polling for BTC claim transaction (every 15s)...', 'System');
-  btcClaimPollerInterval = setInterval(async () => {
+  addLogMsg('system', 'Watching for BTC claim (Esplora polling + Nostr)...', 'System');
+
+  // Fast path: listen for Nostr btc_claimed event from peer
+  if (state.activeSwap) {
+    const { sessionId, peerPubHex } = state.activeSwap;
+    waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
+      (e) => { try { return JSON.parse(e.content).type === 'btc_claimed'; } catch { return false; } },
+      3600000, // 1h timeout
+    ).then(event => {
+      const { txid } = JSON.parse(event.content);
+      onBtcClaimDetected(txid);
+    }).catch(() => {}); // timeout or unsubscribed — ignore
+  }
+
+  // Slow path: poll Esplora outspend — 5s for first minute, then 15s
+  let pollCount = 0;
+  const poll = async () => {
     const txid = await findBtcClaimTx();
-    if (txid) {
-      stopBtcClaimPoller();
-      state.engine.btcClaimTxid = txid;
-      saveSwapState();
-      addLogMsg('claim', `Detected BTC claim: ${txid.slice(0, 24)}...`, 'System');
-      renderRecoveryActions('btc_claimed');
-    }
-  }, 15000);
+    if (txid) { onBtcClaimDetected(txid); return; }
+    pollCount++;
+    const nextInterval = pollCount < 12 ? 5000 : 15000;
+    btcClaimPollerInterval = setTimeout(poll, nextInterval);
+  };
+  btcClaimPollerInterval = setTimeout(poll, 3000);
 }
 
 async function resumeSwapFromLocked() {
