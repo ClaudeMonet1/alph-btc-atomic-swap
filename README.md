@@ -28,7 +28,31 @@ When the swap succeeds:
 
 No hash preimages. No multisig. No script paths revealed on Bitcoin. The swap is indistinguishable from normal transactions to a chain observer.
 
-## Quick Start
+## Try It
+
+The static web app runs on GitHub Pages — no server, no install, no extensions. Open two browser tabs, publish an offer in one, accept in the other. The swap auto-executes through all 5 protocol steps.
+
+**Networks**: Bitcoin signet + Alephium testnet. Get signet BTC from a [signet faucet](https://signet.bc-2.jp/) and testnet ALPH from the in-app faucet button.
+
+To self-host:
+
+```bash
+# Any static HTTP server works
+npx serve docs
+# or
+python3 -m http.server -d docs
+```
+
+### How the Web UI Works
+
+1. The app generates a fresh Nostr nsec on load (or you paste your own)
+2. It derives your npub, Bitcoin P2TR address (signet), and Alephium address (testnet) from that single key
+3. You publish swap offers (e.g., "Sell 2 ALPH for 50000 sat") to public Nostr relays
+4. Other users see your offer and can accept it
+5. On accept, both sides auto-execute the 5-step adaptor signature protocol
+6. All signing happens client-side — keys never leave the browser
+
+## Dev Quick Start
 
 Requires [Nix](https://nixos.org/) with flakes enabled.
 
@@ -48,6 +72,12 @@ npm run swap
 # Run the Nostr relay-based swap (3 scenarios via structured events)
 npm run nostr-swap
 
+# Launch the web UI (devnet mode — local chains + Fund/Mine buttons)
+npm run web
+
+# Launch the web UI (testnet mode — signet + ALPH testnet)
+npm run web:testnet
+
 # Stop local chains
 stop-regtest && stop-devnet
 ```
@@ -57,57 +87,13 @@ stop-regtest && stop-devnet
 If a previous run was interrupted or you want a clean slate, reset before running:
 
 ```bash
-# Stop services, wipe chain data + swap state, restart fresh
 stop-regtest; stop-devnet
 npm run reset
 start-regtest && start-devnet
 npm run swap
 ```
 
-`npm run reset` removes `devnet/bitcoin/regtest/`, `devnet/alephium/.alephium/`, and `.swap-state.json`. The test generates fresh keys and mines new blocks each run, so stale chain state from a previous run will cause failures.
-
-### What the Test Does
-
-1. Generates fresh Nostr nsec keys for Alice and Bob
-2. Derives addresses on all three networks from each nsec
-3. Funds both parties (Alice with ALPH, Bob with BTC)
-4. Executes the full atomic swap using only nsec-derived keys
-5. Verifies final balances
-6. Tests ALPH refund path (Alice reclaims after timeout)
-7. Tests BTC refund path (Bob reclaims after CSV timeout)
-
-### Expected Output
-
-```
-=== BTC-ALPH Atomic Swap via Adaptor Signatures ===
-
-[SETUP] Alice npub: npub1ge08m5ep9fa9jk4jxsw68g07mvmh0mway2u6s8k598a6qnhamdxqnxusgh
-[SETUP]       ALPH: pqaknjCEeaBPQ56x1N31G4ueEu51Mxa5CUcd2VPbTFZG (group 3)
-[SETUP]       BTC:  bcrt1pql76lznu5dlm9sm3rg9y9w25sfsnhvjjrmhzs4x2ng4vvc2xkmkspanyxr
-[SETUP] Bob   npub: npub10wfmvdmm29f8ahm7ngkr95pv0z6pw9lsjrlf0nkq79czkxcpvd7q3rv940
-[SETUP]       ALPH: kNus9DiJrtAqqnkB7sTcRepYj4cQebFXK4tspvgsco4o (group 3)
-[SETUP]       BTC:  bcrt1pxr3q46ypknaevu8ms3tsvza8hjdcmnlha7qp3c2xqgx5cfa8stnsd395n2
-[LOCK]  BTC funded from Bob's P2TR: txid=1767a224c1b84482...
-[LOCK]  ALPH contract deployed: 2B5aMK3mvBszS2nWduJGdAnwSGfWh9Rtimd3bNRbxUxDg
-[CLAIM] BTC claimed! txid: 19a40e770406ffcbd9359dd39dc63f8aba488a...
-[CLAIM] Secret t extracted successfully!
-[CLAIM] ALPH claimed! txid: 44fd9b5bb6bac8651d6f260d1188724168cf0c...
-[VERIFY] Alice ALPH: 89.99 ALPH  (started with 100, locked 10)
-[VERIFY] Bob   ALPH: 14.99 ALPH  (started with 5, received 10)
-[VERIFY] Alice BTC:  0.499997 BTC (at nsec-derived P2TR)
-
-=== ALPH Refund Path Test ===
-[REFUND-ALPH] Contract deployed with expired timeout
-[REFUND-ALPH] Alice calls refund()...
-[REFUND-ALPH] Recovered: ~9.99 ALPH (10 minus gas)
-
-=== BTC Refund Path Test ===
-[REFUND-BTC] Swap funded from Bob's P2TR
-[REFUND-BTC] Mining 10 blocks for CSV timeout...
-[REFUND-BTC] Bob builds refund tx (script-path spend)...
-[REFUND-BTC] BTC refunded!
-[REFUND-BTC] Bob received: 0.499997 BTC
-```
+`npm run reset` removes `devnet/bitcoin/regtest/`, `devnet/alephium/.alephium/`, and `.swap-state.json`.
 
 ## Protocol
 
@@ -187,19 +173,48 @@ Contract AtomicSwap(
 
 ## Architecture
 
-| File | Lines | What it does |
-|------|-------|-------------|
-| `src/musig2.js` | 215 | BIP-327 MuSig2: key aggregation, nonce gen, partial sign/verify/agg |
-| `src/adaptor.js` | 132 | Adaptor signatures: sign, verify, aggregate, complete, extract |
-| `src/taproot-utils.js` | 44 | Taproot tweaked keys, adaptor challenge, tweaked private key |
-| `src/btc-swap.js` | 285 | Bitcoin taproot: P2TR output, key-path spend, refund via script-path |
-| `src/alph-swap.js` | 254 | Alephium contract: compile, deploy, claim, refund, verify state + bytecode |
-| `src/atomic-swap.js` | 660 | End-to-end orchestration, state persistence/recovery, refund tests |
-| `src/relay.js` | 98 | Minimal NIP-01 Nostr relay (in-memory, WebSocket) |
-| `src/swap-events.js` | 178 | Structured Nostr event builders (kinds 38390-38393) for protocol phases |
-| `src/nostr-swap.js` | 842 | Nostr relay-based swap: 3 scenarios (happy path, both refund, crash recovery) |
+Two deployment modes share the same crypto core:
 
-No Bitcoin Core wallet is used anywhere in the swap flow. Bob mines to his nsec-derived P2TR and signs the funding transaction with his nsec-tweaked private key. Alice receives BTC at her nsec-derived P2TR. All Bitcoin RPC calls go to the base node URL — no wallet context needed.
+**Static web app** (`docs/`) — runs entirely in the browser via ES modules + import maps. No server, no build step. Testnet only (Bitcoin signet + ALPH testnet).
+
+**Node.js server** (`src/server.js` + `index.html`) — HTTP backend for the web UI. Supports both devnet (local regtest/devnet chains) and testnet.
+
+### Crypto Core
+
+| File | What it does |
+|------|-------------|
+| `src/musig2.js` | BIP-327 MuSig2: key aggregation, nonce gen, partial sign/verify/agg |
+| `src/adaptor.js` | Adaptor signatures: sign, verify, aggregate, complete, extract |
+| `src/taproot-utils.js` | Taproot tweaked keys, adaptor challenge, tweaked private key |
+| `src/btc-swap.js` | Bitcoin taproot: P2TR output, key-path spend, refund via script-path |
+| `src/alph-swap.js` | Alephium contract: compile, deploy, claim, refund, verify state + bytecode |
+
+### Static Web App (`docs/`)
+
+| File | What it does |
+|------|-------------|
+| `docs/index.html` | HTML + CSS + import map + Buffer polyfill bootstrap |
+| `docs/js/app.js` | UI, Nostr messaging, offer management, auto-execution |
+| `docs/js/swap-engine.js` | All swap logic as a client-side class (replaces server.js API) |
+| `docs/js/btc.js` | Bitcoin module (Esplora-only, signet-hardcoded) |
+| `docs/js/alph.js` | Alephium module (testnet-hardcoded) |
+| `docs/js/musig2.js` | BIP-327 MuSig2 (browser-compatible, uses `secp256k1.ProjectivePoint`) |
+| `docs/js/adaptor.js` | Adaptor signatures (browser-compatible) |
+| `docs/js/taproot-utils.js` | Taproot key tweaking (browser-compatible) |
+
+All browser dependencies are loaded from esm.sh via import map — `@noble/curves`, `bitcoinjs-lib`, `@alephium/web3`, `bech32`. The Buffer polyfill is loaded before any modules via top-level `await`.
+
+### CLI Tests
+
+| File | What it does |
+|------|-------------|
+| `src/atomic-swap.js` | End-to-end orchestration, state persistence/recovery, refund tests |
+| `src/nostr-swap.js` | Nostr relay-based swap: 3 scenarios (happy path, both refunds) |
+| `src/relay.js` | Minimal NIP-01 Nostr relay (in-memory, for testing) |
+| `src/swap-events.js` | Structured Nostr event builders (kinds 38390-38393) |
+| `src/wallet.js` | CLI wallet utility |
+
+No Bitcoin Core wallet is used anywhere. Bob signs the funding transaction with his nsec-tweaked private key. Alice receives BTC at her nsec-derived P2TR.
 
 ## Security Properties
 
@@ -228,19 +243,45 @@ On startup, `atomic-swap.js` checks for an existing state file and attempts auto
 
 For production use, Alice and Bob can generate ephemeral per-swap keypairs instead of using their long-term nsec. The MuSig2 protocol only requires the keys for signing — funding can come from any wallet (an exchange, a hardware wallet, etc.), and withdrawal can go to any address.
 
+## Nostr Coordination
+
+Peers discover each other and exchange protocol messages over public Nostr relays. Five event kinds structure the swap lifecycle:
+
+| Kind | Purpose |
+|------|---------|
+| 38389 | Offer lifecycle — publish, counter, accept, cancel |
+| 38390 | Swap setup — role assignment, adaptor point, parameters |
+| 38391 | Nonce exchange — MuSig2 nonce commit/reveal/verify |
+| 38392 | Pre-signatures — adaptor pre-sig exchange and verification |
+| 38393 | Claim notifications — BTC/ALPH claim txids |
+
+All swap messages are encrypted (NIP-44) between the two parties. Offers are public.
+
 ## What's Left for Production
 
 The cryptography and on-chain logic are complete. What remains:
 
-- **Fee estimation**: Dynamic fees for both chains (currently hardcoded for regtest/devnet)
+- **Fee estimation**: Dynamic fees for both chains (currently hardcoded)
 - **Mainnet deployment**: Safety limits, rate limiting, monitoring
+- **Persistent state**: Browser version uses in-memory state only (refresh = lost swap)
 
 ## Dependencies
 
+**Node.js** (server + CLI):
 - `@alephium/web3` + `@alephium/web3-wallet` — Alephium SDK
 - `bitcoinjs-lib` + `tiny-secp256k1` — Bitcoin taproot transactions
 - `nostr-tools` — Nostr key encoding (npub/nsec)
-- `@noble/curves` — secp256k1 primitives (transitive dep, used directly for MuSig2)
+- `@noble/curves` — secp256k1 primitives (used directly for MuSig2)
+- `ws` — WebSocket (Nostr relay communication)
+
+**Browser** (static app, via esm.sh CDN):
+- `@noble/curves@1.8.1` — secp256k1, MuSig2, Schnorr
+- `@noble/hashes@1.7.1` — SHA-256
+- `bitcoinjs-lib@7.0.1` — Bitcoin transaction building
+- `@bitcoinerlab/secp256k1@1.2.0` — ECC library for bitcoinjs-lib (pure JS, replaces WASM-based tiny-secp256k1)
+- `@alephium/web3@2.0.8` + `@alephium/web3-wallet@2.0.8` — Alephium SDK
+- `bech32@2.0.0` — npub encoding
+- `buffer@6.0.3` — Buffer polyfill
 
 ## License
 

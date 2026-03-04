@@ -210,9 +210,25 @@ async function handleApi(req, res, urlPath) {
       return json(res, { token, pubKeyHex, npub, btcAddress, alphAddress, group, network: NETWORK_MODE });
     }
 
+    // ── Testnet: ALPH faucet ──
+    if (urlPath === '/api/faucet-alph' && req.method === 'POST') {
+      if (!isTestnet) return err(res, 'Faucet only available on testnet');
+      const s = getSession(body.token);
+      const faucetRes = await fetch('https://faucet.testnet.alephium.org/send', {
+        method: 'POST',
+        body: s.alphAddress,
+      });
+      if (!faucetRes.ok) {
+        const text = await faucetRes.text();
+        return err(res, `ALPH faucet error: ${faucetRes.status} ${text}`);
+      }
+      const message = await faucetRes.text();
+      return json(res, { message: message.trim(), address: s.alphAddress });
+    }
+
     // ── Devnet: Fund ──
     if (urlPath === '/api/fund' && req.method === 'POST') {
-      if (isTestnet) return err(res, 'Funding not available on testnet. Use faucets: https://signetfaucet.com/ (BTC) and https://faucet.testnet.alephium.org/ (ALPH)');
+      if (isTestnet) return err(res, 'Use the ALPH faucet button instead. BTC signet faucet: https://signetfaucet.com/');
       const s = getSession(body.token);
 
       // Fund ALPH from genesis
@@ -253,13 +269,20 @@ async function handleApi(req, res, urlPath) {
       const token = urlPath.split('/api/balance/')[1];
       const s = getSession(token);
       const alphBal = await getBalance(s.alphAddress);
-      let btcSat = 0;
+      let btcConfirmedSat = 0, btcUnconfirmedSat = 0;
       try {
-        btcSat = await getBtcBalance(s.btcAddress);
+        const utxos = await getUtxos(s.btcAddress);
+        for (const u of utxos) {
+          if (u.status?.confirmed === false) btcUnconfirmedSat += u.value;
+          else btcConfirmedSat += u.value;
+        }
       } catch { /* balance query may fail */ }
+      const btcTotalSat = btcConfirmedSat + btcUnconfirmedSat;
       return json(res, {
         alph: (Number(alphBal.balance) / 1e18).toFixed(4),
-        btc: (btcSat / 1e8).toFixed(8),
+        btc: (btcTotalSat / 1e8).toFixed(8),
+        btcConfirmedSat,
+        btcUnconfirmedSat,
       });
     }
 

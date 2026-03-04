@@ -383,12 +383,13 @@ function updateStep(id, updates) {
 function renderSwapActions() {
   const actionsEl = document.getElementById('swap-actions');
   if (!state.activeSwap) { actionsEl.innerHTML = ''; return; }
+  // Skip if recovery UI is active (it manages its own actions)
+  if (document.getElementById('timeout-display')) return;
 
   let html = '';
-  const hasError = Object.values(state.stepData).some(s => s.status === 'error');
   const lockDone = state.stepData.lock?.status === 'done';
 
-  if (hasError && lockDone) {
+  if (lockDone) {
     if (state.activeSwap.role === 'alice') {
       html += '<button class="danger sm" id="refund-alph-btn">Refund ALPH</button>';
     } else {
@@ -541,7 +542,7 @@ function renderOffersList() {
   });
 
   const activeCount = sorted.filter(o => o.status === 'open' || o.status === 'countered').length;
-  countEl.textContent = `(${activeCount})`;
+  countEl.textContent = activeCount === sorted.length ? `(${sorted.length})` : `(${activeCount} open / ${sorted.length})`;
 
   if (sorted.length === 0) {
     listEl.innerHTML = '<div style="color:#484f58; font-size:12px; text-align:center; padding:24px;">No offers yet. Create one or wait for offers to appear.</div>';
@@ -790,15 +791,7 @@ function startSwapFromAccept(offer, acceptEvent, acceptContent) {
   document.getElementById('swap-placeholder').classList.add('hidden');
   document.getElementById('swap-active').classList.remove('hidden');
 
-  const infoEl = document.getElementById('swap-info');
-  const alphDisplay = formatAlph(alphAmount);
-  infoEl.innerHTML = `
-    <div class="row"><span class="label">Role</span><span class="value">${role === 'alice' ? 'Alice (ALPH seller)' : 'Bob (BTC seller)'}</span></div>
-    <div class="row"><span class="label">Amount</span><span class="value"><span class="alph">${alphDisplay} ALPH</span> &harr; <span class="btc">${formatSat(btcSat)} sat</span></span></div>
-    <div class="row"><span class="label">Peer</span><span class="value" style="font-size:10px">${peerPubHex.slice(0, 16)}...</span></div>
-    <div class="row"><span class="label">Session</span><span class="value" style="font-size:10px">${sessionId.slice(0, 16)}...</span></div>
-  `;
-
+  renderSwapInfo(state.activeSwap);
   renderSteps();
 
   // Show UTXO bar for Bob
@@ -814,7 +807,7 @@ function startSwapFromAccept(offer, acceptEvent, acceptContent) {
   document.getElementById('log-toggle').classList.add('open');
   document.getElementById('log-content').classList.add('open');
 
-  addLogMsg('system', `Swap started as ${role}: ${alphDisplay} ALPH <-> ${formatSat(btcSat)} sat`, 'System');
+  addLogMsg('system', `Swap started as ${role}: ${formatAlph(alphAmount)} ALPH <-> ${formatSat(btcSat)} sat`, 'System');
 
   autoExecuteSwap();
 }
@@ -872,6 +865,7 @@ async function autoExecuteSwap() {
         await executeLockBob();
       }
       updateStep('lock', { status: 'done' });
+      saveSwapState();
     }
 
     updateStep('nonces', { status: 'active' });
@@ -881,6 +875,7 @@ async function autoExecuteSwap() {
     updateStep('presign', { status: 'active' });
     await executePresign();
     updateStep('presign', { status: 'done' });
+    saveSwapState();
 
     updateStep('claim', { status: 'active' });
     if (role === 'alice') {
@@ -910,6 +905,7 @@ async function retryStep(stepId) {
     };
     await stepFns[role][stepId]();
     updateStep(stepId, { status: 'done' });
+    saveSwapState();
 
     const stepOrder = ['setup', 'lock', 'nonces', 'presign', 'claim'];
     const idx = stepOrder.indexOf(stepId);
@@ -919,6 +915,7 @@ async function retryStep(stepId) {
       updateStep(nextStep, { status: 'active' });
       await stepFns[role][nextStep]();
       updateStep(nextStep, { status: 'done' });
+      saveSwapState();
     }
     showSwapComplete();
   } catch (e) {
@@ -992,6 +989,7 @@ async function executeClaimAlice() {
   try {
     const result = await state.engine.claimBtc();
     updateStep('claim', { info: `BTC claimed! txid: ${result.txid.slice(0, 24)}...` });
+    saveSwapState();
 
     const event = await createSwapClaim({
       sessionId, recipientPubHex: peerPubHex, claimType: 'btc_claimed',
@@ -1078,6 +1076,8 @@ async function executeClaimBob() {
       (e) => JSON.parse(e.content).type === 'btc_claimed');
     const btcClaimed = JSON.parse(btcClaimedEvent.content);
 
+    state.engine.btcClaimTxid = btcClaimed.txid;
+    saveSwapState();
     updateStep('claim', { info: `Alice claimed BTC: ${btcClaimed.txid.slice(0, 16)}...\nExtracting secret and claiming ALPH...` });
 
     const result = await state.engine.claimAlph(btcClaimed.txid);
@@ -1239,6 +1239,8 @@ async function refundBtc() {
 // ============================================================
 
 function showSwapComplete() {
+  clearSwapState();
+  stopTimeoutMonitor();
   const { alphAmount, btcSat, role } = state.activeSwap;
   const actionsEl = document.getElementById('swap-actions');
   actionsEl.innerHTML = `
@@ -1255,6 +1257,9 @@ function showSwapComplete() {
 }
 
 function resetSwap() {
+  clearSwapState();
+  stopTimeoutMonitor();
+  stopBtcClaimPoller();
   const unsub = state.subscriptions.get('active_swap');
   if (unsub) unsub();
   swapEventWaiters.forEach(w => clearTimeout(w.timer));
@@ -1281,6 +1286,7 @@ function resetSwap() {
 
 const STORAGE_KEY = 'btc-alph-swap-nsec';
 const BACKUP_CONFIRMED_KEY = 'btc-alph-swap-backup-confirmed';
+const SWAP_STATE_KEY = 'btc-alph-swap-state';
 
 const TARGET_ALPH_GROUP = 1;
 
@@ -1316,6 +1322,342 @@ function nsecEncode(secHex) {
   const secBytes = hexToBytes(secHex);
   const words = bech32.toWords(secBytes);
   return bech32.encode('nsec', words, 90);
+}
+
+// ============================================================
+// State Persistence
+// ============================================================
+
+function saveSwapState() {
+  if (!state.engine || !state.activeSwap) return;
+  const checkpoint = state.engine.getCheckpoint();
+  if (!checkpoint) return;
+  try {
+    const data = {
+      checkpoint,
+      timestamp: Date.now(),
+      engine: state.engine.toJSON(),
+      activeSwap: state.activeSwap,
+      stepData: state.stepData,
+    };
+    localStorage.setItem(SWAP_STATE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.warn('Failed to save swap state:', e);
+  }
+}
+
+function loadSwapState() {
+  try {
+    const raw = localStorage.getItem(SWAP_STATE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function clearSwapState() {
+  localStorage.removeItem(SWAP_STATE_KEY);
+}
+
+// ============================================================
+// Recovery
+// ============================================================
+
+let timeoutMonitorInterval = null;
+let btcClaimPollerInterval = null;
+
+function stopTimeoutMonitor() {
+  if (timeoutMonitorInterval) { clearInterval(timeoutMonitorInterval); timeoutMonitorInterval = null; }
+}
+
+function stopBtcClaimPoller() {
+  if (btcClaimPollerInterval) { clearInterval(btcClaimPollerInterval); btcClaimPollerInterval = null; }
+}
+
+function renderSwapInfo(activeSwap) {
+  const infoEl = document.getElementById('swap-info');
+  const alphDisplay = formatAlph(activeSwap.alphAmount);
+  infoEl.innerHTML = `
+    <div class="row"><span class="label">Role</span><span class="value">${activeSwap.role === 'alice' ? 'Alice (ALPH seller)' : 'Bob (BTC seller)'}</span></div>
+    <div class="row"><span class="label">Amount</span><span class="value"><span class="alph">${alphDisplay} ALPH</span> &harr; <span class="btc">${formatSat(activeSwap.btcSat)} sat</span></span></div>
+    <div class="row"><span class="label">Peer</span><span class="value" style="font-size:10px">${activeSwap.peerPubHex.slice(0, 16)}...</span></div>
+    <div class="row"><span class="label">Session</span><span class="value" style="font-size:10px">${activeSwap.sessionId.slice(0, 16)}...</span></div>
+  `;
+}
+
+async function recoverSwap(saved) {
+  try {
+    state.engine.restoreFromJSON(saved.engine);
+    await state.engine.rehydrate();
+  } catch (e) {
+    addLogMsg('system', `Recovery failed: ${e.message}. Clearing state.`, 'Error');
+    clearSwapState();
+    return;
+  }
+
+  state.activeSwap = saved.activeSwap;
+  state.stepData = saved.stepData || {};
+
+  document.getElementById('swap-placeholder').classList.add('hidden');
+  document.getElementById('swap-active').classList.remove('hidden');
+
+  renderSwapInfo(state.activeSwap);
+  renderSteps();
+
+  // Subscribe to swap events in case peer comes back
+  subscribeToSwap(state.activeSwap.sessionId, state.activeSwap.peerPubHex);
+
+  addLogMsg('system', `Recovered swap from checkpoint: ${saved.checkpoint} (saved ${new Date(saved.timestamp).toLocaleString()})`, 'System');
+
+  showRecoveryUI(saved.checkpoint);
+}
+
+function showRecoveryUI(checkpoint) {
+  renderRecoveryActions(checkpoint);
+  startTimeoutMonitor();
+  if (checkpoint === 'presigned' && state.activeSwap.role === 'bob') {
+    pollForBtcClaim();
+  }
+}
+
+function renderRecoveryActions(checkpoint) {
+  const actionsEl = document.getElementById('swap-actions');
+  const role = state.activeSwap?.role;
+  if (!role) return;
+
+  let html = `<div id="timeout-display" style="width:100%; font-size:11px; color:#8b949e; margin-bottom:8px;"></div>`;
+
+  if (checkpoint === 'locked') {
+    html += `<button class="sm primary" id="recovery-resume-btn">Resume Swap</button> `;
+    if (role === 'alice') {
+      html += `<button class="sm danger" id="recovery-refund-alph-btn" disabled>Refund ALPH</button> `;
+    } else {
+      html += `<button class="sm danger" id="recovery-refund-btc-btn" disabled>Refund BTC</button> `;
+    }
+  } else if (checkpoint === 'presigned') {
+    if (role === 'alice') {
+      html += `<button class="sm primary" id="recovery-claim-btc-btn">Claim BTC Now</button> `;
+      html += `<button class="sm danger" id="recovery-refund-alph-btn" disabled>Refund ALPH</button> `;
+    } else {
+      html += `<span style="color:#d29922; font-size:12px">Watching for Alice's BTC claim...</span> `;
+      html += `<button class="sm danger" id="recovery-refund-btc-btn" disabled>Refund BTC</button> `;
+    }
+  } else if (checkpoint === 'btc_claimed') {
+    if (role === 'alice') {
+      html += `<span style="color:#2ea043; font-size:12px">BTC claimed. Waiting for Bob to claim ALPH.</span> `;
+    } else {
+      html += `<button class="sm primary" id="recovery-claim-alph-btn">Claim ALPH</button> `;
+    }
+  }
+
+  html += `<button class="sm" id="recovery-clear-btn" style="margin-left:auto">Clear State</button>`;
+  actionsEl.innerHTML = html;
+
+  // Bind handlers
+  const resumeBtn = document.getElementById('recovery-resume-btn');
+  if (resumeBtn) resumeBtn.addEventListener('click', resumeSwapFromLocked);
+
+  const claimBtcBtn = document.getElementById('recovery-claim-btc-btn');
+  if (claimBtcBtn) claimBtcBtn.addEventListener('click', recoveryClaimBtc);
+
+  const claimAlphBtn = document.getElementById('recovery-claim-alph-btn');
+  if (claimAlphBtn) claimAlphBtn.addEventListener('click', recoveryClaimAlph);
+
+  const refundAlphBtn = document.getElementById('recovery-refund-alph-btn');
+  if (refundAlphBtn) refundAlphBtn.addEventListener('click', refundAlph);
+
+  const refundBtcBtn = document.getElementById('recovery-refund-btc-btn');
+  if (refundBtcBtn) refundBtcBtn.addEventListener('click', refundBtc);
+
+  const clearBtn = document.getElementById('recovery-clear-btn');
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    if (!confirm('Clear saved swap state?\n\nThis will NOT refund your locked funds. You will need to manually recover them if the swap is incomplete.')) return;
+    clearSwapState();
+    resetSwap();
+  });
+}
+
+async function recoveryClaimBtc() {
+  const btn = document.getElementById('recovery-claim-btc-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Claiming...'; }
+  try {
+    const result = await state.engine.claimBtc();
+    addLogMsg('claim', `BTC claimed! txid: ${result.txid}`, 'You');
+    saveSwapState();
+
+    // Notify Bob via Nostr
+    const { sessionId, peerPubHex } = state.activeSwap;
+    const event = await createSwapClaim({
+      sessionId, recipientPubHex: peerPubHex, claimType: 'btc_claimed',
+      txid: result.txid,
+    });
+    await nostrPublish(event).catch(() => {});
+
+    updateStep('claim', { status: 'done', info: `BTC claimed: ${result.txid.slice(0, 24)}...` });
+    await refreshBalance();
+    renderRecoveryActions('btc_claimed');
+  } catch (e) {
+    addLogMsg('system', `Claim BTC error: ${e.message}`, 'Error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Claim BTC Now'; }
+  }
+}
+
+async function recoveryClaimAlph() {
+  const btn = document.getElementById('recovery-claim-alph-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Claiming...'; }
+  try {
+    let btcClaimTxid = state.engine.btcClaimTxid;
+    if (!btcClaimTxid) {
+      // Try to find it on-chain
+      addLogMsg('system', 'Searching for BTC claim transaction...', 'System');
+      btcClaimTxid = await findBtcClaimTx();
+      if (!btcClaimTxid) throw new Error('BTC claim transaction not found on-chain. Cannot extract adaptor secret.');
+      state.engine.btcClaimTxid = btcClaimTxid;
+      saveSwapState();
+    }
+    addLogMsg('system', `Found BTC claim tx: ${btcClaimTxid.slice(0, 24)}...`, 'System');
+
+    const result = await state.engine.claimAlph(btcClaimTxid);
+    addLogMsg('claim', `ALPH claimed! txid: ${result.txid}`, 'You');
+
+    // Notify Alice via Nostr
+    const { sessionId, peerPubHex } = state.activeSwap;
+    const event = await createSwapClaim({
+      sessionId, recipientPubHex: peerPubHex, claimType: 'alph_claimed',
+      txid: result.txid,
+    });
+    await nostrPublish(event).catch(() => {});
+
+    updateStep('claim', { status: 'done', info: `ALPH claimed: ${result.txid.slice(0, 24)}...` });
+    await refreshBalance();
+    showSwapComplete();
+  } catch (e) {
+    addLogMsg('system', `Claim ALPH error: ${e.message}`, 'Error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Claim ALPH'; }
+  }
+}
+
+async function findBtcClaimTx() {
+  if (!state.engine.btcLockTxid || state.engine.btcLockVout == null) return null;
+  try {
+    const resp = await fetch(`https://mempool.space/signet/api/tx/${state.engine.btcLockTxid}/outspend/${state.engine.btcLockVout}`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data.spent && data.txid) return data.txid;
+  } catch {}
+  return null;
+}
+
+function pollForBtcClaim() {
+  stopBtcClaimPoller();
+  addLogMsg('system', 'Polling for BTC claim transaction (every 15s)...', 'System');
+  btcClaimPollerInterval = setInterval(async () => {
+    const txid = await findBtcClaimTx();
+    if (txid) {
+      stopBtcClaimPoller();
+      state.engine.btcClaimTxid = txid;
+      saveSwapState();
+      addLogMsg('claim', `Detected BTC claim: ${txid.slice(0, 24)}...`, 'System');
+      renderRecoveryActions('btc_claimed');
+    }
+  }, 15000);
+}
+
+async function resumeSwapFromLocked() {
+  const btn = document.getElementById('recovery-resume-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Resuming...'; }
+  addLogMsg('system', 'Resuming swap from locked checkpoint (peer must be online)...', 'System');
+
+  const { role } = state.activeSwap;
+  try {
+    // Context should already be computed from rehydrate, but ensure it
+    if (!state.engine.ctx) state.engine.computeContext();
+
+    updateStep('nonces', { status: 'active' });
+    await executeNonces();
+    updateStep('nonces', { status: 'done' });
+    saveSwapState();
+
+    updateStep('presign', { status: 'active' });
+    await executePresign();
+    updateStep('presign', { status: 'done' });
+    saveSwapState();
+
+    updateStep('claim', { status: 'active' });
+    if (role === 'alice') {
+      await executeClaimAlice();
+    } else {
+      await executeClaimBob();
+    }
+    updateStep('claim', { status: 'done' });
+
+    showSwapComplete();
+  } catch (e) {
+    addLogMsg('system', `Resume error: ${e.message}`, 'Error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Resume Swap'; }
+  }
+}
+
+// ============================================================
+// Timeout Monitoring
+// ============================================================
+
+function startTimeoutMonitor() {
+  stopTimeoutMonitor();
+  updateTimeoutDisplay();
+  timeoutMonitorInterval = setInterval(updateTimeoutDisplay, 10000);
+}
+
+async function updateTimeoutDisplay() {
+  const el = document.getElementById('timeout-display');
+  if (!el || !state.engine) return;
+
+  const lines = [];
+
+  // ALPH timeout (T2)
+  const alphTimeoutMs = state.engine.alphTimeoutMs;
+  if (alphTimeoutMs) {
+    const remaining = alphTimeoutMs - Date.now();
+    if (remaining <= 0) {
+      lines.push('ALPH refund: <span style="color:#2ea043">AVAILABLE NOW</span>');
+      const refundBtn = document.getElementById('recovery-refund-alph-btn');
+      if (refundBtn) refundBtn.disabled = false;
+    } else {
+      const hrs = Math.floor(remaining / 3600000);
+      const mins = Math.floor((remaining % 3600000) / 60000);
+      lines.push(`ALPH refund: ${hrs}h ${mins}m remaining`);
+    }
+  }
+
+  // BTC timeout (T1 = csvTimeout blocks)
+  if (state.engine.btcLockTxid && state.engine.csvTimeout) {
+    try {
+      const txResp = await fetch(`https://mempool.space/signet/api/tx/${state.engine.btcLockTxid}`);
+      if (txResp.ok) {
+        const tx = await txResp.json();
+        if (tx.status?.confirmed && tx.status.block_height) {
+          const tipResp = await fetch('https://mempool.space/signet/api/blocks/tip/height');
+          if (tipResp.ok) {
+            const tipHeight = parseInt(await tipResp.text());
+            const confirmations = tipHeight - tx.status.block_height + 1;
+            const needed = state.engine.csvTimeout;
+            if (confirmations >= needed) {
+              lines.push(`BTC refund: <span style="color:#2ea043">AVAILABLE NOW</span> (${confirmations}/${needed} blocks)`);
+              const refundBtn = document.getElementById('recovery-refund-btc-btn');
+              if (refundBtn) refundBtn.disabled = false;
+            } else {
+              lines.push(`BTC refund: ${confirmations}/${needed} blocks`);
+            }
+          }
+        } else {
+          lines.push('BTC refund: lock tx unconfirmed');
+        }
+      }
+    } catch {}
+  }
+
+  el.innerHTML = lines.join('<br>');
 }
 
 async function autoConnect() {
@@ -1366,6 +1708,13 @@ async function autoConnect() {
     const relayNames = connected.map(r => r.url.replace('wss://', '')).join(', ');
     updateRelayStatus();
     addLogMsg('system', `Connected via ${connected.length} relays: ${relayNames}`, 'System');
+
+    // Check for saved swap state to recover
+    const savedSwap = loadSwapState();
+    if (savedSwap) {
+      addLogMsg('system', 'Found saved swap state, recovering...', 'System');
+      await recoverSwap(savedSwap);
+    }
   } catch (e) {
     statusEl.textContent = '';
     errorMsgEl.textContent = 'Connection failed: ' + e.message;

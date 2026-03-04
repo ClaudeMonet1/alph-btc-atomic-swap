@@ -95,6 +95,7 @@
             bitcoin
             openjdk
             jq
+	    gh
             curl
             start-regtest
             stop-regtest

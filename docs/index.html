@@ -390,8 +390,9 @@
   .step-body button { margin-top: 6px; }
   .swap-actions {
     padding: 12px 16px; border-top: 1px solid #30363d;
-    display: flex; gap: 8px; flex-wrap: wrap;
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
   }
+  #timeout-display { line-height: 1.6; }
   .swap-complete {
     padding: 16px; text-align: center; background: #2ea04311;
     border: 1px solid #2ea04333; border-radius: 6px; margin: 12px 16px;
@@ -400,9 +401,9 @@
 
   /* Responsive */
   @media (max-width: 768px) {
-    .columns { flex-direction: column; }
-    .col-right { width: 100% !important; min-width: unset !important; border-top: 1px solid #30363d; border-left: none; }
-    .col-left { border-right: none; }
+    .columns { flex-direction: column; overflow-y: auto; }
+    .col-left { flex: none; overflow-y: visible; border-right: none; }
+    .col-right { width: 100% !important; min-width: unset !important; flex-shrink: 0; overflow-y: visible; border-top: 1px solid #30363d; border-left: none; }
     .header-row { flex-wrap: wrap; }
     .identity-panel .addr-value { font-size: 10px; }
   }
@@ -557,7 +558,7 @@
 
       <!-- Open Offers List -->
       <div class="offers-section" id="offers-section">
-        <h3>Open Offers <span class="count" id="offers-count">(0)</span></h3>
+        <h3>Offers <span class="count" id="offers-count">(0)</span></h3>
         <div id="offers-list">
           <div style="color:#484f58; font-size:12px; text-align:center; padding:24px;">
             No offers yet. Create one or wait for offers to appear.

@@ -22,6 +22,9 @@
   button.primary:hover { background: #2ea043; }
   button.orange { background: #9e6a03; border-color: #bb8009; }
   button.orange:hover { background: #bb8009; }
+  button.danger { background: #da3633; border-color: #f85149; }
+  button.danger:hover { background: #f85149; }
+  button.sm { padding: 3px 8px; font-size: 11px; }
   input, select {
     font-family: inherit; font-size: 12px; padding: 6px 10px;
     background: #0d1117; color: #e6edf3; border: 1px solid #30363d;
@@ -37,10 +40,6 @@
   }
   #connect-screen h1 { font-size: 20px; margin-bottom: 4px; }
   #connect-screen .subtitle { color: #8b949e; margin-bottom: 24px; font-size: 12px; }
-  #connect-screen label { display: block; color: #8b949e; margin-bottom: 4px; font-size: 11px; }
-  #connect-screen input { width: 100%; margin-bottom: 16px; }
-  #connect-screen .actions { display: flex; gap: 8px; margin-top: 8px; }
-  #connect-screen .actions button { flex: 1; }
 
   /* Main screen */
   #main-screen { display: none; height: 100vh; flex-direction: column; }
@@ -53,103 +52,187 @@
     overflow: hidden;
   }
   .topbar .title { font-weight: 700; font-size: 14px; white-space: nowrap; }
-  .topbar .btc { color: #f7931a; }
-  .topbar .alph { color: #00d4aa; }
   .topbar .info { color: #8b949e; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .topbar .info span { margin-right: 12px; }
   .topbar .balance-area { margin-left: auto; display: flex; gap: 12px; align-items: center; font-size: 11px; }
-  .topbar .balance-area .btc-bal { color: #f7931a; }
-  .topbar .balance-area .alph-bal { color: #00d4aa; }
-
-  /* Two-column layout */
-  .columns { display: flex; flex: 1; overflow: hidden; }
-
-  /* Left: Chat/events */
-  .col-left {
-    flex: 1; display: flex; flex-direction: column; border-right: 1px solid #30363d;
-    min-width: 0;
-  }
-  .tab-bar {
-    display: flex; gap: 0; border-bottom: 1px solid #30363d; flex-shrink: 0;
-    background: #161b22;
-  }
-  .tab-bar button {
-    border: none; border-radius: 0; padding: 8px 16px; font-size: 11px;
-    background: transparent; color: #8b949e; border-bottom: 2px solid transparent;
-  }
-  .tab-bar button.active { color: #e6edf3; border-bottom-color: #58a6ff; }
-  .tab-bar button:hover { color: #e6edf3; background: transparent; }
-
-  .messages {
-    flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 6px;
-  }
-  .msg {
-    padding: 6px 10px; border-radius: 4px; background: #161b22;
-    border-left: 3px solid #30363d; font-size: 12px; word-break: break-all;
-  }
-  .msg.chat { border-left-color: #58a6ff; }
-  .msg.setup { border-left-color: #1f6feb; }
-  .msg.nonce { border-left-color: #8957e5; }
-  .msg.presig { border-left-color: #d29922; }
-  .msg.claim { border-left-color: #2ea043; }
-  .msg .tag {
-    display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 5px;
-    border-radius: 3px; margin-right: 6px; text-transform: uppercase;
-  }
-  .msg.chat .tag { background: #1f6feb33; color: #58a6ff; }
-  .msg.setup .tag { background: #1f6feb33; color: #1f6feb; }
-  .msg.nonce .tag { background: #8957e533; color: #8957e5; }
-  .msg.presig .tag { background: #d2992233; color: #d29922; }
-  .msg.claim .tag { background: #2ea04333; color: #2ea043; }
-  .msg .author { color: #8b949e; font-size: 11px; }
-  .msg .body { margin-top: 2px; }
-  .msg .hex { color: #8b949e; font-size: 11px; }
-
-  .chat-input {
-    display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid #30363d;
-    background: #161b22; flex-shrink: 0;
-  }
-  .chat-input input { flex: 1; }
-
-  /* Right: Swap control */
-  .col-right {
-    width: 380px; min-width: 380px; display: flex; flex-direction: column;
-    overflow-y: auto; background: #0d1117;
-  }
-  .swap-header {
-    padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
-    flex-shrink: 0;
-  }
-  .swap-header h2 { font-size: 14px; margin-bottom: 8px; }
-  .swap-config { display: flex; flex-direction: column; gap: 8px; }
-  .swap-config .row { display: flex; gap: 8px; align-items: center; }
-  .swap-config label { font-size: 11px; color: #8b949e; width: 48px; flex-shrink: 0; }
-  .swap-config input, .swap-config select { flex: 1; }
-  .swap-config .small-input { width: 80px; flex: none; }
-
-  .devnet-bar {
-    display: flex; gap: 8px; padding: 10px 16px; border-bottom: 1px solid #30363d;
-    background: #161b22; flex-shrink: 0; flex-wrap: wrap; align-items: center;
-  }
-  .faucet-links { font-size: 11px; display: flex; gap: 12px; padding: 2px 0; }
-  .faucet-links a { color: #58a6ff; text-decoration: none; }
-  .faucet-links a:hover { text-decoration: underline; }
-  .utxo-bar {
-    display: flex; gap: 8px; padding: 6px 16px; border-bottom: 1px solid #30363d;
-    background: #161b22; flex-shrink: 0; align-items: center; font-size: 11px;
-  }
-  .utxo-bar select { flex: 1; font-size: 11px; }
-  .copy-btn {
-    padding: 2px 6px; font-size: 10px; cursor: pointer;
-    background: transparent; border: 1px solid #30363d; color: #8b949e; border-radius: 3px;
-  }
-  .copy-btn:hover { color: #e6edf3; border-color: #58a6ff; background: transparent; }
+  .topbar .balance-area .btc-bal { color: #f7931a; transition: color 0.3s; }
+  .topbar .balance-area .alph-bal { color: #00d4aa; transition: color 0.3s; }
+  @keyframes pulse-pending { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+  .topbar .balance-area .btc-bal.pending { color: #ffd33d; animation: pulse-pending 2s ease-in-out infinite; }
+  .topbar .balance-area .alph-bal.pending { color: #7ee787; animation: pulse-pending 2s ease-in-out infinite; }
   .network-badge {
     font-size: 10px; padding: 2px 6px; border-radius: 3px;
     font-weight: 700; text-transform: uppercase;
   }
   .network-badge.testnet { background: #9e6a0333; color: #bb8009; }
   .network-badge.devnet { background: #1f6feb33; color: #58a6ff; }
+  .copy-btn {
+    padding: 2px 6px; font-size: 10px; cursor: pointer;
+    background: transparent; border: 1px solid #30363d; color: #8b949e; border-radius: 3px;
+  }
+  .copy-btn:hover { color: #e6edf3; border-color: #58a6ff; background: transparent; }
+
+  /* Two-column layout */
+  .columns { display: flex; flex: 1; overflow: hidden; }
+
+  /* Left: Main content */
+  .col-left {
+    flex: 1; display: flex; flex-direction: column; border-right: 1px solid #30363d;
+    min-width: 0; overflow-y: auto;
+  }
+
+  /* Offer form */
+  .offer-form {
+    padding: 16px; background: #161b22; border-bottom: 1px solid #30363d;
+  }
+  .offer-form h3 { font-size: 13px; margin-bottom: 10px; }
+  .offer-form .form-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .offer-form label { font-size: 11px; color: #8b949e; width: 50px; flex-shrink: 0; }
+  .offer-form input { width: 120px; }
+  .offer-form .rate-display { font-size: 11px; color: #8b949e; margin-bottom: 8px; }
+  .offer-form .form-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .direction-toggle {
+    display: flex; border: 1px solid #30363d; border-radius: 4px; overflow: hidden;
+  }
+  .direction-toggle button {
+    border: none; border-radius: 0; padding: 6px 12px; font-size: 11px;
+    background: transparent; color: #8b949e;
+  }
+  .direction-toggle button.active { background: #21262d; color: #e6edf3; }
+  .direction-toggle button.active.sell { color: #f7931a; }
+  .direction-toggle button.active.buy { color: #00d4aa; }
+
+  /* Offers list */
+  .offers-section {
+    padding: 12px 16px; flex: 1;
+  }
+  .offers-section h3 { font-size: 13px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .offers-section h3 .count { font-size: 11px; color: #8b949e; font-weight: 400; }
+  .offer-card {
+    border: 1px solid #30363d; border-radius: 6px; background: #161b22;
+    margin-bottom: 8px; overflow: hidden;
+  }
+  .offer-card.sell { border-left: 3px solid #f7931a; }
+  .offer-card.buy { border-left: 3px solid #00d4aa; }
+  .offer-card.mine { border-left: 3px solid #58a6ff; }
+  .offer-card.cancelled { opacity: 0.4; }
+  .offer-card.accepted { border-left-color: #2ea043; }
+  .offer-card .card-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; font-size: 12px;
+  }
+  .offer-card .card-header .dir-badge {
+    font-size: 10px; font-weight: 700; padding: 1px 6px;
+    border-radius: 3px; text-transform: uppercase; margin-right: 6px;
+  }
+  .offer-card .dir-badge.sell { background: #f7931a22; color: #f7931a; }
+  .offer-card .dir-badge.buy { background: #00d4aa22; color: #00d4aa; }
+  .offer-card .card-header .amount {
+    font-weight: 600;
+  }
+  .offer-card .card-header .amount .btc { color: #f7931a; }
+  .offer-card .card-header .amount .alph { color: #00d4aa; }
+  .offer-card .card-body {
+    padding: 4px 12px 8px; font-size: 11px; color: #8b949e;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .offer-card .card-body .peer { overflow: hidden; text-overflow: ellipsis; }
+  .offer-card .card-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .offer-card .status-badge {
+    font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600;
+  }
+  .status-badge.accepted { background: #2ea04333; color: #2ea043; }
+  .status-badge.cancelled { background: #f8514933; color: #f85149; }
+  .status-badge.expired { background: #8b949e33; color: #8b949e; }
+
+  /* Counter form (inline) */
+  .counter-form {
+    padding: 8px 12px; border-top: 1px solid #30363d; background: #0d1117;
+    display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+  }
+  .counter-form input { width: 100px; }
+  .counter-form label { font-size: 10px; color: #8b949e; }
+
+  /* Counters list */
+  .counters-list {
+    padding: 4px 12px 8px; border-top: 1px solid #21262d;
+  }
+  .counter-item {
+    font-size: 11px; padding: 4px 0; display: flex; align-items: center;
+    justify-content: space-between; gap: 8px;
+    border-bottom: 1px solid #21262d;
+  }
+  .counter-item:last-child { border-bottom: none; }
+  .counter-item .counter-info { color: #8b949e; }
+  .counter-item .counter-amounts { color: #e6edf3; }
+
+  /* Collapsible protocol log */
+  .log-section {
+    border-top: 1px solid #30363d; flex-shrink: 0;
+  }
+  .log-toggle {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px; cursor: pointer; background: #161b22;
+    border: none; width: 100%; font-size: 12px; color: #8b949e;
+    border-radius: 0;
+  }
+  .log-toggle:hover { background: #1c2129; color: #e6edf3; }
+  .log-toggle .arrow { transition: transform 0.2s; }
+  .log-toggle.open .arrow { transform: rotate(90deg); }
+  .log-content { display: none; max-height: 250px; overflow-y: auto; }
+  .log-content.open { display: block; }
+  .log-filter-bar {
+    display: flex; gap: 0; border-bottom: 1px solid #30363d;
+    background: #0d1117; flex-shrink: 0;
+  }
+  .log-filter-bar button {
+    border: none; border-radius: 0; padding: 4px 12px; font-size: 10px;
+    background: transparent; color: #8b949e; border-bottom: 2px solid transparent;
+  }
+  .log-filter-bar button.active { color: #e6edf3; border-bottom-color: #58a6ff; }
+  .log-filter-bar button:hover { color: #e6edf3; background: transparent; }
+  .log-messages { padding: 8px 16px; display: flex; flex-direction: column; gap: 4px; }
+  .msg {
+    padding: 4px 8px; border-radius: 3px; background: #0d1117;
+    border-left: 3px solid #30363d; font-size: 11px; word-break: break-all;
+  }
+  .msg.system { border-left-color: #8b949e; }
+  .msg.setup { border-left-color: #1f6feb; }
+  .msg.nonce { border-left-color: #8957e5; }
+  .msg.presig { border-left-color: #d29922; }
+  .msg.claim { border-left-color: #2ea043; }
+  .msg .tag {
+    display: inline-block; font-size: 9px; font-weight: 700; padding: 0px 4px;
+    border-radius: 2px; margin-right: 4px; text-transform: uppercase;
+  }
+  .msg.system .tag { background: #8b949e33; color: #8b949e; }
+  .msg.setup .tag { background: #1f6feb33; color: #1f6feb; }
+  .msg.nonce .tag { background: #8957e533; color: #8957e5; }
+  .msg.presig .tag { background: #d2992233; color: #d29922; }
+  .msg.claim .tag { background: #2ea04333; color: #2ea043; }
+
+  /* Right: Swap panel */
+  .col-right {
+    width: 380px; min-width: 380px; display: flex; flex-direction: column;
+    overflow-y: auto; background: #0d1117;
+  }
+  .swap-panel-header {
+    padding: 12px 16px; background: #161b22; border-bottom: 1px solid #30363d;
+    flex-shrink: 0;
+  }
+  .swap-panel-header h2 { font-size: 14px; }
+  .swap-placeholder {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    color: #484f58; font-size: 12px; text-align: center; padding: 24px;
+  }
+  .swap-info {
+    padding: 12px 16px; border-bottom: 1px solid #30363d; font-size: 12px;
+  }
+  .swap-info .row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .swap-info .row .label { color: #8b949e; }
+  .swap-info .row .value { font-weight: 600; }
+  .swap-info .row .btc { color: #f7931a; }
+  .swap-info .row .alph { color: #00d4aa; }
 
   .steps { padding: 8px 16px; display: flex; flex-direction: column; gap: 6px; }
   .step {
@@ -171,6 +254,22 @@
   }
   .step-body .data { word-break: break-all; margin-top: 4px; }
   .step-body button { margin-top: 6px; }
+  .swap-actions {
+    padding: 12px 16px; border-top: 1px solid #30363d;
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .swap-complete {
+    padding: 16px; text-align: center; background: #2ea04311;
+    border: 1px solid #2ea04333; border-radius: 6px; margin: 12px 16px;
+  }
+  .swap-complete h3 { color: #2ea043; font-size: 14px; margin-bottom: 4px; }
+
+  /* Key info bar */
+  .key-info-bar {
+    padding: 6px 16px; background: #161b22; border-bottom: 1px solid #30363d;
+    font-size: 11px; color: #8b949e; display: none; gap: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .key-info-bar.visible { display: flex; }
 
   /* Scrollbar */
   ::-webkit-scrollbar { width: 6px; }
@@ -185,7 +284,7 @@
 
 <!-- ===== Loading Screen ===== -->
 <div id="connect-screen">
-  <h1><span class="btc" style="color:#f7931a">BTC</span> <span style="color:#8b949e">&harr;</span> <span class="alph" style="color:#00d4aa">ALPH</span> Swap</h1>
+  <h1><span style="color:#f7931a">BTC</span> <span style="color:#8b949e">&harr;</span> <span style="color:#00d4aa">ALPH</span> Swap</h1>
   <div class="subtitle">Atomic swap via MuSig2 adaptor signatures over Nostr</div>
   <div id="connect-status" style="color:#8b949e; margin-top:16px; font-size:12px">Loading modules...</div>
   <div id="connect-error" class="hidden" style="margin-top:16px">
@@ -213,7 +312,7 @@
       <span id="relay-status" style="font-size:10px; color:#8b949e" title="Connected Nostr relays"></span>
     </div>
   </div>
-  <div id="key-info-bar" class="hidden" style="padding:6px 16px; background:#161b22; border-bottom:1px solid #30363d; font-size:11px; color:#8b949e; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+  <div id="key-info-bar" class="key-info-bar">
     <span>nsec:</span>
     <code id="key-info-nsec" style="color:#e6edf3; word-break:break-all; flex:1; min-width:200px; user-select:all"></code>
     <button class="copy-btn" data-copy="nsec" title="Copy nsec" style="flex-shrink:0">copy</button>
@@ -221,63 +320,80 @@
   </div>
 
   <div class="columns">
-    <!-- Left: Messages -->
+    <!-- Left: Offers + Log -->
     <div class="col-left">
-      <div class="tab-bar">
-        <button class="active" data-filter="all">All</button>
-        <button data-filter="chat">Chat</button>
-        <button data-filter="protocol">Protocol</button>
+      <!-- Create Offer Form -->
+      <div class="offer-form" id="offer-form">
+        <h3>Create Offer</h3>
+        <div class="form-row">
+          <label>Type</label>
+          <div class="direction-toggle" id="direction-toggle">
+            <button class="active sell" data-dir="sell_alph">Sell ALPH</button>
+            <button data-dir="buy_alph">Buy ALPH</button>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>ALPH</label>
+          <input type="text" id="offer-alph" value="10" placeholder="ALPH amount">
+          <label style="width:auto; margin-left:8px">BTC sat</label>
+          <input type="text" id="offer-btc-sat" value="50000" placeholder="satoshis">
+        </div>
+        <div class="rate-display" id="rate-display">Rate: 200,000 ALPH/BTC</div>
+        <div class="form-actions">
+          <button id="fund-btn" class="orange devnet-only">Fund</button>
+          <button id="mine-btn" class="devnet-only">Mine</button>
+          <button id="alph-faucet-btn" class="orange testnet-only hidden">Get ALPH</button>
+          <span id="faucet-links" class="testnet-only hidden" style="font-size:11px"><a href="https://signetfaucet.com/" target="_blank">BTC Faucet</a></span>
+          <button id="refresh-utxos-btn" class="testnet-only hidden" style="font-size:10px; padding:4px 8px">UTXOs</button>
+          <button id="publish-offer-btn" class="primary">Publish Offer</button>
+        </div>
       </div>
-      <div class="messages" id="messages"></div>
-      <div class="chat-input">
-        <input type="text" id="chat-msg" placeholder="Send a message..." autocomplete="off">
-        <button id="send-chat-btn">Send</button>
+
+      <!-- UTXO bar (testnet Bob) -->
+      <div class="hidden" id="utxo-bar" style="display:flex; gap:8px; padding:6px 16px; border-bottom:1px solid #30363d; background:#161b22; align-items:center; font-size:11px;">
+        <span style="color:#8b949e">UTXO:</span>
+        <select id="utxo-select" style="flex:1; font-size:11px"><option value="">Auto-select best UTXO</option></select>
+      </div>
+
+      <!-- Open Offers List -->
+      <div class="offers-section" id="offers-section">
+        <h3>Open Offers <span class="count" id="offers-count">(0)</span></h3>
+        <div id="offers-list">
+          <div style="color:#484f58; font-size:12px; text-align:center; padding:24px;">
+            No offers yet. Create one or wait for offers to appear.
+          </div>
+        </div>
+      </div>
+
+      <!-- Collapsible Protocol Log -->
+      <div class="log-section" id="log-section">
+        <button class="log-toggle" id="log-toggle">
+          <span>Protocol Log</span>
+          <span class="arrow">&#9654;</span>
+        </button>
+        <div class="log-content" id="log-content">
+          <div class="log-filter-bar">
+            <button class="active" data-filter="all">All</button>
+            <button data-filter="protocol">Protocol</button>
+            <button data-filter="system">System</button>
+          </div>
+          <div class="log-messages" id="log-messages"></div>
+        </div>
       </div>
     </div>
 
-    <!-- Right: Swap -->
+    <!-- Right: Active Swap Panel -->
     <div class="col-right">
-      <div class="swap-header">
-        <h2>Swap Configuration</h2>
-        <div class="swap-config">
-          <div class="row">
-            <label>Role</label>
-            <select id="role-select">
-              <option value="alice">Alice (has ALPH, wants BTC)</option>
-              <option value="bob">Bob (has BTC, wants ALPH)</option>
-            </select>
-          </div>
-          <div class="row">
-            <label>Peer</label>
-            <input type="text" id="peer-input" placeholder="Peer's pubkey hex">
-          </div>
-          <div class="row">
-            <label>BTC</label>
-            <input type="text" id="btc-amount" value="0.5" class="small-input">
-            <label>ALPH</label>
-            <input type="text" id="alph-amount" value="10" class="small-input">
-          </div>
-        </div>
+      <div class="swap-panel-header">
+        <h2>Active Swap</h2>
       </div>
-
-      <div class="devnet-bar" id="devnet-bar">
-        <button id="fund-btn" class="orange devnet-only">Fund Wallet</button>
-        <button id="mine-btn" class="devnet-only">Mine 1 Block</button>
-        <div id="faucet-links" class="faucet-links hidden">
-          <a href="https://signetfaucet.com/" target="_blank">Signet BTC Faucet</a>
-          <a href="https://faucet.testnet.alephium.org/" target="_blank">ALPH Testnet Faucet</a>
-        </div>
-        <button id="refresh-utxos-btn" class="testnet-only hidden" style="font-size:10px; padding:4px 8px">Refresh UTXOs</button>
-        <button id="start-swap-btn" class="primary">Start Swap</button>
+      <div id="swap-placeholder" class="swap-placeholder">
+        No active swap.<br>Publish or accept an offer to start.
       </div>
-
-      <div class="utxo-bar hidden" id="utxo-bar">
-        <span style="color:#8b949e">UTXO:</span>
-        <select id="utxo-select"><option value="">Loading...</option></select>
-      </div>
-
-      <div class="steps" id="steps">
-        <!-- Steps are rendered by JS -->
+      <div id="swap-active" class="hidden">
+        <div class="swap-info" id="swap-info"></div>
+        <div class="steps" id="steps"></div>
+        <div class="swap-actions" id="swap-actions"></div>
       </div>
     </div>
   </div>
@@ -303,6 +419,7 @@ import { bytesToHex, hexToBytes } from 'https://esm.sh/@noble/hashes@1.7.1/utils
 // ============================================================
 
 const state = {
+  // Identity
   token: null,
   secBytes: null,
   pubKeyHex: null,
@@ -310,15 +427,19 @@ const state = {
   btcAddress: null,
   alphAddress: null,
   network: 'devnet',
-  role: null,
-  peerPubHex: null,
-  sessionId: null,
-  relays: [],       // [{ws, url, ready}]
-  seenEvents: new Set(), // dedup event IDs across relays
+  // Relays
+  relays: [],
+  seenEvents: new Set(),
   subscriptions: new Map(),
-  msgFilter: 'all',
+  // Offers
+  offers: new Map(),       // offerId -> offer object
+  myOffers: new Set(),     // offerIds I created
+  // Active swap
+  activeSwap: null,        // { offerId, role, peerPubHex, sessionId, alphAmount, btcSat }
+  // Swap execution
   stepData: {},
   selectedUtxo: null,
+  logFilter: 'all',
 };
 
 // ============================================================
@@ -368,7 +489,6 @@ async function signEvent(template) {
   return event;
 }
 
-// Publish to all connected relays, resolve when at least one accepts
 function nostrPublish(event) {
   return new Promise((resolve, reject) => {
     let resolved = false;
@@ -397,7 +517,6 @@ function nostrPublish(event) {
   });
 }
 
-// Subscribe on all relays with dedup
 function subscribe(subId, filters, onEvent) {
   const handlers = [];
   for (const relay of state.relays) {
@@ -407,7 +526,7 @@ function subscribe(subId, filters, onEvent) {
         const msg = JSON.parse(e.data);
         if (msg[0] === 'EVENT' && msg[1] === subId) {
           const event = msg[2];
-          if (state.seenEvents.has(event.id)) return; // dedup
+          if (state.seenEvents.has(event.id)) return;
           state.seenEvents.add(event.id);
           onEvent(event);
         }
@@ -427,21 +546,17 @@ function subscribe(subId, filters, onEvent) {
   return unsub;
 }
 
+// Pending waiters resolved by the active_swap subscription handler
+const swapEventWaiters = [];
+
 function waitForSwapEvent(kind, sessionId, fromPub, predicate = null, timeoutMs = state.network === 'testnet' ? 600000 : 120000) {
   return new Promise((resolve, reject) => {
-    const subId = 'sw_' + Math.random().toString(36).slice(2, 10);
-    const timeout = setTimeout(() => {
-      unsub();
+    const timer = setTimeout(() => {
+      const idx = swapEventWaiters.findIndex(w => w.resolve === resolve);
+      if (idx >= 0) swapEventWaiters.splice(idx, 1);
       reject(new Error(`timeout waiting for kind ${kind}`));
     }, timeoutMs);
-    const unsub = subscribe(subId,
-      [{ kinds: [kind], '#e': [sessionId], authors: [fromPub] }],
-      (event) => {
-        if (predicate && !predicate(event)) return;
-        unsub();
-        clearTimeout(timeout);
-        resolve(event);
-      });
+    swapEventWaiters.push({ kind, fromPub, predicate, resolve, timer });
   });
 }
 
@@ -449,19 +564,77 @@ function waitForSwapEvent(kind, sessionId, fromPub, predicate = null, timeoutMs 
 // Event Kinds & Builders
 // ============================================================
 
-const SWAP_SETUP_KIND  = 38390;
-const SWAP_NONCE_KIND  = 38391;
+const SWAP_OFFER_KIND = 38389;
+const SWAP_SETUP_KIND = 38390;
+const SWAP_NONCE_KIND = 38391;
 const SWAP_PRESIG_KIND = 38392;
-const SWAP_CLAIM_KIND  = 38393;
+const SWAP_CLAIM_KIND = 38393;
 
-async function createChatEvent(content) {
+function generateUUID() {
+  return crypto.randomUUID ? crypto.randomUUID() : bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+}
+
+// --- Offer events (kind 38389) ---
+
+async function createOfferEvent({ offerId, direction, alphAmount, btcSat, expiresAt }) {
   return signEvent({
-    kind: 1,
+    kind: SWAP_OFFER_KIND,
     created_at: Math.floor(Date.now() / 1000),
-    tags: state.sessionId ? [['e', state.sessionId], ['t', 'atomicswap']] : [['t', 'atomicswap']],
-    content,
+    tags: [['t', 'atomicswap'], ['t', 'offer'], ['d', offerId]],
+    content: JSON.stringify({
+      action: 'offer',
+      offerId,
+      direction,
+      alphAmount: String(alphAmount),
+      btcSat,
+      network: state.network,
+      expiresAt,
+    }),
   });
 }
+
+async function createCounterEvent({ offerId, offerEventId, offerCreator, index, alphAmount, btcSat, message }) {
+  return signEvent({
+    kind: SWAP_OFFER_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['t', 'atomicswap'], ['t', 'counter'], ['e', offerEventId], ['p', offerCreator], ['d', `${offerId}:counter:${index}`]],
+    content: JSON.stringify({
+      action: 'counter',
+      offerId,
+      alphAmount: String(alphAmount),
+      btcSat,
+      message: message || '',
+    }),
+  });
+}
+
+async function createAcceptEvent({ offerId, offerEventId, offerCreator, alphAmount, btcSat }) {
+  return signEvent({
+    kind: SWAP_OFFER_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['t', 'atomicswap'], ['t', 'accept'], ['e', offerEventId], ['p', offerCreator], ['d', `${offerId}:accept`]],
+    content: JSON.stringify({
+      action: 'accept',
+      offerId,
+      alphAmount: String(alphAmount),
+      btcSat,
+    }),
+  });
+}
+
+async function createCancelEvent({ offerId, offerEventId }) {
+  return signEvent({
+    kind: SWAP_OFFER_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['t', 'atomicswap'], ['t', 'cancel'], ['e', offerEventId], ['d', `${offerId}:cancel`]],
+    content: JSON.stringify({
+      action: 'cancel',
+      offerId,
+    }),
+  });
+}
+
+// --- Protocol events (kinds 38390-38393) ---
 
 async function createSwapSetup({ sessionId, recipientPubHex, msgType, ...data }) {
   return signEvent({
@@ -528,25 +701,25 @@ async function apiPost(path, body) {
 }
 
 // ============================================================
-// UI: Messages
+// UI: Protocol Log
 // ============================================================
 
-const messagesEl = document.getElementById('messages');
+const logMessagesEl = document.getElementById('log-messages');
 
-function addMessage(type, content, author = null) {
+function addLogMsg(type, content, author = null) {
   const div = document.createElement('div');
   div.className = `msg ${type}`;
-  div.dataset.type = type === 'chat' ? 'chat' : 'protocol';
+  div.dataset.type = type === 'system' ? 'system' : 'protocol';
 
-  const tagNames = { chat: 'CHAT', setup: 'SETUP', nonce: 'NONCE', presig: 'PRESIG', claim: 'CLAIM' };
+  const tagNames = { system: 'SYS', setup: 'SETUP', nonce: 'NONCE', presig: 'PRESIG', claim: 'CLAIM' };
   let html = `<span class="tag">${tagNames[type] || type}</span>`;
-  if (author) html += `<span class="author">${author}</span> `;
-  html += `<span class="body">${escapeHtml(content)}</span>`;
+  if (author) html += `<span style="color:#8b949e; font-size:10px">${author}</span> `;
+  html += `<span>${escapeHtml(content)}</span>`;
   div.innerHTML = html;
 
-  messagesEl.appendChild(div);
-  applyFilter();
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  logMessagesEl.appendChild(div);
+  applyLogFilter();
+  logMessagesEl.scrollTop = logMessagesEl.scrollHeight;
 }
 
 function addProtocolMsg(kind, content, author) {
@@ -565,41 +738,49 @@ function addProtocolMsg(kind, content, author) {
       return `${k}: ${vs.length > 24 ? vs.slice(0, 24) + '...' : vs}`;
     }).join(' | ');
   } catch {}
-  addMessage(type, text, author);
+  addLogMsg(type, text, author);
 }
 
 function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function applyFilter() {
-  const filter = state.msgFilter;
-  messagesEl.querySelectorAll('.msg').forEach(el => {
+function applyLogFilter() {
+  const filter = state.logFilter;
+  logMessagesEl.querySelectorAll('.msg').forEach(el => {
     if (filter === 'all') { el.style.display = ''; return; }
     el.style.display = el.dataset.type === filter ? '' : 'none';
   });
 }
 
-// Tab bar
-document.querySelectorAll('.tab-bar button').forEach(btn => {
+// Log toggle
+document.getElementById('log-toggle').addEventListener('click', () => {
+  const btn = document.getElementById('log-toggle');
+  const content = document.getElementById('log-content');
+  btn.classList.toggle('open');
+  content.classList.toggle('open');
+});
+
+// Log filter bar
+document.querySelectorAll('.log-filter-bar button').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab-bar button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.log-filter-bar button').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    state.msgFilter = btn.dataset.filter;
-    applyFilter();
+    state.logFilter = btn.dataset.filter;
+    applyLogFilter();
   });
 });
 
 // ============================================================
-// UI: Steps
+// UI: Swap Steps
 // ============================================================
 
 const STEPS = [
-  { id: 'setup', name: '1. Setup', desc: 'Init roles, exchange adaptor point, lock BTC, deploy ALPH' },
-  { id: 'lock', name: '2. Lock', desc: 'Lock BTC (Bob) / Verify + Deploy ALPH (Alice)' },
+  { id: 'setup', name: '1. Setup', desc: 'Init roles, exchange adaptor point' },
+  { id: 'lock', name: '2. Lock', desc: 'Lock BTC + deploy ALPH contract' },
   { id: 'nonces', name: '3. Nonces', desc: 'Commit-then-reveal nonce exchange' },
-  { id: 'presign', name: '4. Pre-sign', desc: 'Adaptor pre-signature exchange and verification' },
-  { id: 'claim', name: '5. Claim', desc: 'Alice claims BTC, Bob extracts t and claims ALPH' },
+  { id: 'presign', name: '4. Pre-sign', desc: 'Adaptor pre-signature exchange' },
+  { id: 'claim', name: '5. Claim', desc: 'Claim assets on both chains' },
 ];
 
 const stepsEl = document.getElementById('steps');
@@ -616,8 +797,9 @@ function renderSteps() {
     let bodyHtml = `<div>${step.desc}</div>`;
     if (sd.info) bodyHtml += `<div class="data">${escapeHtml(sd.info)}</div>`;
     if (sd.error) bodyHtml += `<div class="data" style="color:#f85149">${escapeHtml(sd.error)}</div>`;
-    if (status === 'pending' || status === 'active') {
-      bodyHtml += `<button class="step-exec primary" data-step="${step.id}" ${status === 'active' ? 'disabled' : ''}>Execute</button>`;
+    // Retry button on error
+    if (status === 'error') {
+      bodyHtml += `<button class="sm orange step-retry" data-step="${step.id}" style="margin-top:6px">Retry</button>`;
     }
     div.innerHTML = `
       <div class="step-header">
@@ -627,10 +809,10 @@ function renderSteps() {
       <div class="step-body">${bodyHtml}</div>`;
     stepsEl.appendChild(div);
   }
-  // Re-attach step buttons
-  stepsEl.querySelectorAll('.step-exec').forEach(btn => {
-    btn.addEventListener('click', () => executeStep(btn.dataset.step));
+  stepsEl.querySelectorAll('.step-retry').forEach(btn => {
+    btn.addEventListener('click', () => retryStep(btn.dataset.step));
   });
+  renderSwapActions();
 }
 
 function updateStep(id, updates) {
@@ -638,8 +820,1015 @@ function updateStep(id, updates) {
   renderSteps();
 }
 
+function renderSwapActions() {
+  const actionsEl = document.getElementById('swap-actions');
+  if (!state.activeSwap) { actionsEl.innerHTML = ''; return; }
+
+  let html = '';
+  const hasError = Object.values(state.stepData).some(s => s.status === 'error');
+  const lockDone = state.stepData.lock?.status === 'done';
+
+  if (hasError && lockDone) {
+    if (state.activeSwap.role === 'alice') {
+      html += '<button class="danger sm" id="refund-alph-btn">Refund ALPH</button>';
+    } else {
+      html += '<button class="danger sm" id="refund-btc-btn">Refund BTC</button>';
+    }
+  }
+  actionsEl.innerHTML = html;
+
+  const refundAlphBtn = document.getElementById('refund-alph-btn');
+  if (refundAlphBtn) refundAlphBtn.addEventListener('click', refundAlph);
+  const refundBtcBtn = document.getElementById('refund-btc-btn');
+  if (refundBtcBtn) refundBtcBtn.addEventListener('click', refundBtc);
+}
+
 // ============================================================
-// Auto-Connect (localStorage nsec, auto-generate if missing)
+// Offer State Management
+// ============================================================
+
+function handleOfferEvent(event) {
+  let content;
+  try { content = JSON.parse(event.content); } catch { return; }
+
+  // Filter by network
+  if (content.network && content.network !== state.network) return;
+
+  const action = content.action;
+  if (action === 'offer') handleNewOffer(event, content);
+  else if (action === 'counter') handleCounter(event, content);
+  else if (action === 'accept') handleAcceptEvent(event, content);
+  else if (action === 'cancel') handleCancelEvent(event, content);
+}
+
+function handleNewOffer(event, content) {
+  const offerId = content.offerId;
+  if (state.offers.has(offerId)) return;
+
+  const offer = {
+    id: offerId,
+    eventId: event.id,
+    pubkey: event.pubkey,
+    direction: content.direction,
+    alphAmount: content.alphAmount,
+    btcSat: content.btcSat,
+    network: content.network,
+    expiresAt: content.expiresAt,
+    createdAt: event.created_at,
+    status: 'open',
+    counters: [],
+    acceptEvent: null,
+    isMine: event.pubkey === state.pubKeyHex,
+  };
+
+  state.offers.set(offerId, offer);
+  if (offer.isMine) state.myOffers.add(offerId);
+
+  // Check if already expired
+  if (offer.expiresAt && offer.expiresAt < Math.floor(Date.now() / 1000)) {
+    offer.status = 'expired';
+  }
+
+  addLogMsg('system', `New offer: ${offer.direction === 'sell_alph' ? 'Sell' : 'Buy'} ${formatAlph(offer.alphAmount)} ALPH for ${offer.btcSat} sat`, offer.isMine ? 'You' : event.pubkey.slice(0, 8) + '...');
+  renderOffersList();
+}
+
+function handleCounter(event, content) {
+  const offer = state.offers.get(content.offerId);
+  if (!offer) return;
+  if (offer.status === 'accepted' || offer.status === 'cancelled') return;
+
+  const counter = {
+    eventId: event.id,
+    pubkey: event.pubkey,
+    alphAmount: content.alphAmount,
+    btcSat: content.btcSat,
+    message: content.message || '',
+    isMine: event.pubkey === state.pubKeyHex,
+  };
+
+  offer.counters.push(counter);
+  offer.status = 'countered';
+
+  addLogMsg('system', `Counter-offer on ${content.offerId.slice(0, 8)}...: ${formatAlph(content.alphAmount)} ALPH for ${content.btcSat} sat`, counter.isMine ? 'You' : event.pubkey.slice(0, 8) + '...');
+  renderOffersList();
+}
+
+function handleAcceptEvent(event, content) {
+  const offer = state.offers.get(content.offerId);
+  if (!offer) return;
+  if (offer.status === 'accepted' || offer.status === 'cancelled') return;
+
+  offer.status = 'accepted';
+  offer.acceptEvent = event;
+
+  const isMine = event.pubkey === state.pubKeyHex;
+  addLogMsg('system', `Offer ${content.offerId.slice(0, 8)}... accepted!`, isMine ? 'You' : event.pubkey.slice(0, 8) + '...');
+  renderOffersList();
+
+  // Trigger swap if it involves us
+  const involvesUs = offer.isMine || isMine;
+  if (involvesUs && !state.activeSwap) {
+    startSwapFromAccept(offer, event, content);
+  }
+}
+
+function handleCancelEvent(event, content) {
+  const offer = state.offers.get(content.offerId);
+  if (!offer) return;
+  // Only the creator can cancel
+  if (event.pubkey !== offer.pubkey) return;
+  if (offer.status === 'accepted') return;
+
+  offer.status = 'cancelled';
+  addLogMsg('system', `Offer ${content.offerId.slice(0, 8)}... cancelled`, event.pubkey === state.pubKeyHex ? 'You' : event.pubkey.slice(0, 8) + '...');
+  renderOffersList();
+}
+
+// Expiry timer
+setInterval(() => {
+  const now = Math.floor(Date.now() / 1000);
+  let changed = false;
+  for (const [, offer] of state.offers) {
+    if (offer.status === 'open' || offer.status === 'countered') {
+      if (offer.expiresAt && offer.expiresAt < now) {
+        offer.status = 'expired';
+        changed = true;
+      }
+    }
+  }
+  if (changed) renderOffersList();
+}, 30000);
+
+// ============================================================
+// UI: Offers List
+// ============================================================
+
+function formatAlph(attoAlph) {
+  const n = Number(BigInt(attoAlph)) / 1e18;
+  return n % 1 === 0 ? n.toFixed(0) : n.toFixed(4);
+}
+
+function formatSat(sat) {
+  return Number(sat).toLocaleString();
+}
+
+function renderOffersList() {
+  const listEl = document.getElementById('offers-list');
+  const countEl = document.getElementById('offers-count');
+
+  // Sort: open first, then by created_at desc
+  const sorted = [...state.offers.values()].sort((a, b) => {
+    const statusOrder = { open: 0, countered: 0, accepted: 1, cancelled: 2, expired: 2 };
+    const oa = statusOrder[a.status] ?? 3;
+    const ob = statusOrder[b.status] ?? 3;
+    if (oa !== ob) return oa - ob;
+    return (b.createdAt || 0) - (a.createdAt || 0);
+  });
+
+  const activeCount = sorted.filter(o => o.status === 'open' || o.status === 'countered').length;
+  countEl.textContent = `(${activeCount})`;
+
+  if (sorted.length === 0) {
+    listEl.innerHTML = '<div style="color:#484f58; font-size:12px; text-align:center; padding:24px;">No offers yet. Create one or wait for offers to appear.</div>';
+    return;
+  }
+
+  listEl.innerHTML = '';
+  for (const offer of sorted) {
+    const card = document.createElement('div');
+    const isSell = offer.direction === 'sell_alph';
+    let cardClass = 'offer-card';
+    if (offer.isMine) cardClass += ' mine';
+    else cardClass += isSell ? ' sell' : ' buy';
+    if (offer.status === 'cancelled' || offer.status === 'expired') cardClass += ' cancelled';
+    if (offer.status === 'accepted') cardClass += ' accepted';
+    card.className = cardClass;
+
+    const dirLabel = isSell ? 'SELL' : 'BUY';
+    const dirClass = isSell ? 'sell' : 'buy';
+    const verb = isSell ? 'Selling' : 'Buying';
+    const preposition = isSell ? 'for' : 'with';
+    const peerLabel = offer.isMine ? 'You' : offer.pubkey.slice(0, 12) + '...';
+
+    let statusBadge = '';
+    if (offer.status === 'accepted') statusBadge = '<span class="status-badge accepted">Accepted</span>';
+    else if (offer.status === 'cancelled') statusBadge = '<span class="status-badge cancelled">Cancelled</span>';
+    else if (offer.status === 'expired') statusBadge = '<span class="status-badge expired">Expired</span>';
+
+    // Action buttons
+    let actionsHtml = '';
+    const isActive = offer.status === 'open' || offer.status === 'countered';
+    if (isActive && !state.activeSwap) {
+      if (offer.isMine) {
+        actionsHtml = `<button class="sm danger cancel-offer-btn" data-offer="${offer.id}">Cancel</button>`;
+      } else {
+        actionsHtml = `<button class="sm primary accept-offer-btn" data-offer="${offer.id}">Accept</button>
+                       <button class="sm counter-offer-btn" data-offer="${offer.id}">Counter</button>`;
+      }
+    }
+
+    let html = `
+      <div class="card-header">
+        <span class="amount">
+          <span class="dir-badge ${dirClass}">${dirLabel}</span>
+          <span class="${isSell ? 'alph' : 'alph'}">${formatAlph(offer.alphAmount)} ALPH</span>
+          <span style="color:#8b949e"> ${preposition} </span>
+          <span class="btc">${formatSat(offer.btcSat)} sat</span>
+        </span>
+        ${statusBadge}
+      </div>
+      <div class="card-body">
+        <span class="peer">by ${peerLabel}</span>
+        <span class="card-actions">${actionsHtml}</span>
+      </div>`;
+
+    // Counters
+    if (offer.counters.length > 0) {
+      html += '<div class="counters-list">';
+      offer.counters.forEach((c, idx) => {
+        const cPeer = c.isMine ? 'You' : c.pubkey.slice(0, 8) + '...';
+        let counterActions = '';
+        // Offer creator can accept a counter, counter creator sees nothing extra
+        if (isActive && !state.activeSwap) {
+          if (offer.isMine && !c.isMine) {
+            counterActions = `<button class="sm primary accept-counter-btn" data-offer="${offer.id}" data-counter="${idx}">Accept</button>`;
+          }
+        }
+        html += `<div class="counter-item">
+          <span class="counter-info">Counter from ${cPeer}:</span>
+          <span class="counter-amounts">${formatAlph(c.alphAmount)} ALPH / ${formatSat(c.btcSat)} sat</span>
+          ${counterActions}
+        </div>`;
+      });
+      html += '</div>';
+    }
+
+    card.innerHTML = html;
+    listEl.appendChild(card);
+  }
+
+  // Attach event handlers
+  listEl.querySelectorAll('.accept-offer-btn').forEach(btn => {
+    btn.addEventListener('click', () => acceptOffer(btn.dataset.offer));
+  });
+  listEl.querySelectorAll('.counter-offer-btn').forEach(btn => {
+    btn.addEventListener('click', () => showCounterForm(btn.dataset.offer));
+  });
+  listEl.querySelectorAll('.cancel-offer-btn').forEach(btn => {
+    btn.addEventListener('click', () => cancelOffer(btn.dataset.offer));
+  });
+  listEl.querySelectorAll('.accept-counter-btn').forEach(btn => {
+    btn.addEventListener('click', () => acceptCounter(btn.dataset.offer, parseInt(btn.dataset.counter)));
+  });
+}
+
+// ============================================================
+// Offer Actions
+// ============================================================
+
+async function publishOffer() {
+  const btn = document.getElementById('publish-offer-btn');
+  btn.disabled = true; btn.textContent = 'Publishing...';
+
+  try {
+    const direction = document.querySelector('#direction-toggle button.active').dataset.dir;
+    const alphVal = parseFloat(document.getElementById('offer-alph').value) || 10;
+    const btcSat = parseInt(document.getElementById('offer-btc-sat').value) || 50000;
+    const alphAmount = BigInt(Math.round(alphVal * 1e18));
+    const offerId = generateUUID();
+    const expiresAt = Math.floor(Date.now() / 1000) + 3600; // 1 hour
+
+    const event = await createOfferEvent({ offerId, direction, alphAmount, btcSat, expiresAt });
+    await nostrPublish(event);
+
+    addLogMsg('system', `Published offer: ${direction === 'sell_alph' ? 'Sell' : 'Buy'} ${alphVal} ALPH for ${btcSat} sat (expires in 1h)`, 'You');
+  } catch (e) {
+    addLogMsg('system', `Publish error: ${e.message}`, 'Error');
+  }
+
+  btn.disabled = false; btn.textContent = 'Publish Offer';
+}
+
+async function acceptOffer(offerId) {
+  const offer = state.offers.get(offerId);
+  if (!offer) return;
+
+  try {
+    const event = await createAcceptEvent({
+      offerId,
+      offerEventId: offer.eventId,
+      offerCreator: offer.pubkey,
+      alphAmount: offer.alphAmount,
+      btcSat: offer.btcSat,
+    });
+    await nostrPublish(event);
+    // handleAcceptEvent will be triggered by the subscription
+  } catch (e) {
+    addLogMsg('system', `Accept error: ${e.message}`, 'Error');
+  }
+}
+
+async function acceptCounter(offerId, counterIndex) {
+  const offer = state.offers.get(offerId);
+  if (!offer || !offer.counters[counterIndex]) return;
+  const counter = offer.counters[counterIndex];
+
+  try {
+    const event = await createAcceptEvent({
+      offerId,
+      offerEventId: offer.eventId,
+      offerCreator: offer.pubkey,
+      alphAmount: counter.alphAmount,
+      btcSat: counter.btcSat,
+    });
+    await nostrPublish(event);
+  } catch (e) {
+    addLogMsg('system', `Accept counter error: ${e.message}`, 'Error');
+  }
+}
+
+function showCounterForm(offerId) {
+  const offer = state.offers.get(offerId);
+  if (!offer) return;
+
+  // Find the card and append counter form if not already shown
+  const cards = document.querySelectorAll('.offer-card');
+  for (const card of cards) {
+    const btn = card.querySelector(`.counter-offer-btn[data-offer="${offerId}"]`);
+    if (!btn) continue;
+    // Check if form already exists
+    if (card.querySelector('.counter-form')) return;
+
+    const form = document.createElement('div');
+    form.className = 'counter-form';
+    form.innerHTML = `
+      <label>ALPH</label>
+      <input type="text" class="counter-alph" value="${formatAlph(offer.alphAmount)}">
+      <label>sat</label>
+      <input type="text" class="counter-sat" value="${offer.btcSat}">
+      <button class="sm primary submit-counter-btn" data-offer="${offerId}">Send</button>
+      <button class="sm cancel-counter-form-btn">X</button>
+    `;
+    card.appendChild(form);
+
+    form.querySelector('.submit-counter-btn').addEventListener('click', async () => {
+      const alphVal = parseFloat(form.querySelector('.counter-alph').value) || 0;
+      const btcSat = parseInt(form.querySelector('.counter-sat').value) || 0;
+      if (!alphVal || !btcSat) return;
+
+      try {
+        const event = await createCounterEvent({
+          offerId,
+          offerEventId: offer.eventId,
+          offerCreator: offer.pubkey,
+          index: offer.counters.length,
+          alphAmount: BigInt(Math.round(alphVal * 1e18)),
+          btcSat,
+        });
+        await nostrPublish(event);
+        form.remove();
+      } catch (e) {
+        addLogMsg('system', `Counter error: ${e.message}`, 'Error');
+      }
+    });
+
+    form.querySelector('.cancel-counter-form-btn').addEventListener('click', () => form.remove());
+    break;
+  }
+}
+
+async function cancelOffer(offerId) {
+  const offer = state.offers.get(offerId);
+  if (!offer) return;
+
+  try {
+    const event = await createCancelEvent({ offerId, offerEventId: offer.eventId });
+    await nostrPublish(event);
+  } catch (e) {
+    addLogMsg('system', `Cancel error: ${e.message}`, 'Error');
+  }
+}
+
+// ============================================================
+// Accept -> Auto-Execute Swap
+// ============================================================
+
+function startSwapFromAccept(offer, acceptEvent, acceptContent) {
+  // Determine roles:
+  // sell_alph: creator is Alice (has ALPH, wants BTC). Taker is Bob.
+  // buy_alph: creator is Bob (has BTC, wants ALPH). Taker is Alice.
+  const iAmCreator = offer.isMine;
+  const iAmAcceptor = acceptEvent.pubkey === state.pubKeyHex;
+
+  let role, peerPubHex;
+  if (offer.direction === 'sell_alph') {
+    // Creator = Alice, Taker = Bob
+    role = iAmCreator ? 'alice' : 'bob';
+    peerPubHex = iAmCreator ? acceptEvent.pubkey : offer.pubkey;
+  } else {
+    // buy_alph: Creator = Bob, Taker = Alice
+    role = iAmCreator ? 'bob' : 'alice';
+    peerPubHex = iAmCreator ? acceptEvent.pubkey : offer.pubkey;
+  }
+
+  // The accept event's Nostr ID becomes the sessionId
+  const sessionId = acceptEvent.id;
+
+  const alphAmount = acceptContent.alphAmount;
+  const btcSat = acceptContent.btcSat;
+
+  state.activeSwap = {
+    offerId: offer.id,
+    role,
+    peerPubHex,
+    sessionId,
+    alphAmount,
+    btcSat,
+  };
+
+  // Reset step data
+  state.stepData = {};
+
+  // Show swap panel
+  document.getElementById('swap-placeholder').classList.add('hidden');
+  document.getElementById('swap-active').classList.remove('hidden');
+
+  // Show swap info
+  const infoEl = document.getElementById('swap-info');
+  const alphDisplay = formatAlph(alphAmount);
+  infoEl.innerHTML = `
+    <div class="row"><span class="label">Role</span><span class="value">${role === 'alice' ? 'Alice (ALPH seller)' : 'Bob (BTC seller)'}</span></div>
+    <div class="row"><span class="label">Amount</span><span class="value"><span class="alph">${alphDisplay} ALPH</span> &harr; <span class="btc">${formatSat(btcSat)} sat</span></span></div>
+    <div class="row"><span class="label">Peer</span><span class="value" style="font-size:10px">${peerPubHex.slice(0, 16)}...</span></div>
+    <div class="row"><span class="label">Session</span><span class="value" style="font-size:10px">${sessionId.slice(0, 16)}...</span></div>
+  `;
+
+  renderSteps();
+
+  // Show UTXO bar for Bob on testnet
+  if (state.network === 'testnet' && role === 'bob') {
+    document.getElementById('utxo-bar').classList.remove('hidden');
+    refreshUtxos();
+  } else {
+    document.getElementById('utxo-bar').classList.add('hidden');
+  }
+
+  // Subscribe to protocol events for this swap session
+  subscribeToSwap(sessionId, peerPubHex);
+
+  // Open the protocol log
+  document.getElementById('log-toggle').classList.add('open');
+  document.getElementById('log-content').classList.add('open');
+
+  addLogMsg('system', `Swap started as ${role}: ${alphDisplay} ALPH <-> ${formatSat(btcSat)} sat`, 'System');
+
+  // Auto-execute
+  autoExecuteSwap();
+}
+
+function subscribeToSwap(sessionId, peerPubHex) {
+  // Close existing swap subscription if any
+  const existing = state.subscriptions.get('active_swap');
+  if (existing) existing();
+
+  // Clear stale waiters from any previous swap
+  swapEventWaiters.length = 0;
+
+  subscribe('active_swap', [{
+    kinds: [SWAP_SETUP_KIND, SWAP_NONCE_KIND, SWAP_PRESIG_KIND, SWAP_CLAIM_KIND],
+    '#e': [sessionId],
+    authors: [state.pubKeyHex, peerPubHex],
+  }], (event) => {
+    // Log to protocol log
+    const isMine = event.pubkey === state.pubKeyHex;
+    const authorLabel = isMine ? 'You' : event.pubkey.slice(0, 8) + '...';
+    addProtocolMsg(event.kind, event.content, authorLabel);
+
+    // Resolve any pending waiters that match this event
+    for (let i = swapEventWaiters.length - 1; i >= 0; i--) {
+      const w = swapEventWaiters[i];
+      if (event.kind === w.kind && event.pubkey === w.fromPub) {
+        if (!w.predicate || w.predicate(event)) {
+          clearTimeout(w.timer);
+          swapEventWaiters.splice(i, 1);
+          w.resolve(event);
+        }
+      }
+    }
+  });
+}
+
+// ============================================================
+// Auto-Execute Swap
+// ============================================================
+
+async function autoExecuteSwap() {
+  if (!state.activeSwap) return;
+  const { role } = state.activeSwap;
+
+  try {
+    // Step 1: Setup
+    updateStep('setup', { status: 'active' });
+    if (role === 'alice') {
+      await executeSetupAlice();
+    } else {
+      await executeSetupBob();
+    }
+    updateStep('setup', { status: 'done' });
+
+    // Step 2: Lock (auto-advanced from setup in most cases, but run explicitly if needed)
+    if (state.stepData.lock?.status !== 'done') {
+      updateStep('lock', { status: 'active' });
+      if (role === 'alice') {
+        await executeLockAlice();
+      } else {
+        await executeLockBob();
+      }
+      updateStep('lock', { status: 'done' });
+    }
+
+    // Step 3: Nonces
+    updateStep('nonces', { status: 'active' });
+    await executeNonces();
+    updateStep('nonces', { status: 'done' });
+
+    // Step 4: Pre-sign
+    updateStep('presign', { status: 'active' });
+    await executePresign();
+    updateStep('presign', { status: 'done' });
+
+    // Step 5: Claim
+    updateStep('claim', { status: 'active' });
+    if (role === 'alice') {
+      await executeClaimAlice();
+    } else {
+      await executeClaimBob();
+    }
+    updateStep('claim', { status: 'done' });
+
+    // Swap complete!
+    showSwapComplete();
+
+  } catch (e) {
+    addLogMsg('system', `Swap error: ${e.message}`, 'Error');
+    // The failing step will have been marked as error by the individual step function
+  }
+}
+
+async function retryStep(stepId) {
+  if (!state.activeSwap) return;
+  const { role } = state.activeSwap;
+
+  updateStep(stepId, { status: 'active', error: null });
+
+  try {
+    const stepFns = {
+      alice: { setup: executeSetupAlice, lock: executeLockAlice, nonces: executeNonces, presign: executePresign, claim: executeClaimAlice },
+      bob: { setup: executeSetupBob, lock: executeLockBob, nonces: executeNonces, presign: executePresign, claim: executeClaimBob },
+    };
+    await stepFns[role][stepId]();
+    updateStep(stepId, { status: 'done' });
+
+    // Continue auto-executing remaining steps
+    const stepOrder = ['setup', 'lock', 'nonces', 'presign', 'claim'];
+    const idx = stepOrder.indexOf(stepId);
+    for (let i = idx + 1; i < stepOrder.length; i++) {
+      const nextStep = stepOrder[i];
+      if (state.stepData[nextStep]?.status === 'done') continue;
+      updateStep(nextStep, { status: 'active' });
+      await stepFns[role][nextStep]();
+      updateStep(nextStep, { status: 'done' });
+    }
+    showSwapComplete();
+  } catch (e) {
+    addLogMsg('system', `Retry error: ${e.message}`, 'Error');
+  }
+}
+
+// ============================================================
+// Step Execution: Alice
+// ============================================================
+
+async function executeSetupAlice() {
+  const { sessionId, peerPubHex, btcSat, alphAmount } = state.activeSwap;
+  const btcAmount = btcSat / 1e8;
+
+  try {
+    // Init on server as Alice
+    const initResult = await apiPost('/api/swap/init', {
+      token: state.token,
+      role: 'alice',
+      peerPubHex,
+      btcAmount,
+      alphAmount: String(alphAmount),
+      sessionId,
+    });
+
+    state.stepData.setup = { ...state.stepData.setup, adaptorPoint: initResult.adaptorPoint };
+    updateStep('setup', { info: `adaptorPoint: ${initResult.adaptorPoint?.slice(0, 24)}...\nSending to peer...` });
+
+    // Publish setup confirmation with adaptor point
+    const event = await createSwapSetup({
+      sessionId, recipientPubHex: peerPubHex, msgType: 'confirm',
+      pubkey: state.pubKeyHex, adaptorPoint: initResult.adaptorPoint,
+    });
+    await nostrPublish(event);
+
+    updateStep('setup', { info: `adaptorPoint sent. Waiting for Bob's BTC lock...` });
+
+    // Wait for Bob's BTC lock
+    const btcLockedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'btc_locked');
+    const btcLocked = JSON.parse(btcLockedEvent.content);
+
+    // Verify BTC
+    await apiPost('/api/swap/verify-btc', {
+      token: state.token, txid: btcLocked.txid, vout: btcLocked.vout,
+    });
+
+    updateStep('setup', { info: `BTC locked: ${btcLocked.txid.slice(0, 16)}... verified` });
+  } catch (e) {
+    updateStep('setup', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+async function executeLockAlice() {
+  const { sessionId, peerPubHex } = state.activeSwap;
+
+  try {
+    // Deploy ALPH contract
+    const deployResult = await apiPost('/api/swap/deploy-alph', { token: state.token });
+    updateStep('lock', { info: `ALPH deployed: ${deployResult.contractAddress.slice(0, 16)}...\nSending to peer...` });
+
+    // Publish contract info
+    const event = await createSwapSetup({
+      sessionId, recipientPubHex: peerPubHex, msgType: 'alph_deployed',
+      contractId: deployResult.contractId, contractAddress: deployResult.contractAddress,
+    });
+    await nostrPublish(event);
+
+    // Wait for Bob's verification
+    updateStep('lock', { info: `ALPH: ${deployResult.contractAddress.slice(0, 16)}...\nWaiting for Bob to verify...` });
+    await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'verified');
+
+    // Compute context
+    await apiPost('/api/swap/compute-context', { token: state.token });
+    updateStep('lock', { info: `ALPH: ${deployResult.contractAddress.slice(0, 16)}... | Bob verified | Context computed` });
+  } catch (e) {
+    updateStep('lock', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+async function executeClaimAlice() {
+  const { sessionId, peerPubHex } = state.activeSwap;
+
+  try {
+    const result = await apiPost('/api/swap/claim-btc', { token: state.token });
+    updateStep('claim', { info: `BTC claimed! txid: ${result.txid.slice(0, 24)}...` });
+
+    // Publish claim notification
+    const event = await createSwapClaim({
+      sessionId, recipientPubHex: peerPubHex, claimType: 'btc_claimed',
+      txid: result.txid,
+    });
+    await nostrPublish(event);
+
+    // Wait for Bob's ALPH claim
+    updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nWaiting for Bob to claim ALPH...` });
+    const alphClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'alph_claimed');
+    const alphClaimed = JSON.parse(alphClaimedEvent.content);
+    updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nBob claimed ALPH: ${alphClaimed.txid.slice(0, 16)}...` });
+    await refreshBalance();
+  } catch (e) {
+    updateStep('claim', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+// ============================================================
+// Step Execution: Bob
+// ============================================================
+
+async function executeSetupBob() {
+  const { sessionId, peerPubHex, btcSat, alphAmount } = state.activeSwap;
+  const btcAmount = btcSat / 1e8;
+
+  try {
+    // Wait for Alice's confirmation with adaptor point
+    updateStep('setup', { info: 'Waiting for Alice\'s confirmation...' });
+    const confirmEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'confirm');
+    const confirm = JSON.parse(confirmEvent.content);
+
+    // Init on server as Bob with adaptor point
+    await apiPost('/api/swap/init', {
+      token: state.token,
+      role: 'bob',
+      peerPubHex,
+      adaptorPoint: confirm.adaptorPoint,
+      btcAmount,
+      alphAmount: String(alphAmount),
+      sessionId,
+    });
+
+    updateStep('setup', { info: `adaptorPoint: ${confirm.adaptorPoint.slice(0, 24)}...` });
+  } catch (e) {
+    updateStep('setup', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+async function executeLockBob() {
+  const { sessionId, peerPubHex } = state.activeSwap;
+
+  try {
+    // Lock BTC
+    const lockBody = { token: state.token };
+    if (state.network === 'testnet' && state.selectedUtxo) {
+      lockBody.utxoTxid = state.selectedUtxo.txid;
+      lockBody.utxoVout = state.selectedUtxo.vout;
+      lockBody.utxoValue = state.selectedUtxo.value;
+    }
+    const lockResult = await apiPost('/api/swap/lock-btc', lockBody);
+    updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}... vout=${lockResult.vout}\nPublishing...` });
+
+    // Publish btc_locked
+    const event = await createSwapSetup({
+      sessionId, recipientPubHex: peerPubHex, msgType: 'btc_locked',
+      txid: lockResult.txid, vout: lockResult.vout, amountSat: lockResult.amountSat,
+    });
+    await nostrPublish(event);
+
+    // Wait for ALPH deployment
+    updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}...\nWaiting for Alice to deploy ALPH...` });
+    const alphDeployedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'alph_deployed');
+    const alphDeployed = JSON.parse(alphDeployedEvent.content);
+
+    // Verify ALPH
+    await apiPost('/api/swap/verify-alph', {
+      token: state.token,
+      contractId: alphDeployed.contractId,
+      contractAddress: alphDeployed.contractAddress,
+    });
+
+    // Send verified
+    const verifiedEvent = await createSwapSetup({
+      sessionId, recipientPubHex: peerPubHex, msgType: 'verified',
+    });
+    await nostrPublish(verifiedEvent);
+
+    // Compute context
+    await apiPost('/api/swap/compute-context', { token: state.token });
+    updateStep('lock', { info: `BTC: ${lockResult.txid.slice(0, 16)}... | ALPH: ${alphDeployed.contractAddress.slice(0, 12)}... | Verified` });
+  } catch (e) {
+    updateStep('lock', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+async function executeClaimBob() {
+  const { sessionId, peerPubHex } = state.activeSwap;
+
+  try {
+    // Wait for Alice's BTC claim
+    updateStep('claim', { info: 'Waiting for Alice to claim BTC...' });
+    const btcClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
+      (e) => JSON.parse(e.content).type === 'btc_claimed');
+    const btcClaimed = JSON.parse(btcClaimedEvent.content);
+
+    updateStep('claim', { info: `Alice claimed BTC: ${btcClaimed.txid.slice(0, 16)}...\nExtracting secret and claiming ALPH...` });
+
+    // Claim ALPH
+    const result = await apiPost('/api/swap/claim-alph', {
+      token: state.token, btcClaimTxid: btcClaimed.txid,
+    });
+
+    // Publish claim notification
+    const event = await createSwapClaim({
+      sessionId, recipientPubHex: peerPubHex, claimType: 'alph_claimed',
+      txid: result.txid,
+    });
+    await nostrPublish(event);
+
+    updateStep('claim', { info: `Alice BTC: ${btcClaimed.txid.slice(0, 16)}...\nALPH claimed: ${result.txid.slice(0, 16)}...` });
+    await refreshBalance();
+  } catch (e) {
+    updateStep('claim', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+// ============================================================
+// Shared Steps: Nonces & Pre-sign
+// ============================================================
+
+async function executeNonces() {
+  const { sessionId, peerPubHex, role } = state.activeSwap;
+  const isAlice = role === 'alice';
+
+  try {
+    const commitResult = await apiPost('/api/swap/nonce-commit', { token: state.token });
+
+    if (isAlice) {
+      // Alice sends first
+      const commitEvent = await createSwapNonce({
+        sessionId, recipientPubHex: peerPubHex, phase: 'commit',
+        btcNonceHash: commitResult.btcNonceHash, alphNonceHash: commitResult.alphNonceHash,
+      });
+      await nostrPublish(commitEvent);
+      updateStep('nonces', { info: 'Commitment sent. Waiting for peer...' });
+
+      const peerCommitEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sessionId, peerPubHex,
+        (e) => JSON.parse(e.content).phase === 'commit');
+      const peerCommit = JSON.parse(peerCommitEvent.content);
+
+      const revealResult = await apiPost('/api/swap/nonce-reveal', {
+        token: state.token,
+        peerBtcNonceHash: peerCommit.btcNonceHash,
+        peerAlphNonceHash: peerCommit.alphNonceHash,
+      });
+
+      const revealEvent = await createSwapNonce({
+        sessionId, recipientPubHex: peerPubHex, phase: 'reveal',
+        btcPubNonce: revealResult.btcPubNonce, alphPubNonce: revealResult.alphPubNonce,
+      });
+      await nostrPublish(revealEvent);
+      updateStep('nonces', { info: 'Nonces revealed. Waiting for peer reveal...' });
+
+      const peerRevealEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sessionId, peerPubHex,
+        (e) => JSON.parse(e.content).phase === 'reveal');
+      const peerReveal = JSON.parse(peerRevealEvent.content);
+
+      await apiPost('/api/swap/nonce-verify', {
+        token: state.token,
+        peerBtcPubNonce: peerReveal.btcPubNonce,
+        peerAlphPubNonce: peerReveal.alphPubNonce,
+      });
+    } else {
+      // Bob waits first
+      updateStep('nonces', { info: 'Waiting for Alice\'s commitment...' });
+      const peerCommitEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sessionId, peerPubHex,
+        (e) => JSON.parse(e.content).phase === 'commit');
+      const peerCommit = JSON.parse(peerCommitEvent.content);
+
+      const commitEvent = await createSwapNonce({
+        sessionId, recipientPubHex: peerPubHex, phase: 'commit',
+        btcNonceHash: commitResult.btcNonceHash, alphNonceHash: commitResult.alphNonceHash,
+      });
+      await nostrPublish(commitEvent);
+
+      updateStep('nonces', { info: 'Commitment exchanged. Waiting for peer reveal...' });
+      const peerRevealEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sessionId, peerPubHex,
+        (e) => JSON.parse(e.content).phase === 'reveal');
+      const peerReveal = JSON.parse(peerRevealEvent.content);
+
+      const revealResult = await apiPost('/api/swap/nonce-reveal', {
+        token: state.token,
+        peerBtcNonceHash: peerCommit.btcNonceHash,
+        peerAlphNonceHash: peerCommit.alphNonceHash,
+      });
+
+      const revealEvent = await createSwapNonce({
+        sessionId, recipientPubHex: peerPubHex, phase: 'reveal',
+        btcPubNonce: revealResult.btcPubNonce, alphPubNonce: revealResult.alphPubNonce,
+      });
+      await nostrPublish(revealEvent);
+
+      await apiPost('/api/swap/nonce-verify', {
+        token: state.token,
+        peerBtcPubNonce: peerReveal.btcPubNonce,
+        peerAlphPubNonce: peerReveal.alphPubNonce,
+      });
+    }
+
+    updateStep('nonces', { info: 'Nonces committed, revealed, verified, and aggregated' });
+  } catch (e) {
+    updateStep('nonces', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+async function executePresign() {
+  const { sessionId, peerPubHex, role } = state.activeSwap;
+  const isAlice = role === 'alice';
+
+  try {
+    const presigResult = await apiPost('/api/swap/presign', { token: state.token });
+
+    if (isAlice) {
+      const presigEvent = await createSwapPresig({
+        sessionId, recipientPubHex: peerPubHex,
+        btcPresig: presigResult.btcPresig, alphPresig: presigResult.alphPresig,
+      });
+      await nostrPublish(presigEvent);
+      updateStep('presign', { info: 'Pre-signatures sent. Waiting for peer...' });
+
+      const peerPresigEvent = await waitForSwapEvent(SWAP_PRESIG_KIND, sessionId, peerPubHex);
+      const peerPresigs = JSON.parse(peerPresigEvent.content);
+
+      await apiPost('/api/swap/verify-presig', {
+        token: state.token,
+        peerBtcPresig: peerPresigs.btcPresig,
+        peerAlphPresig: peerPresigs.alphPresig,
+      });
+    } else {
+      updateStep('presign', { info: 'Waiting for Alice\'s pre-signatures...' });
+      const peerPresigEvent = await waitForSwapEvent(SWAP_PRESIG_KIND, sessionId, peerPubHex);
+      const peerPresigs = JSON.parse(peerPresigEvent.content);
+
+      await apiPost('/api/swap/verify-presig', {
+        token: state.token,
+        peerBtcPresig: peerPresigs.btcPresig,
+        peerAlphPresig: peerPresigs.alphPresig,
+      });
+
+      const presigEvent = await createSwapPresig({
+        sessionId, recipientPubHex: peerPubHex,
+        btcPresig: presigResult.btcPresig, alphPresig: presigResult.alphPresig,
+      });
+      await nostrPublish(presigEvent);
+    }
+
+    updateStep('presign', { info: 'Pre-signatures exchanged, verified, aggregated with taproot tweak' });
+  } catch (e) {
+    updateStep('presign', { status: 'error', error: e.message });
+    throw e;
+  }
+}
+
+// ============================================================
+// Refund
+// ============================================================
+
+async function refundAlph() {
+  try {
+    addLogMsg('system', 'Refunding ALPH...', 'System');
+    const result = await apiPost('/api/swap/refund-alph', { token: state.token });
+    addLogMsg('system', `ALPH refunded! txid: ${result.txid.slice(0, 24)}...`, 'System');
+    await refreshBalance();
+  } catch (e) {
+    addLogMsg('system', `Refund error: ${e.message}`, 'Error');
+  }
+}
+
+async function refundBtc() {
+  try {
+    addLogMsg('system', 'Refunding BTC (requires CSV timeout)...', 'System');
+    const result = await apiPost('/api/swap/refund-btc', { token: state.token });
+    addLogMsg('system', `BTC refunded! txid: ${result.txid.slice(0, 24)}...`, 'System');
+    await refreshBalance();
+  } catch (e) {
+    addLogMsg('system', `Refund error: ${e.message}`, 'Error');
+  }
+}
+
+// ============================================================
+// Swap Complete
+// ============================================================
+
+function showSwapComplete() {
+  const { alphAmount, btcSat, role } = state.activeSwap;
+  const actionsEl = document.getElementById('swap-actions');
+  actionsEl.innerHTML = `
+    <div class="swap-complete" style="width:100%">
+      <h3>Swap Complete!</h3>
+      <div style="color:#8b949e; font-size:12px; margin-top:4px">
+        ${role === 'alice' ? 'Received' : 'Sent'} ${formatSat(btcSat)} sat &harr;
+        ${role === 'alice' ? 'Sent' : 'Received'} ${formatAlph(alphAmount)} ALPH
+      </div>
+      <button class="sm" id="new-swap-btn" style="margin-top:12px">New Swap</button>
+    </div>
+  `;
+  document.getElementById('new-swap-btn').addEventListener('click', resetSwap);
+}
+
+function resetSwap() {
+  // Close swap subscription and clear pending waiters
+  const unsub = state.subscriptions.get('active_swap');
+  if (unsub) unsub();
+  swapEventWaiters.forEach(w => clearTimeout(w.timer));
+  swapEventWaiters.length = 0;
+
+  state.activeSwap = null;
+  state.stepData = {};
+  state.selectedUtxo = null;
+
+  document.getElementById('swap-placeholder').classList.remove('hidden');
+  document.getElementById('swap-active').classList.add('hidden');
+  document.getElementById('utxo-bar').classList.add('hidden');
+
+  renderOffersList();
+  refreshBalance();
+}
+
+// ============================================================
+// Auto-Connect
 // ============================================================
 
 const STORAGE_KEY = 'btc-alph-swap-nsec';
@@ -647,7 +1836,6 @@ const STORAGE_KEY = 'btc-alph-swap-nsec';
 function getOrCreateNsec() {
   let hex = localStorage.getItem(STORAGE_KEY);
   if (hex && hex.length === 64) return hex;
-  // Generate new key
   const sec = new Uint8Array(32);
   crypto.getRandomValues(sec);
   hex = bytesToHex(sec);
@@ -665,7 +1853,6 @@ async function autoConnect() {
   try {
     const nsecHex = getOrCreateNsec();
 
-    // Create server session
     statusEl.textContent = 'Creating session...';
     const session = await apiPost('/api/session', { nsec: nsecHex });
     state.token = session.token;
@@ -675,14 +1862,12 @@ async function autoConnect() {
     state.alphAddress = session.alphAddress;
     state.secBytes = hexToBytes(nsecHex);
 
-    // Detect network mode
     statusEl.textContent = 'Detecting network...';
     try {
       const netInfo = await api('/api/network');
       state.network = netInfo.network;
     } catch { state.network = 'devnet'; }
 
-    // Connect to relays
     statusEl.textContent = 'Connecting to Nostr relays...';
     const connected = await connectRelays(DEFAULT_RELAYS);
 
@@ -699,16 +1884,13 @@ async function autoConnect() {
     badge.textContent = state.network;
     badge.className = 'network-badge ' + state.network;
 
-    // Toggle devnet/testnet UI
     applyNetworkUI();
-
-    renderSteps();
-    subscribeToEvents();
+    subscribeToOffers();
     refreshBalance();
 
     const relayNames = connected.map(r => r.url.replace('wss://', '')).join(', ');
     updateRelayStatus();
-    addMessage('chat', `Connected via ${connected.length} relays: ${relayNames}`, 'System');
+    addLogMsg('system', `Connected via ${connected.length} relays: ${relayNames}`, 'System');
   } catch (e) {
     statusEl.textContent = '';
     errorMsgEl.textContent = 'Connection failed: ' + e.message;
@@ -716,33 +1898,17 @@ async function autoConnect() {
   }
 }
 
-function updateRelayStatus() {
-  const el = document.getElementById('relay-status');
-  const alive = state.relays.filter(r => r.ws.readyState === WebSocket.OPEN).length;
-  const total = state.relays.length;
-  el.textContent = `${alive}/${total} relays`;
-  el.style.color = alive === 0 ? '#f85149' : alive < total ? '#d29922' : '#2ea043';
+// ============================================================
+// Subscriptions
+// ============================================================
+
+function subscribeToOffers() {
+  subscribe('offer_feed', [{
+    kinds: [SWAP_OFFER_KIND],
+    '#t': ['atomicswap'],
+    since: Math.floor(Date.now() / 1000) - 86400,
+  }], handleOfferEvent);
 }
-
-// Periodically check relay health
-setInterval(() => {
-  if (state.relays.length > 0) updateRelayStatus();
-}, 10000);
-
-// Key info toggle
-document.getElementById('key-toggle-btn').addEventListener('click', () => {
-  document.getElementById('key-info-bar').classList.toggle('hidden');
-});
-
-// Reset identity
-document.getElementById('reset-key-btn').addEventListener('click', () => {
-  if (!confirm('Generate a new identity? Your current key will be lost if not backed up.')) return;
-  localStorage.removeItem(STORAGE_KEY);
-  location.reload();
-});
-
-// Retry button
-document.getElementById('retry-btn').addEventListener('click', () => autoConnect());
 
 // ============================================================
 // Network-aware UI
@@ -750,20 +1916,14 @@ document.getElementById('retry-btn').addEventListener('click', () => autoConnect
 
 function applyNetworkUI() {
   const isTestnet = state.network === 'testnet';
-  // Hide devnet-only buttons on testnet
   document.querySelectorAll('.devnet-only').forEach(el => {
     el.classList.toggle('hidden', isTestnet);
   });
-  // Show testnet-only elements
   document.querySelectorAll('.testnet-only').forEach(el => {
     el.classList.toggle('hidden', !isTestnet);
   });
-  // Faucet links
-  document.getElementById('faucet-links').classList.toggle('hidden', !isTestnet);
 
-  if (isTestnet) {
-    refreshUtxos();
-  }
+  if (isTestnet) refreshUtxos();
 }
 
 async function refreshUtxos() {
@@ -782,11 +1942,79 @@ async function refreshUtxos() {
   } catch {}
 }
 
-document.getElementById('refresh-utxos-btn').addEventListener('click', refreshUtxos);
+// ============================================================
+// Relay Health
+// ============================================================
 
-document.getElementById('utxo-select').addEventListener('change', (e) => {
-  state.selectedUtxo = e.target.value ? JSON.parse(e.target.value) : null;
+function updateRelayStatus() {
+  const el = document.getElementById('relay-status');
+  const alive = state.relays.filter(r => r.ws.readyState === WebSocket.OPEN).length;
+  const total = state.relays.length;
+  el.textContent = `${alive}/${total} relays`;
+  el.style.color = alive === 0 ? '#f85149' : alive < total ? '#d29922' : '#2ea043';
+}
+
+setInterval(() => {
+  if (state.relays.length > 0) updateRelayStatus();
+}, 10000);
+
+// ============================================================
+// Balance
+// ============================================================
+
+let balancePollTimer = null;
+
+async function refreshBalance() {
+  if (!state.token) return;
+  try {
+    const res = await fetch(`${API}/api/balance/${state.token}`);
+    const bal = await res.json();
+
+    const btcEl = document.getElementById('bal-btc');
+    const alphEl = document.getElementById('bal-alph');
+
+    btcEl.textContent = `${bal.btc} BTC`;
+    alphEl.textContent = `${bal.alph} ALPH`;
+
+    // Highlight BTC if any unconfirmed UTXOs
+    const hasPendingBtc = (bal.btcUnconfirmedSat || 0) > 0;
+    btcEl.classList.toggle('pending', hasPendingBtc);
+    if (hasPendingBtc) btcEl.title = `${(bal.btcConfirmedSat / 1e8).toFixed(8)} confirmed + ${(bal.btcUnconfirmedSat / 1e8).toFixed(8)} unconfirmed`;
+    else btcEl.title = '';
+
+    // If there are unconfirmed funds, auto-poll until confirmed
+    if (hasPendingBtc && !balancePollTimer) {
+      balancePollTimer = setInterval(async () => {
+        await refreshBalance();
+      }, 10000);
+    } else if (!hasPendingBtc && balancePollTimer) {
+      clearInterval(balancePollTimer);
+      balancePollTimer = null;
+    }
+  } catch {}
+}
+
+// ============================================================
+// UI Event Handlers
+// ============================================================
+
+// Refresh balance
+document.getElementById('refresh-bal-btn').addEventListener('click', refreshBalance);
+
+// Key info toggle
+document.getElementById('key-toggle-btn').addEventListener('click', () => {
+  document.getElementById('key-info-bar').classList.toggle('visible');
 });
+
+// Reset identity
+document.getElementById('reset-key-btn').addEventListener('click', () => {
+  if (!confirm('Generate a new identity? Your current key will be lost if not backed up.')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  location.reload();
+});
+
+// Retry button
+document.getElementById('retry-btn').addEventListener('click', () => autoConnect());
 
 // Copy buttons
 document.querySelectorAll('.copy-btn').forEach(btn => {
@@ -802,541 +2030,89 @@ document.querySelectorAll('.copy-btn').forEach(btn => {
   });
 });
 
-// ============================================================
-// Event Subscription
-// ============================================================
-
-function subscribeToEvents() {
-  // Only subscribe to swap protocol events from us or our peer, tagged with our session
-  const authors = [state.pubKeyHex];
-  if (state.peerPubHex) authors.push(state.peerPubHex);
-
-  const filters = [
-    // Swap protocol events (always scoped to our authors)
-    { kinds: [SWAP_SETUP_KIND, SWAP_NONCE_KIND, SWAP_PRESIG_KIND, SWAP_CLAIM_KIND], authors },
-    // Our own chat messages tagged with atomicswap
-    { kinds: [1], authors: [state.pubKeyHex], '#t': ['atomicswap'] },
-  ];
-  // If we have a peer, also get their atomicswap chat
-  if (state.peerPubHex) {
-    filters.push({ kinds: [1], authors: [state.peerPubHex], '#t': ['atomicswap'] });
-  }
-
-  subscribe('swap_events', filters, (event) => {
-    const isMine = event.pubkey === state.pubKeyHex;
-    const authorLabel = isMine ? 'You' : event.pubkey.slice(0, 8) + '...';
-
-    if (event.kind === 1) {
-      addMessage('chat', event.content, authorLabel);
-    } else {
-      addProtocolMsg(event.kind, event.content, authorLabel);
-    }
-  });
-}
-
-// Re-subscribe when peer is set (to include their events)
-function resubscribeWithPeer() {
-  const unsub = state.subscriptions.get('swap_events');
-  if (unsub) unsub();
-  subscribeToEvents();
-}
-
-// ============================================================
-// Chat
-// ============================================================
-
-document.getElementById('send-chat-btn').addEventListener('click', sendChat);
-document.getElementById('chat-msg').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') sendChat();
+// UTXO select
+document.getElementById('utxo-select').addEventListener('change', (e) => {
+  state.selectedUtxo = e.target.value ? JSON.parse(e.target.value) : null;
 });
 
-async function sendChat() {
-  const input = document.getElementById('chat-msg');
-  const msg = input.value.trim();
-  if (!msg) return;
-  input.value = '';
-  try {
-    const event = await createChatEvent(msg);
-    await nostrPublish(event);
-  } catch (e) {
-    addMessage('chat', `Error: ${e.message}`, 'System');
+document.getElementById('refresh-utxos-btn').addEventListener('click', refreshUtxos);
+
+// Direction toggle
+document.querySelectorAll('#direction-toggle button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#direction-toggle button').forEach(b => {
+      b.classList.remove('active', 'sell', 'buy');
+    });
+    btn.classList.add('active');
+    btn.classList.add(btn.dataset.dir === 'sell_alph' ? 'sell' : 'buy');
+    updateRateDisplay();
+  });
+});
+
+// Rate display
+function updateRateDisplay() {
+  const alphVal = parseFloat(document.getElementById('offer-alph').value) || 0;
+  const btcSat = parseInt(document.getElementById('offer-btc-sat').value) || 0;
+  const el = document.getElementById('rate-display');
+  if (alphVal > 0 && btcSat > 0) {
+    const rate = (alphVal / (btcSat / 1e8)).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    el.textContent = `Rate: ${rate} ALPH/BTC`;
+  } else {
+    el.textContent = 'Rate: --';
   }
 }
 
-// ============================================================
-// Balance
-// ============================================================
+document.getElementById('offer-alph').addEventListener('input', updateRateDisplay);
+document.getElementById('offer-btc-sat').addEventListener('input', updateRateDisplay);
+updateRateDisplay();
 
-document.getElementById('refresh-bal-btn').addEventListener('click', refreshBalance);
+// Publish offer
+document.getElementById('publish-offer-btn').addEventListener('click', publishOffer);
 
-async function refreshBalance() {
-  if (!state.token) return;
-  try {
-    const res = await fetch(`${API}/api/balance/${state.token}`);
-    const bal = await res.json();
-    document.getElementById('bal-btc').textContent = `${bal.btc} BTC`;
-    document.getElementById('bal-alph').textContent = `${bal.alph} ALPH`;
-  } catch {}
-}
-
-// ============================================================
-// Devnet Helpers
-// ============================================================
-
+// Devnet: Fund
 document.getElementById('fund-btn').addEventListener('click', async () => {
   if (!state.token) return;
   const btn = document.getElementById('fund-btn');
   btn.disabled = true; btn.textContent = 'Funding...';
   try {
-    // Set role first so server knows how much ALPH to fund
-    const role = document.getElementById('role-select').value;
-    state.role = role;
+    const direction = document.querySelector('#direction-toggle button.active').dataset.dir;
+    const role = direction === 'sell_alph' ? 'alice' : 'bob';
     await apiPost('/api/swap/init', { token: state.token, role, peerPubHex: state.pubKeyHex, sessionId: 'temp' });
-
     const result = await apiPost('/api/fund', { token: state.token });
-    addMessage('chat', `Funded: ${result.alphAmount ? (Number(BigInt(result.alphAmount)) / 1e18).toFixed(0) : '?'} ALPH + BTC coinbase (txid: ${result.coinbaseTxid.slice(0, 16)}...)`, 'System');
+    addLogMsg('system', `Funded: ${result.alphAmount ? (Number(BigInt(result.alphAmount)) / 1e18).toFixed(0) : '?'} ALPH + BTC coinbase`, 'System');
     await refreshBalance();
   } catch (e) {
-    addMessage('chat', `Fund error: ${e.message}`, 'System');
+    addLogMsg('system', `Fund error: ${e.message}`, 'Error');
   }
-  btn.disabled = false; btn.textContent = 'Fund Wallet';
+  btn.disabled = false; btn.textContent = 'Fund';
 });
 
+// Devnet: Mine
 document.getElementById('mine-btn').addEventListener('click', async () => {
   if (!state.token) return;
   try {
     await apiPost('/api/mine', { token: state.token, blocks: 1 });
-    addMessage('chat', 'Mined 1 block', 'System');
+    addLogMsg('system', 'Mined 1 block', 'System');
     await refreshBalance();
   } catch (e) {
-    addMessage('chat', `Mine error: ${e.message}`, 'System');
+    addLogMsg('system', `Mine error: ${e.message}`, 'Error');
   }
 });
 
-// ============================================================
-// Start Swap
-// ============================================================
-
-document.getElementById('start-swap-btn').addEventListener('click', async () => {
-  const role = document.getElementById('role-select').value;
-  const peerPub = document.getElementById('peer-input').value.trim();
-  if (!peerPub) return alert('Enter peer pubkey');
-
-  state.role = role;
-  state.peerPubHex = peerPub;
-  resubscribeWithPeer();
-
-  const btcAmount = parseFloat(document.getElementById('btc-amount').value) || 0.5;
-  const alphAmount = (parseFloat(document.getElementById('alph-amount').value) || 10);
-
-  // Show UTXO selector for Bob on testnet
-  if (state.network === 'testnet' && role === 'bob') {
-    document.getElementById('utxo-bar').classList.remove('hidden');
-    refreshUtxos();
-  } else {
-    document.getElementById('utxo-bar').classList.add('hidden');
-  }
-
-  addMessage('chat', `Starting swap as ${role}: ${btcAmount} BTC <-> ${alphAmount} ALPH`, 'System');
-
-  // If Alice, create offer event as session anchor
-  if (role === 'alice') {
-    const offerEvent = await signEvent({
-      kind: 1,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [['t', 'atomicswap']],
-      content: `Selling ${alphAmount} ALPH for ${btcAmount} BTC. DM me if interested.`,
-    });
-    await nostrPublish(offerEvent);
-    state.sessionId = offerEvent.id;
-    addMessage('chat', `Session ID: ${state.sessionId.slice(0, 16)}...`, 'System');
-  } else {
-    // Bob needs to enter session ID or we auto-discover
-    const sessionId = prompt('Enter session ID (Alice\'s offer event ID):');
-    if (!sessionId) return;
-    state.sessionId = sessionId;
-  }
-
-  // Init on server
+// Testnet: ALPH faucet
+document.getElementById('alph-faucet-btn').addEventListener('click', async () => {
+  if (!state.token) return;
+  const btn = document.getElementById('alph-faucet-btn');
+  btn.disabled = true; btn.textContent = 'Requesting...';
   try {
-    const initResult = await apiPost('/api/swap/init', {
-      token: state.token,
-      role,
-      peerPubHex: peerPub,
-      btcAmount,
-      alphAmount: String(BigInt(Math.round(alphAmount * 1e18))),
-      sessionId: state.sessionId,
-    });
-
-    if (role === 'alice') {
-      state.stepData.setup = { adaptorPoint: initResult.adaptorPoint };
-    }
-
-    updateStep('setup', { status: 'pending', info: role === 'alice' ? `adaptorPoint: ${initResult.adaptorPoint?.slice(0, 24)}...` : 'Ready to receive setup' });
-    addMessage('chat', `Swap initialized as ${role}`, 'System');
+    const result = await apiPost('/api/faucet-alph', { token: state.token });
+    addLogMsg('system', `ALPH faucet: ${result.message}`, 'System');
+    setTimeout(() => refreshBalance(), 5000);
   } catch (e) {
-    addMessage('chat', `Init error: ${e.message}`, 'System');
+    addLogMsg('system', `ALPH faucet error: ${e.message}`, 'Error');
   }
+  btn.disabled = false; btn.textContent = 'Get ALPH';
 });
-
-// ============================================================
-// Step Execution
-// ============================================================
-
-async function executeStep(stepId) {
-  updateStep(stepId, { status: 'active', error: null });
-  try {
-    if (state.role === 'alice') {
-      await executeStepAlice(stepId);
-    } else {
-      await executeStepBob(stepId);
-    }
-    updateStep(stepId, { status: 'done' });
-  } catch (e) {
-    updateStep(stepId, { status: 'error', error: e.message });
-    addMessage('chat', `Step ${stepId} error: ${e.message}`, 'System');
-  }
-}
-
-// ── Alice Steps ──
-
-async function executeStepAlice(stepId) {
-  const sid = state.sessionId;
-  const peer = state.peerPubHex;
-
-  if (stepId === 'setup') {
-    // Send confirmation with adaptor point
-    const ap = state.stepData.setup?.adaptorPoint;
-    const event = await createSwapSetup({
-      sessionId: sid, recipientPubHex: peer, msgType: 'confirm',
-      pubkey: state.pubKeyHex, adaptorPoint: ap,
-    });
-    await nostrPublish(event);
-    updateStep('setup', { info: `adaptorPoint: ${ap?.slice(0, 24)}...\nWaiting for Bob's BTC lock...` });
-
-    // Wait for btc_locked
-    const btcLockedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sid, peer,
-      (e) => JSON.parse(e.content).type === 'btc_locked');
-    const btcLocked = JSON.parse(btcLockedEvent.content);
-
-    // Verify BTC
-    await apiPost('/api/swap/verify-btc', {
-      token: state.token, txid: btcLocked.txid, vout: btcLocked.vout,
-    });
-
-    updateStep('setup', { info: `BTC locked: ${btcLocked.txid.slice(0, 16)}... vout=${btcLocked.vout}\nBTC verified. Deploying ALPH...` });
-    // Auto-advance to lock
-    updateStep('lock', { status: 'active' });
-    await executeStepAliceLock();
-    updateStep('lock', { status: 'done' });
-
-  } else if (stepId === 'lock') {
-    await executeStepAliceLock();
-
-  } else if (stepId === 'nonces') {
-    await executeNonces();
-
-  } else if (stepId === 'presign') {
-    await executePresign();
-
-  } else if (stepId === 'claim') {
-    // Claim BTC
-    const result = await apiPost('/api/swap/claim-btc', { token: state.token });
-    updateStep('claim', { info: `BTC claimed! txid: ${result.txid.slice(0, 24)}...` });
-
-    // Publish claim notification
-    const event = await createSwapClaim({
-      sessionId: sid, recipientPubHex: peer, claimType: 'btc_claimed',
-      txid: result.txid,
-    });
-    await nostrPublish(event);
-
-    // Wait for Bob's ALPH claim
-    updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nWaiting for Bob to claim ALPH...` });
-    const alphClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sid, peer,
-      (e) => JSON.parse(e.content).type === 'alph_claimed');
-    const alphClaimed = JSON.parse(alphClaimedEvent.content);
-    updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nBob claimed ALPH: ${alphClaimed.txid.slice(0, 16)}...` });
-    await refreshBalance();
-  }
-}
-
-async function executeStepAliceLock() {
-  const sid = state.sessionId;
-  const peer = state.peerPubHex;
-
-  // Deploy ALPH contract
-  const deployResult = await apiPost('/api/swap/deploy-alph', { token: state.token });
-  updateStep('lock', { info: `ALPH deployed: ${deployResult.contractAddress.slice(0, 16)}...\nSending contract info...` });
-
-  // Send contract info
-  const event = await createSwapSetup({
-    sessionId: sid, recipientPubHex: peer, msgType: 'alph_deployed',
-    contractId: deployResult.contractId, contractAddress: deployResult.contractAddress,
-  });
-  await nostrPublish(event);
-
-  // Wait for Bob's verification
-  updateStep('lock', { info: `ALPH deployed: ${deployResult.contractAddress.slice(0, 16)}...\nWaiting for Bob to verify...` });
-  await waitForSwapEvent(SWAP_SETUP_KIND, sid, peer,
-    (e) => JSON.parse(e.content).type === 'verified');
-
-  // Compute context
-  await apiPost('/api/swap/compute-context', { token: state.token });
-  updateStep('lock', { info: `ALPH: ${deployResult.contractAddress.slice(0, 16)}... | Bob verified | Context computed` });
-}
-
-// ── Bob Steps ──
-
-async function executeStepBob(stepId) {
-  const sid = state.sessionId;
-  const peer = state.peerPubHex;
-
-  if (stepId === 'setup') {
-    // Wait for Alice's confirmation
-    updateStep('setup', { info: 'Waiting for Alice\'s confirmation...' });
-    const confirmEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sid, peer,
-      (e) => JSON.parse(e.content).type === 'confirm');
-    const confirm = JSON.parse(confirmEvent.content);
-
-    // Store adaptor point on server
-    await apiPost('/api/swap/init', {
-      token: state.token, role: 'bob', peerPubHex: peer,
-      adaptorPoint: confirm.adaptorPoint, sessionId: sid,
-    });
-
-    updateStep('setup', { info: `adaptorPoint: ${confirm.adaptorPoint.slice(0, 24)}...\nLocking BTC...` });
-
-    // Auto-advance to lock
-    updateStep('lock', { status: 'active' });
-    await executeStepBobLock();
-    updateStep('lock', { status: 'done' });
-
-  } else if (stepId === 'lock') {
-    await executeStepBobLock();
-
-  } else if (stepId === 'nonces') {
-    await executeNonces();
-
-  } else if (stepId === 'presign') {
-    await executePresign();
-
-  } else if (stepId === 'claim') {
-    // Wait for Alice's BTC claim
-    updateStep('claim', { info: 'Waiting for Alice to claim BTC...' });
-    const btcClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sid, peer,
-      (e) => JSON.parse(e.content).type === 'btc_claimed');
-    const btcClaimed = JSON.parse(btcClaimedEvent.content);
-
-    updateStep('claim', { info: `Alice claimed BTC: ${btcClaimed.txid.slice(0, 16)}...\nExtracting secret and claiming ALPH...` });
-
-    // Claim ALPH (server extracts t and claims)
-    const result = await apiPost('/api/swap/claim-alph', {
-      token: state.token, btcClaimTxid: btcClaimed.txid,
-    });
-
-    // Publish claim notification
-    const event = await createSwapClaim({
-      sessionId: sid, recipientPubHex: peer, claimType: 'alph_claimed',
-      txid: result.txid,
-    });
-    await nostrPublish(event);
-
-    updateStep('claim', { info: `Alice BTC: ${btcClaimed.txid.slice(0, 16)}...\nALPH claimed: ${result.txid.slice(0, 16)}...` });
-    await refreshBalance();
-  }
-}
-
-async function executeStepBobLock() {
-  const sid = state.sessionId;
-  const peer = state.peerPubHex;
-
-  // Lock BTC — pass selected UTXO on testnet
-  const lockBody = { token: state.token };
-  if (state.network === 'testnet' && state.selectedUtxo) {
-    lockBody.utxoTxid = state.selectedUtxo.txid;
-    lockBody.utxoVout = state.selectedUtxo.vout;
-    lockBody.utxoValue = state.selectedUtxo.value;
-  }
-  const lockResult = await apiPost('/api/swap/lock-btc', lockBody);
-  updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}... vout=${lockResult.vout}\nPublishing...` });
-
-  // Publish btc_locked
-  const event = await createSwapSetup({
-    sessionId: sid, recipientPubHex: peer, msgType: 'btc_locked',
-    txid: lockResult.txid, vout: lockResult.vout, amountSat: lockResult.amountSat,
-  });
-  await nostrPublish(event);
-
-  // Wait for ALPH deployment
-  updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}...\nWaiting for Alice to deploy ALPH...` });
-  const alphDeployedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sid, peer,
-    (e) => JSON.parse(e.content).type === 'alph_deployed');
-  const alphDeployed = JSON.parse(alphDeployedEvent.content);
-
-  // Verify ALPH
-  await apiPost('/api/swap/verify-alph', {
-    token: state.token,
-    contractId: alphDeployed.contractId,
-    contractAddress: alphDeployed.contractAddress,
-  });
-
-  // Send verified
-  const verifiedEvent = await createSwapSetup({
-    sessionId: sid, recipientPubHex: peer, msgType: 'verified',
-  });
-  await nostrPublish(verifiedEvent);
-
-  // Compute context
-  await apiPost('/api/swap/compute-context', { token: state.token });
-  updateStep('lock', { info: `BTC: ${lockResult.txid.slice(0, 16)}... | ALPH: ${alphDeployed.contractAddress.slice(0, 12)}... | Verified` });
-}
-
-// ── Shared Steps ──
-
-async function executeNonces() {
-  const sid = state.sessionId;
-  const peer = state.peerPubHex;
-  const isAlice = state.role === 'alice';
-
-  // Generate nonce commitments
-  const commitResult = await apiPost('/api/swap/nonce-commit', { token: state.token });
-
-  if (isAlice) {
-    // Alice sends first
-    const commitEvent = await createSwapNonce({
-      sessionId: sid, recipientPubHex: peer, phase: 'commit',
-      btcNonceHash: commitResult.btcNonceHash, alphNonceHash: commitResult.alphNonceHash,
-    });
-    await nostrPublish(commitEvent);
-    updateStep('nonces', { info: 'Commitment sent. Waiting for peer...' });
-
-    // Wait for peer commit
-    const peerCommitEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sid, peer,
-      (e) => JSON.parse(e.content).phase === 'commit');
-    const peerCommit = JSON.parse(peerCommitEvent.content);
-
-    // Reveal
-    const revealResult = await apiPost('/api/swap/nonce-reveal', {
-      token: state.token,
-      peerBtcNonceHash: peerCommit.btcNonceHash,
-      peerAlphNonceHash: peerCommit.alphNonceHash,
-    });
-
-    const revealEvent = await createSwapNonce({
-      sessionId: sid, recipientPubHex: peer, phase: 'reveal',
-      btcPubNonce: revealResult.btcPubNonce, alphPubNonce: revealResult.alphPubNonce,
-    });
-    await nostrPublish(revealEvent);
-    updateStep('nonces', { info: 'Nonces revealed. Waiting for peer reveal...' });
-
-    // Wait for peer reveal
-    const peerRevealEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sid, peer,
-      (e) => JSON.parse(e.content).phase === 'reveal');
-    const peerReveal = JSON.parse(peerRevealEvent.content);
-
-    // Verify
-    await apiPost('/api/swap/nonce-verify', {
-      token: state.token,
-      peerBtcPubNonce: peerReveal.btcPubNonce,
-      peerAlphPubNonce: peerReveal.alphPubNonce,
-    });
-
-  } else {
-    // Bob waits first
-    updateStep('nonces', { info: 'Waiting for Alice\'s commitment...' });
-    const peerCommitEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sid, peer,
-      (e) => JSON.parse(e.content).phase === 'commit');
-    const peerCommit = JSON.parse(peerCommitEvent.content);
-
-    // Send our commit
-    const commitEvent = await createSwapNonce({
-      sessionId: sid, recipientPubHex: peer, phase: 'commit',
-      btcNonceHash: commitResult.btcNonceHash, alphNonceHash: commitResult.alphNonceHash,
-    });
-    await nostrPublish(commitEvent);
-
-    // Wait for peer reveal
-    updateStep('nonces', { info: 'Commitment exchanged. Waiting for peer reveal...' });
-    const peerRevealEvent = await waitForSwapEvent(SWAP_NONCE_KIND, sid, peer,
-      (e) => JSON.parse(e.content).phase === 'reveal');
-    const peerReveal = JSON.parse(peerRevealEvent.content);
-
-    // Send our reveal
-    const revealResult = await apiPost('/api/swap/nonce-reveal', {
-      token: state.token,
-      peerBtcNonceHash: peerCommit.btcNonceHash,
-      peerAlphNonceHash: peerCommit.alphNonceHash,
-    });
-
-    const revealEvent = await createSwapNonce({
-      sessionId: sid, recipientPubHex: peer, phase: 'reveal',
-      btcPubNonce: revealResult.btcPubNonce, alphPubNonce: revealResult.alphPubNonce,
-    });
-    await nostrPublish(revealEvent);
-
-    // Verify peer
-    await apiPost('/api/swap/nonce-verify', {
-      token: state.token,
-      peerBtcPubNonce: peerReveal.btcPubNonce,
-      peerAlphPubNonce: peerReveal.alphPubNonce,
-    });
-  }
-
-  updateStep('nonces', { info: 'Nonces committed, revealed, verified, and aggregated' });
-}
-
-async function executePresign() {
-  const sid = state.sessionId;
-  const peer = state.peerPubHex;
-  const isAlice = state.role === 'alice';
-
-  // Generate our presigs
-  const presigResult = await apiPost('/api/swap/presign', { token: state.token });
-
-  if (isAlice) {
-    // Alice sends first
-    const presigEvent = await createSwapPresig({
-      sessionId: sid, recipientPubHex: peer,
-      btcPresig: presigResult.btcPresig, alphPresig: presigResult.alphPresig,
-    });
-    await nostrPublish(presigEvent);
-    updateStep('presign', { info: 'Pre-signatures sent. Waiting for peer...' });
-
-    // Wait for peer presigs
-    const peerPresigEvent = await waitForSwapEvent(SWAP_PRESIG_KIND, sid, peer);
-    const peerPresigs = JSON.parse(peerPresigEvent.content);
-
-    // Verify and aggregate
-    await apiPost('/api/swap/verify-presig', {
-      token: state.token,
-      peerBtcPresig: peerPresigs.btcPresig,
-      peerAlphPresig: peerPresigs.alphPresig,
-    });
-
-  } else {
-    // Bob waits first
-    updateStep('presign', { info: 'Waiting for Alice\'s pre-signatures...' });
-    const peerPresigEvent = await waitForSwapEvent(SWAP_PRESIG_KIND, sid, peer);
-    const peerPresigs = JSON.parse(peerPresigEvent.content);
-
-    // Verify peer's presigs
-    await apiPost('/api/swap/verify-presig', {
-      token: state.token,
-      peerBtcPresig: peerPresigs.btcPresig,
-      peerAlphPresig: peerPresigs.alphPresig,
-    });
-
-    // Send our presigs
-    const presigEvent = await createSwapPresig({
-      sessionId: sid, recipientPubHex: peer,
-      btcPresig: presigResult.btcPresig, alphPresig: presigResult.alphPresig,
-    });
-    await nostrPublish(presigEvent);
-  }
-
-  updateStep('presign', { info: 'Pre-signatures exchanged, verified, aggregated with taproot tweak' });
-}
 
 // ============================================================
 // Init

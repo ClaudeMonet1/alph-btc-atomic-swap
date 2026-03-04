@@ -106,6 +106,8 @@ export class SwapEngine {
     this.deployResult = null;
     this.ctx = null;
 
+    this.btcClaimTxid = null;
+
     this.btcNonce = null;
     this.alphNonce = null;
     this.peerBtcNonceHash = null;
@@ -458,6 +460,7 @@ export class SwapEngine {
     );
     const signedTxHex = finalizeKeyPathSpend(psbt, btcFinalSig);
     const claimTxid = await broadcastTx(signedTxHex);
+    this.btcClaimTxid = claimTxid;
 
     return { txid: claimTxid };
   }
@@ -549,5 +552,139 @@ export class SwapEngine {
     const refundTxid = await broadcastTx(refundTxHex);
 
     return { txid: refundTxid };
+  }
+
+  // ── Serialization: Checkpoint ──
+
+  getCheckpoint() {
+    if (this.btcClaimTxid) return 'btc_claimed';
+    if (this.btcAdaptorAgg && this.alphAdaptorAgg) return 'presigned';
+    if (this.btcLockTxid && this.contractId) return 'locked';
+    return null;
+  }
+
+  toJSON() {
+    const hex = (v) => v ? bytesToHex(v) : null;
+    const aggToJSON = (agg) => agg ? { R: hex(agg.R), s: hex(agg.s), negR: agg.negR } : null;
+    const nonceToJSON = (n) => n ? { secNonce: hex(n.secNonce), pubNonce: hex(n.pubNonce) } : null;
+
+    // Save compiled bytecodes so we don't need recompilation on restore
+    let compiledData = null;
+    if (this.compiled) {
+      compiledData = {
+        contract: {
+          bytecode: this.compiled.contract.bytecode,
+          fields: this.compiled.contract.fields,
+          name: this.compiled.contract.name,
+        },
+        claimScript: {
+          bytecodeTemplate: this.compiled.claimScript.bytecodeTemplate,
+          fields: this.compiled.claimScript.fields,
+          name: this.compiled.claimScript.name,
+        },
+        refundScript: {
+          bytecodeTemplate: this.compiled.refundScript.bytecodeTemplate,
+          fields: this.compiled.refundScript.fields,
+          name: this.compiled.refundScript.name,
+        },
+        structs: this.compiled.structs || [],
+      };
+    }
+
+    return {
+      version: 1,
+      role: this.role,
+      peerPubHex: this.peerPubHex,
+      btcAmount: this.btcAmount,
+      btcSat: this.btcSat,
+      alphAmount: String(this.alphAmount),
+      csvTimeout: this.csvTimeout,
+      alphTimeoutMs: this.alphTimeoutMs,
+      adaptorSecret: hex(this.adaptorSecret),
+      adaptorPoint: this.adaptorPoint ? hex(pointToBytes(this.adaptorPoint)) : null,
+      peerAdaptorPoint: this.peerAdaptorPoint ? hex(pointToBytes(this.peerAdaptorPoint)) : null,
+      btcLockTxid: this.btcLockTxid,
+      btcLockVout: this.btcLockVout,
+      contractId: this.contractId,
+      contractAddress: this.contractAddress,
+      compiled: compiledData,
+      btcNonce: nonceToJSON(this.btcNonce),
+      alphNonce: nonceToJSON(this.alphNonce),
+      peerBtcNonceHash: this.peerBtcNonceHash,
+      peerAlphNonceHash: this.peerAlphNonceHash,
+      peerBtcPubNonce: hex(this.peerBtcPubNonce),
+      peerAlphPubNonce: hex(this.peerAlphPubNonce),
+      btcAggNonce: hex(this.btcAggNonce),
+      alphAggNonce: hex(this.alphAggNonce),
+      myBtcPresig: hex(this.myBtcPresig),
+      myAlphPresig: hex(this.myAlphPresig),
+      peerBtcPresig: hex(this.peerBtcPresig),
+      peerAlphPresig: hex(this.peerAlphPresig),
+      btcAdaptorAgg: aggToJSON(this.btcAdaptorAgg),
+      alphAdaptorAgg: aggToJSON(this.alphAdaptorAgg),
+      btcTweakedAgg: aggToJSON(this.btcTweakedAgg),
+      btcClaimTxid: this.btcClaimTxid,
+    };
+  }
+
+  restoreFromJSON(data) {
+    if (data.version !== 1) throw new Error(`Unknown swap state version: ${data.version}`);
+
+    const bytes = (h) => h ? hexToBytes(h) : null;
+    const point = (h) => h ? lift_x(bytesToNum(hexToBytes(h))) : null;
+    const aggFromJSON = (a) => a ? { R: bytes(a.R), s: bytes(a.s), negR: a.negR } : null;
+    const nonceFromJSON = (n) => n ? { secNonce: bytes(n.secNonce), pubNonce: bytes(n.pubNonce) } : null;
+
+    this.role = data.role;
+    this.peerPubHex = data.peerPubHex;
+    this.btcAmount = data.btcAmount;
+    this.btcSat = data.btcSat;
+    this.alphAmount = BigInt(data.alphAmount);
+    this.csvTimeout = data.csvTimeout;
+    this.alphTimeoutMs = data.alphTimeoutMs;
+    this.adaptorSecret = bytes(data.adaptorSecret);
+    this.adaptorPoint = point(data.adaptorPoint);
+    this.peerAdaptorPoint = point(data.peerAdaptorPoint);
+    this.btcLockTxid = data.btcLockTxid;
+    this.btcLockVout = data.btcLockVout;
+    this.contractId = data.contractId;
+    this.contractAddress = data.contractAddress;
+    this.btcNonce = nonceFromJSON(data.btcNonce);
+    this.alphNonce = nonceFromJSON(data.alphNonce);
+    this.peerBtcNonceHash = data.peerBtcNonceHash;
+    this.peerAlphNonceHash = data.peerAlphNonceHash;
+    this.peerBtcPubNonce = bytes(data.peerBtcPubNonce);
+    this.peerAlphPubNonce = bytes(data.peerAlphPubNonce);
+    this.btcAggNonce = bytes(data.btcAggNonce);
+    this.alphAggNonce = bytes(data.alphAggNonce);
+    this.myBtcPresig = bytes(data.myBtcPresig);
+    this.myAlphPresig = bytes(data.myAlphPresig);
+    this.peerBtcPresig = bytes(data.peerBtcPresig);
+    this.peerAlphPresig = bytes(data.peerAlphPresig);
+    this.btcAdaptorAgg = aggFromJSON(data.btcAdaptorAgg);
+    this.alphAdaptorAgg = aggFromJSON(data.alphAdaptorAgg);
+    this.btcTweakedAgg = aggFromJSON(data.btcTweakedAgg);
+    this.btcClaimTxid = data.btcClaimTxid;
+
+    // Restore compiled from saved bytecodes
+    if (data.compiled) {
+      this.compiled = {
+        contract: data.compiled.contract,
+        claimScript: data.compiled.claimScript,
+        refundScript: data.compiled.refundScript,
+        structs: data.compiled.structs || [],
+      };
+    }
+  }
+
+  async rehydrate() {
+    // Recompute shared context if we have enough state
+    if (this.btcLockTxid && this.contractId && this.peerPubHex) {
+      this.computeContext();
+    }
+    // If compiled wasn't saved, fetch from node
+    if (!this.compiled && this.contractId) {
+      this.compiled = await compileSwapContract();
+    }
   }
 }
