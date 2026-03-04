@@ -121,8 +121,17 @@ export function createSwapOutput(aggPubkey, bobPubkey, timeoutBlocks) {
 
 // ---- Verify funded swap output ----
 
-export async function verifySwapOutput(txid, expectedAddress, minAmountBtc, { allowUnconfirmed = false } = {}) {
-  const tx = await esploraApi(`/tx/${txid}`);
+export async function verifySwapOutput(txid, expectedAddress, minAmountBtc, { allowUnconfirmed = false, maxRetries = 10, retryMs = 3000 } = {}) {
+  let tx;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      tx = await esploraApi(`/tx/${txid}`);
+      break;
+    } catch (e) {
+      if (i === maxRetries - 1) throw e;
+      await new Promise(r => setTimeout(r, retryMs));
+    }
+  }
   const confirmed = tx.status?.confirmed || false;
   if (!allowUnconfirmed && !confirmed) throw new Error(`Swap tx ${txid} not yet confirmed`);
 
