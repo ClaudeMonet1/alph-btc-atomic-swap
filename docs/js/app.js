@@ -20,6 +20,7 @@ const state = {
   npub: null,
   btcAddress: null,
   alphAddress: null,
+  alphGroupAddresses: [],
   nsecBech32: null,
   network: 'testnet',
   // Relays
@@ -1323,6 +1324,7 @@ async function autoConnect() {
     state.engine = new SwapEngine(state.secBytes, pubKey);
     state.btcAddress = state.engine.btcAddress;
     state.alphAddress = state.engine.alphAddress;
+    state.alphGroupAddresses = state.engine.alphGroupKeys.map(k => k.address);
     state.network = 'testnet';
 
     statusEl.textContent = 'Connecting to Nostr relays...';
@@ -1333,7 +1335,9 @@ async function autoConnect() {
     document.getElementById('main-screen').classList.add('active');
     document.getElementById('info-npub').textContent = state.npub;
     document.getElementById('info-btc').textContent = state.btcAddress;
-    document.getElementById('info-alph').textContent = state.alphAddress;
+    for (let g = 0; g < 4; g++) {
+      document.getElementById(`info-alph-${g}`).textContent = state.alphGroupAddresses[g];
+    }
 
     // nsec in bech32 (stored in state, shown only when revealed)
     state.nsecBech32 = nsecEncode(nsecHex);
@@ -1423,6 +1427,18 @@ async function refreshBalance() {
     btcEl.textContent = `${bal.btc} BTC`;
     alphEl.textContent = `${bal.alph} ALPH`;
 
+    // Show per-group ALPH balances on each address line
+    if (bal.alphGroupBalances) {
+      for (const gb of bal.alphGroupBalances) {
+        const el = document.getElementById(`info-alph-${gb.group}`);
+        if (el) {
+          const addr = state.alphGroupAddresses[gb.group];
+          const balStr = gb.balance > 0n ? ` (${(Number(gb.balance) / 1e18).toFixed(2)})` : '';
+          el.textContent = addr + balStr;
+        }
+      }
+    }
+
     const hasPendingBtc = (bal.btcUnconfirmedSat || 0) > 0;
     btcEl.classList.toggle('pending', hasPendingBtc);
     if (hasPendingBtc) btcEl.title = `${(bal.btcConfirmedSat / 1e8).toFixed(8)} confirmed + ${(bal.btcUnconfirmedSat / 1e8).toFixed(8)} unconfirmed`;
@@ -1466,6 +1482,7 @@ document.querySelectorAll('.copy-btn').forEach(btn => {
     const which = btn.dataset.copy;
     let text;
     if (which === 'btc') text = state.btcAddress;
+    else if (which?.startsWith('alph-')) text = state.alphGroupAddresses?.[parseInt(which.split('-')[1])];
     else if (which === 'alph') text = state.alphAddress;
     else if (which === 'npub') text = state.npub;
     else if (which === 'nsec') text = state.nsecBech32;
@@ -1562,12 +1579,16 @@ document.querySelector('.qr-btn[data-qr="npub"]').addEventListener('click', () =
   if (state.npub) showReceivePopup('npub', state.npub);
 });
 
-// Receive buttons (BTC, ALPH)
+// Receive buttons (BTC, ALPH groups)
 document.querySelectorAll('.recv-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const which = btn.dataset.recv;
     if (which === 'btc' && state.btcAddress) showReceivePopup('Receive BTC', state.btcAddress);
-    else if (which === 'alph' && state.alphAddress) showReceivePopup('Receive ALPH', state.alphAddress);
+    else if (which?.startsWith('alph-')) {
+      const g = parseInt(which.split('-')[1]);
+      const addr = state.alphGroupAddresses?.[g];
+      if (addr) showReceivePopup(`Receive ALPH (group ${g})`, addr);
+    }
   });
 });
 
@@ -1759,17 +1780,18 @@ document.getElementById('alph-faucet-btn').addEventListener('click', async () =>
   btn.disabled = true; btn.textContent = 'Wait...';
   try {
     const result = await state.engine.requestAlphFaucet();
-    addLogMsg('system', `ALPH faucet: tokens on the way!`, 'System');
+    const funded = result.results?.filter(r => r.message).length || 0;
+    addLogMsg('system', `ALPH faucet: funded ${funded}/4 group addresses`, 'System');
     setTimeout(() => refreshBalance(), 5000);
   } catch (e) {
     const msg = e.message || '';
     if (msg.includes('429') || msg.toLowerCase().includes('throttl') || msg.toLowerCase().includes('rate')) {
-      addLogMsg('system', `ALPH faucet: throttled — you already requested tokens from this IP. Try again later.`, 'System');
+      addLogMsg('system', `ALPH faucet: throttled — try again later`, 'System');
     } else {
       addLogMsg('system', `ALPH faucet error: ${msg}`, 'Error');
     }
   }
-  btn.disabled = false; btn.textContent = 'Faucet';
+  btn.disabled = false; btn.textContent = 'Faucet All';
 });
 
 // ============================================================
