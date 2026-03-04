@@ -548,7 +548,7 @@ function explorerLink(chain, address, text) {
   if (chain === 'btc') {
     return `<a href="https://mempool.space/signet/address/${address}" target="_blank" title="${address}" class="amount-link">${text}</a>`;
   }
-  return `<a href="https://explorer.testnet.alephium.org/addresses/${address}" target="_blank" title="${address}" class="amount-link">${text}</a>`;
+  return `<a href="https://testnet.alephium.org/addresses/${address}" target="_blank" title="${address}" class="amount-link">${text}</a>`;
 }
 
 function renderOffersList() {
