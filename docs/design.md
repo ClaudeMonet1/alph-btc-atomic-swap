@@ -96,7 +96,7 @@ Everything needed already exists in the Alephium VM:
 | `destroySelf!()` | Send contract funds to recipient |
 | `blockTimeStamp!()` | Timeout-based refund |
 | `checkCaller!()` | Restrict refund to deployer |
-| `bip340-schnorr` key type | PrivateKeyWallet with Schnorr signing |
+| `bip340-schnorr` key type | Direct API signing with `fromPublicKeyType` |
 | Contract deployment | Fund and deploy in one transaction |
 
 No protocol changes, no new opcodes, no forks required.

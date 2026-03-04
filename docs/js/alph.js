@@ -1,14 +1,22 @@
 // Alephium Contract Operations for Atomic Swap — Browser/Static version
 // Testnet-only (public node)
+// Uses direct node API calls for signing/submission to avoid esm.sh web3 singleton issues.
 
 import alphWeb3 from '@alephium/web3';
-const { web3, NodeProvider, ONE_ALPH, DUST_AMOUNT, addressFromPublicKey, groupOfAddress, buildContractByteCode, buildScriptByteCode } = alphWeb3;
-import alphWallet from '@alephium/web3-wallet';
-const { PrivateKeyWallet } = alphWallet;
+const { web3, ONE_ALPH, DUST_AMOUNT, addressFromPublicKey, groupOfAddress, buildContractByteCode, buildScriptByteCode } = alphWeb3;
+import { schnorr } from '@noble/curves/secp256k1';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 
 const ALPH_NODE_URL = 'https://node.testnet.alephium.org';
 web3.setCurrentNodeProvider(ALPH_NODE_URL);
-export const alphNodeProvider = new NodeProvider(ALPH_NODE_URL);
+
+// Extract 32-byte contract ID from base58-encoded contract address
+const contractIdFromAddress = alphWeb3.contractIdFromAddress || ((address) => {
+  const A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  let num = 0n;
+  for (const c of address) num = num * 58n + BigInt(A.indexOf(c));
+  return num.toString(16).padStart(66, '0').slice(2); // strip 1-byte prefix
+});
 
 // ---- Node API helpers ----
 
@@ -24,6 +32,18 @@ async function nodeApi(path, method = 'GET', body = null) {
     throw new Error(`Alephium API ${method} ${path}: ${res.status} ${text}`);
   }
   return res.json();
+}
+
+// ---- Sign and submit via direct API ----
+
+async function signAndSubmit(buildPath, buildParams, secBytes) {
+  const result = await nodeApi(buildPath, 'POST', buildParams);
+  const sig = schnorr.sign(hexToBytes(result.txId), secBytes);
+  await nodeApi('/transactions/submit', 'POST', {
+    unsignedTx: result.unsignedTx,
+    signature: bytesToHex(sig),
+  });
+  return result;
 }
 
 // ---- Ralph contract source ----
@@ -76,7 +96,7 @@ export async function compileSwapContract() {
 
 // ---- Deploy ----
 
-export async function deploySwapContract(wallet, swapKeyHex, claimAddress, refundAddress, timeoutMs, alphAmount, compiled, targetGroup) {
+export async function deploySwapContract(pubKeyHex, secBytes, swapKeyHex, claimAddress, refundAddress, timeoutMs, alphAmount, compiled) {
   const { contract, structs } = compiled;
 
   const bytecode = buildContractByteCode(
@@ -91,28 +111,25 @@ export async function deploySwapContract(wallet, swapKeyHex, claimAddress, refun
     structs,
   );
 
-  const params = {
-    signerAddress: wallet.address,
-    signerKeyType: 'bip340-schnorr',
+  const result = await signAndSubmit('/contracts/unsigned-tx/deploy-contract', {
+    fromPublicKey: pubKeyHex,
+    fromPublicKeyType: 'bip340-schnorr',
     bytecode,
-    initialAttoAlphAmount: alphAmount,
+    initialAttoAlphAmount: alphAmount.toString(),
     gasAmount: 100000,
-  };
-  if (targetGroup !== undefined) params.group = targetGroup;
-
-  const result = await wallet.signAndSubmitDeployContractTx(params);
+  }, secBytes);
 
   return {
     contractAddress: result.contractAddress,
-    contractId: result.contractId,
+    contractId: result.contractId || contractIdFromAddress(result.contractAddress),
     txId: result.txId,
-    groupIndex: result.groupIndex,
+    groupIndex: result.fromGroup,
   };
 }
 
 // ---- Claim (Bob calls swap with MuSig2 signature) ----
 
-export async function claimSwap(wallet, contractId, musig2SignatureHex, compiled, targetGroup) {
+export async function claimSwap(pubKeyHex, secBytes, contractId, musig2SignatureHex, compiled) {
   const { claimScript, structs } = compiled;
 
   const bytecode = buildScriptByteCode(
@@ -125,22 +142,20 @@ export async function claimSwap(wallet, contractId, musig2SignatureHex, compiled
     structs,
   );
 
-  const params = {
-    signerAddress: wallet.address,
-    signerKeyType: wallet.keyType || 'bip340-schnorr',
+  const result = await signAndSubmit('/contracts/unsigned-tx/execute-script', {
+    fromPublicKey: pubKeyHex,
+    fromPublicKeyType: 'bip340-schnorr',
     bytecode,
-    attoAlphAmount: DUST_AMOUNT,
+    attoAlphAmount: DUST_AMOUNT.toString(),
     gasAmount: 100000,
-  };
-  if (targetGroup !== undefined) params.group = targetGroup;
+  }, secBytes);
 
-  const result = await wallet.signAndSubmitExecuteScriptTx(params);
   return { txId: result.txId };
 }
 
 // ---- Refund (Alice calls refund after timeout) ----
 
-export async function refundSwap(wallet, contractId, compiled) {
+export async function refundSwap(pubKeyHex, secBytes, contractId, compiled) {
   const { refundScript, structs } = compiled;
 
   const bytecode = buildScriptByteCode(
@@ -152,13 +167,13 @@ export async function refundSwap(wallet, contractId, compiled) {
     structs,
   );
 
-  const result = await wallet.signAndSubmitExecuteScriptTx({
-    signerAddress: wallet.address,
-    signerKeyType: wallet.keyType || 'bip340-schnorr',
+  const result = await signAndSubmit('/contracts/unsigned-tx/execute-script', {
+    fromPublicKey: pubKeyHex,
+    fromPublicKeyType: 'bip340-schnorr',
     bytecode,
-    attoAlphAmount: DUST_AMOUNT,
+    attoAlphAmount: DUST_AMOUNT.toString(),
     gasAmount: 100000,
-  });
+  }, secBytes);
 
   return { txId: result.txId };
 }
@@ -219,15 +234,15 @@ export async function waitForTx(txId, maxRetries = 60, intervalMs = 2000) {
 
 // ---- Simple transfer ----
 
-export async function transferAlph(wallet, destAddress, attoAlphAmount) {
-  const result = await wallet.signAndSubmitTransferTx({
-    signerAddress: wallet.address,
-    signerKeyType: 'bip340-schnorr',
+export async function transferAlph(pubKeyHex, secBytes, destAddress, attoAlphAmount) {
+  const result = await signAndSubmit('/transactions/build', {
+    fromPublicKey: pubKeyHex,
+    fromPublicKeyType: 'bip340-schnorr',
     destinations: [{ address: destAddress, attoAlphAmount: attoAlphAmount.toString() }],
     gasAmount: 20000,
     gasPrice: '100000000000',
-  });
+  }, secBytes);
   return result.txId;
 }
 
-export { web3, ONE_ALPH, DUST_AMOUNT, PrivateKeyWallet, addressFromPublicKey, groupOfAddress };
+export { web3, ONE_ALPH, DUST_AMOUNT, addressFromPublicKey, groupOfAddress };
