@@ -723,7 +723,7 @@ function renderOfferCard(offer) {
 
   let actionsHtml = '';
   const isActive = offer.status === 'open' || offer.status === 'countered';
-  if (isActive && !state.activeSwap) {
+  if (isActive) {
     if (offer.isMine) {
       actionsHtml = `<button class="sm danger cancel-offer-btn" data-offer="${offer.id}">Cancel</button>`;
     } else {
@@ -779,7 +779,7 @@ function renderOfferCard(offer) {
     offer.counters.forEach((c, idx) => {
       const cPeer = c.isMine ? 'You' : npubLink(c.pubkey);
       let counterActions = '';
-      if (isActive && !state.activeSwap) {
+      if (isActive) {
         if (offer.isMine && !c.isMine) {
           counterActions = `<button class="sm primary accept-counter-btn" data-offer="${offer.id}" data-counter="${idx}">Accept</button>`;
         }
