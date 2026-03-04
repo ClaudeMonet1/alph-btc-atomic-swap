@@ -476,12 +476,17 @@ function renderSwapActions() {
       html += '<button class="danger sm" id="refund-btc-btn">Refund BTC</button>';
     }
   }
+
+  // Always show abort button during an active swap
+  html += '<button class="sm" id="abort-swap-btn" style="margin-left:auto">Abort Swap</button>';
+
   actionsEl.innerHTML = html;
 
   const refundAlphBtn = document.getElementById('refund-alph-btn');
   if (refundAlphBtn) refundAlphBtn.addEventListener('click', refundAlph);
   const refundBtcBtn = document.getElementById('refund-btc-btn');
   if (refundBtcBtn) refundBtcBtn.addEventListener('click', refundBtc);
+  document.getElementById('abort-swap-btn').addEventListener('click', abortSwap);
 }
 
 // ============================================================
@@ -1499,6 +1504,24 @@ function showSwapComplete() {
     </div>
   `;
   document.getElementById('new-swap-btn').addEventListener('click', resetSwap);
+}
+
+function abortSwap() {
+  if (!state.activeSwap) return;
+  const lockDone = state.stepData.lock?.status === 'done';
+  let msg = 'Abort this swap?';
+  if (lockDone) {
+    msg += '\n\nFunds are already locked on-chain. After aborting, use the recovery UI or wait for timeouts to refund.';
+  } else {
+    msg += '\n\nNo funds have been locked yet. Safe to abort.';
+  }
+  if (!confirm(msg)) return;
+
+  // Save state if funds are locked so recovery is possible
+  if (lockDone) saveSwapState();
+
+  resetSwap();
+  addLogMsg('system', 'Swap aborted' + (lockDone ? ' — use recovery to refund locked funds' : ''), 'System');
 }
 
 function resetSwap() {
