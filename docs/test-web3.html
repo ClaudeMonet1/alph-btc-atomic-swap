@@ -17,42 +17,70 @@ const out = document.getElementById('out');
 function log(msg) { out.textContent += msg + '\n'; }
 
 try {
-  const alphWeb3 = await import('@alephium/web3');
-  const defaultExport = alphWeb3.default;
+  const alphWeb3 = (await import('@alephium/web3')).default;
+  const { web3, NodeProvider } = alphWeb3;
+  const alphWallet = (await import('@alephium/web3-wallet')).default;
+  const { PrivateKeyWallet } = alphWallet;
 
-  log('=== alphWeb3 keys (top-level) ===');
-  log(Object.keys(alphWeb3).join(', '));
+  const url = 'https://node.testnet.alephium.org';
+  const np = new NodeProvider(url);
+  log('NodeProvider created: ' + !!np);
+  log('np.transactions: ' + typeof np.transactions);
 
-  log('\n=== default export type: ' + typeof defaultExport);
-  if (defaultExport && typeof defaultExport === 'object') {
-    const keys = Object.keys(defaultExport);
-    log('=== default export keys (' + keys.length + ') ===');
-    log(keys.filter(k => /node|provider|web3/i.test(k)).join(', '));
-    log('\nNodeProvider: ' + typeof defaultExport.NodeProvider);
-    log('web3: ' + typeof defaultExport.web3);
-    if (defaultExport.web3) {
-      log('web3.setCurrentNodeProvider: ' + typeof defaultExport.web3.setCurrentNodeProvider);
-      log('web3.getCurrentNodeProvider: ' + typeof defaultExport.web3.getCurrentNodeProvider);
-    }
+  // Test 1: set global provider
+  web3.setCurrentNodeProvider(url);
+  log('\nTest 1: global web3.getCurrentNodeProvider()');
+  try {
+    const gp = web3.getCurrentNodeProvider();
+    log('  OK: ' + typeof gp);
+  } catch(e) { log('  FAIL: ' + e.message); }
 
-    // Try to create a NodeProvider
-    if (typeof defaultExport.NodeProvider === 'function') {
-      const np = new defaultExport.NodeProvider('https://node.testnet.alephium.org');
-      log('\nNodeProvider instance created: ' + typeof np);
-      log('np.contracts: ' + typeof np.contracts);
-    } else {
-      log('\nNodeProvider is NOT a constructor on default export');
-    }
-  }
+  // Test 2: create wallet WITHOUT nodeProvider
+  log('\nTest 2: wallet without nodeProvider');
+  const testKey = 'a'.repeat(64);
+  try {
+    const w1 = new PrivateKeyWallet({ privateKey: testKey });
+    log('  wallet created, address: ' + w1.address);
+    log('  w1._nodeProvider: ' + typeof w1._nodeProvider);
+    try {
+      const wp = w1.nodeProvider;
+      log('  w1.nodeProvider: ' + typeof wp);
+    } catch(e) { log('  w1.nodeProvider FAIL: ' + e.message); }
+  } catch(e) { log('  FAIL: ' + e.message); }
 
-  // Try web3-wallet
-  const alphWallet = await import('@alephium/web3-wallet');
-  log('\n=== web3-wallet keys ===');
-  log(Object.keys(alphWallet).join(', '));
-  const walletDefault = alphWallet.default;
-  if (walletDefault) {
-    log('wallet default keys: ' + Object.keys(walletDefault).filter(k => /private|wallet/i.test(k)).join(', '));
-  }
+  // Test 3: create wallet WITH nodeProvider
+  log('\nTest 3: wallet with nodeProvider');
+  try {
+    const w2 = new PrivateKeyWallet({ privateKey: testKey, nodeProvider: np });
+    log('  wallet created, address: ' + w2.address);
+    log('  w2._nodeProvider: ' + typeof w2._nodeProvider);
+    try {
+      const wp = w2.nodeProvider;
+      log('  w2.nodeProvider: ' + typeof wp);
+      log('  same as np? ' + (wp === np));
+    } catch(e) { log('  w2.nodeProvider FAIL: ' + e.message); }
+  } catch(e) { log('  FAIL: ' + e.message); }
+
+  // Test 4: create wallet with keyType bip340-schnorr + nodeProvider
+  log('\nTest 4: wallet with bip340-schnorr + nodeProvider');
+  try {
+    const w3 = new PrivateKeyWallet({ privateKey: testKey, keyType: 'bip340-schnorr', nodeProvider: np });
+    log('  wallet created, address: ' + w3.address);
+    log('  w3._nodeProvider: ' + typeof w3._nodeProvider);
+    try {
+      const wp = w3.nodeProvider;
+      log('  w3.nodeProvider: ' + typeof wp);
+    } catch(e) { log('  w3.nodeProvider FAIL: ' + e.message); }
+  } catch(e) { log('  FAIL: ' + e.message); }
+
+  // Test 5: try actual API call
+  log('\nTest 5: API call via wallet.nodeProvider');
+  try {
+    const w4 = new PrivateKeyWallet({ privateKey: testKey, keyType: 'bip340-schnorr', nodeProvider: np });
+    const info = await w4.nodeProvider.infos.getInfosSelfClique();
+    log('  OK: chainNum=' + info.chainNum);
+  } catch(e) { log('  FAIL: ' + e.message); }
+
 } catch(e) {
   log('ERROR: ' + e.message + '\n' + e.stack);
 }
