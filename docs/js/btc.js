@@ -149,6 +149,12 @@ export async function verifySwapOutput(txid, expectedAddress, minAmountBtc, { al
 // ---- Build claim transaction (key path spend) ----
 
 export function buildClaimTx(fundingTxid, vout, amountSat, destAddress, internalPubkey, scriptTree, fee = 300) {
+  // Ensure output stays above dust limit (330 sat for P2TR)
+  const DUST_LIMIT = 330;
+  if (amountSat - fee < DUST_LIMIT) {
+    fee = Math.max(0, amountSat - DUST_LIMIT);
+  }
+
   const p2tr = bitcoin.payments.p2tr({
     internalPubkey: Buffer.from(internalPubkey),
     scriptTree,
