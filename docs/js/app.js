@@ -548,7 +548,7 @@ function explorerLink(chain, address, text) {
   if (chain === 'btc') {
     return `<a href="https://mempool.space/signet/address/${address}" target="_blank" title="${address}" class="amount-link">${text}</a>`;
   }
-  return `<a href="https://explorer.alephium.org/addresses/${address}?network=testnet" target="_blank" title="${address}" class="amount-link">${text}</a>`;
+  return `<a href="https://explorer.testnet.alephium.org/addresses/${address}" target="_blank" title="${address}" class="amount-link">${text}</a>`;
 }
 
 function renderOffersList() {
@@ -571,107 +571,41 @@ function renderOffersList() {
     return;
   }
 
+  const activeOffers = sorted.filter(o => o.status === 'open' || o.status === 'countered');
+  const inactiveOffers = sorted.filter(o => o.status !== 'open' && o.status !== 'countered');
+
   listEl.innerHTML = '';
-  for (const offer of sorted) {
-    const card = document.createElement('div');
-    const isSell = offer.direction === 'sell_alph';
-    let cardClass = 'offer-card';
-    if (offer.isMine) cardClass += ' mine';
-    else cardClass += isSell ? ' sell' : ' buy';
-    if (offer.status === 'cancelled' || offer.status === 'expired') cardClass += ' cancelled';
-    if (offer.status === 'accepted') cardClass += ' accepted';
-    card.className = cardClass;
 
-    const dirLabel = isSell ? 'SELL' : 'BUY';
-    const dirClass = isSell ? 'sell' : 'buy';
-    const preposition = isSell ? 'for' : 'with';
+  if (activeOffers.length === 0 && inactiveOffers.length === 0) {
+    listEl.innerHTML = '<div style="color:#484f58; font-size:12px; text-align:center; padding:24px;">No offers yet. Create one or wait for offers to appear.</div>';
+    return;
+  }
 
-    // Peer label as clickable npub
-    const peerLabel = offer.isMine ? 'You' : npubLink(offer.pubkey);
+  for (const offer of activeOffers) {
+    listEl.appendChild(renderOfferCard(offer));
+  }
 
-    let statusBadge = '';
-    if (offer.status === 'accepted') statusBadge = '<span class="status-badge accepted">Accepted</span>';
-    else if (offer.status === 'cancelled') statusBadge = '<span class="status-badge cancelled">Cancelled</span>';
-    else if (offer.status === 'expired') statusBadge = '<span class="status-badge expired">Expired</span>';
+  if (activeOffers.length === 0) {
+    listEl.insertAdjacentHTML('beforeend', '<div style="color:#484f58; font-size:12px; text-align:center; padding:12px;">No open offers.</div>');
+  }
 
-    let actionsHtml = '';
-    const isActive = offer.status === 'open' || offer.status === 'countered';
-    if (isActive && !state.activeSwap) {
-      if (offer.isMine) {
-        actionsHtml = `<button class="sm danger cancel-offer-btn" data-offer="${offer.id}">Cancel</button>`;
-      } else {
-        actionsHtml = `<button class="sm primary accept-offer-btn" data-offer="${offer.id}">Accept</button>
-                       <button class="sm counter-offer-btn" data-offer="${offer.id}">Counter</button>`;
-      }
+  if (inactiveOffers.length > 0) {
+    const historyToggle = document.createElement('button');
+    historyToggle.className = 'history-toggle';
+    historyToggle.innerHTML = `<span class="arrow">&#9654;</span> History (${inactiveOffers.length})`;
+    const historyContainer = document.createElement('div');
+    historyContainer.className = 'history-container';
+    historyContainer.style.display = 'none';
+    for (const offer of inactiveOffers) {
+      historyContainer.appendChild(renderOfferCard(offer));
     }
-
-    // For accepted offers, determine who got what and link amounts to recipient addresses
-    let alphAmountHtml = `<span class="alph">${formatAlph(offer.alphAmount)} ALPH</span>`;
-    let btcAmountHtml = `<span class="btc">${formatSat(offer.btcSat)} sat</span>`;
-
-    if (offer.status === 'accepted' && offer.acceptEvent) {
-      const creatorPub = offer.pubkey;
-      const acceptorPub = offer.acceptEvent.pubkey;
-      // sell_alph: creator=Alice sends ALPH, gets BTC. acceptor=Bob sends BTC, gets ALPH.
-      // buy_alph: creator=Bob sends BTC, gets ALPH. acceptor=Alice sends ALPH, gets BTC.
-      let btcRecipientPub, alphRecipientPub;
-      if (isSell) {
-        btcRecipientPub = creatorPub;    // Alice gets BTC
-        alphRecipientPub = acceptorPub;  // Bob gets ALPH
-      } else {
-        btcRecipientPub = acceptorPub;   // Alice gets BTC
-        alphRecipientPub = creatorPub;   // Bob gets ALPH
-      }
-      const btcAddr = getP2TRAddressFromPub(btcRecipientPub);
-      const alphAddr = alphAddressFromPub(alphRecipientPub);
-      if (btcAddr) btcAmountHtml = `<span class="btc">${explorerLink('btc', btcAddr, `${formatSat(offer.btcSat)} sat`)}</span>`;
-      if (alphAddr) alphAmountHtml = `<span class="alph">${explorerLink('alph', alphAddr, `${formatAlph(offer.alphAmount)} ALPH`)}</span>`;
-    }
-
-    let html = `
-      <div class="card-header">
-        <span class="amount">
-          <span class="dir-badge ${dirClass}">${dirLabel}</span>
-          ${alphAmountHtml}
-          <span style="color:#8b949e"> ${preposition} </span>
-          ${btcAmountHtml}
-        </span>
-        ${statusBadge}
-      </div>
-      <div class="card-body">
-        <span class="peer">by ${peerLabel}</span>
-        <span class="card-actions">${actionsHtml}</span>
-      </div>`;
-
-    // Details for accepted/expired offers
-    if (offer.status === 'accepted' && offer.acceptEvent) {
-      const acceptorLabel = offer.acceptEvent.pubkey === state.pubKeyHex ? 'You' : npubLink(offer.acceptEvent.pubkey);
-      html += `<div class="offer-details">Accepted by ${acceptorLabel}</div>`;
-    } else if (offer.status === 'expired') {
-      html += `<div class="offer-details">Expired without acceptance</div>`;
-    }
-
-    if (offer.counters.length > 0) {
-      html += '<div class="counters-list">';
-      offer.counters.forEach((c, idx) => {
-        const cPeer = c.isMine ? 'You' : npubLink(c.pubkey);
-        let counterActions = '';
-        if (isActive && !state.activeSwap) {
-          if (offer.isMine && !c.isMine) {
-            counterActions = `<button class="sm primary accept-counter-btn" data-offer="${offer.id}" data-counter="${idx}">Accept</button>`;
-          }
-        }
-        html += `<div class="counter-item">
-          <span class="counter-info">Counter from ${cPeer}:</span>
-          <span class="counter-amounts">${formatAlph(c.alphAmount)} ALPH / ${formatSat(c.btcSat)} sat</span>
-          ${counterActions}
-        </div>`;
-      });
-      html += '</div>';
-    }
-
-    card.innerHTML = html;
-    listEl.appendChild(card);
+    historyToggle.addEventListener('click', () => {
+      const open = historyContainer.style.display !== 'none';
+      historyContainer.style.display = open ? 'none' : 'block';
+      historyToggle.classList.toggle('open', !open);
+    });
+    listEl.appendChild(historyToggle);
+    listEl.appendChild(historyContainer);
   }
 
   listEl.querySelectorAll('.accept-offer-btn').forEach(btn => {
@@ -686,6 +620,102 @@ function renderOffersList() {
   listEl.querySelectorAll('.accept-counter-btn').forEach(btn => {
     btn.addEventListener('click', () => acceptCounter(btn.dataset.offer, parseInt(btn.dataset.counter)));
   });
+}
+
+function renderOfferCard(offer) {
+  const card = document.createElement('div');
+  const isSell = offer.direction === 'sell_alph';
+  let cardClass = 'offer-card';
+  if (offer.isMine) cardClass += ' mine';
+  else cardClass += isSell ? ' sell' : ' buy';
+  if (offer.status === 'cancelled' || offer.status === 'expired') cardClass += ' cancelled';
+  if (offer.status === 'accepted') cardClass += ' accepted';
+  card.className = cardClass;
+
+  const dirLabel = isSell ? 'SELL' : 'BUY';
+  const dirClass = isSell ? 'sell' : 'buy';
+  const preposition = isSell ? 'for' : 'with';
+  const peerLabel = offer.isMine ? 'You' : npubLink(offer.pubkey);
+
+  let statusBadge = '';
+  if (offer.status === 'accepted') statusBadge = '<span class="status-badge accepted">Accepted</span>';
+  else if (offer.status === 'cancelled') statusBadge = '<span class="status-badge cancelled">Cancelled</span>';
+  else if (offer.status === 'expired') statusBadge = '<span class="status-badge expired">Expired</span>';
+
+  let actionsHtml = '';
+  const isActive = offer.status === 'open' || offer.status === 'countered';
+  if (isActive && !state.activeSwap) {
+    if (offer.isMine) {
+      actionsHtml = `<button class="sm danger cancel-offer-btn" data-offer="${offer.id}">Cancel</button>`;
+    } else {
+      actionsHtml = `<button class="sm primary accept-offer-btn" data-offer="${offer.id}">Accept</button>
+                     <button class="sm counter-offer-btn" data-offer="${offer.id}">Counter</button>`;
+    }
+  }
+
+  let alphAmountHtml = `<span class="alph">${formatAlph(offer.alphAmount)} ALPH</span>`;
+  let btcAmountHtml = `<span class="btc">${formatSat(offer.btcSat)} sat</span>`;
+
+  if (offer.status === 'accepted' && offer.acceptEvent) {
+    const creatorPub = offer.pubkey;
+    const acceptorPub = offer.acceptEvent.pubkey;
+    let btcRecipientPub, alphRecipientPub;
+    if (isSell) {
+      btcRecipientPub = creatorPub;
+      alphRecipientPub = acceptorPub;
+    } else {
+      btcRecipientPub = acceptorPub;
+      alphRecipientPub = creatorPub;
+    }
+    const btcAddr = getP2TRAddressFromPub(btcRecipientPub);
+    const alphAddr = alphAddressFromPub(alphRecipientPub);
+    if (btcAddr) btcAmountHtml = `<span class="btc">${explorerLink('btc', btcAddr, `${formatSat(offer.btcSat)} sat`)}</span>`;
+    if (alphAddr) alphAmountHtml = `<span class="alph">${explorerLink('alph', alphAddr, `${formatAlph(offer.alphAmount)} ALPH`)}</span>`;
+  }
+
+  let html = `
+    <div class="card-header">
+      <span class="amount">
+        <span class="dir-badge ${dirClass}">${dirLabel}</span>
+        ${alphAmountHtml}
+        <span style="color:#8b949e"> ${preposition} </span>
+        ${btcAmountHtml}
+      </span>
+      ${statusBadge}
+    </div>
+    <div class="card-body">
+      <span class="peer">by ${peerLabel}</span>
+      <span class="card-actions">${actionsHtml}</span>
+    </div>`;
+
+  if (offer.status === 'accepted' && offer.acceptEvent) {
+    const acceptorLabel = offer.acceptEvent.pubkey === state.pubKeyHex ? 'You' : npubLink(offer.acceptEvent.pubkey);
+    html += `<div class="offer-details">Accepted by ${acceptorLabel}</div>`;
+  } else if (offer.status === 'expired') {
+    html += `<div class="offer-details">Expired without acceptance</div>`;
+  }
+
+  if (offer.counters.length > 0) {
+    html += '<div class="counters-list">';
+    offer.counters.forEach((c, idx) => {
+      const cPeer = c.isMine ? 'You' : npubLink(c.pubkey);
+      let counterActions = '';
+      if (isActive && !state.activeSwap) {
+        if (offer.isMine && !c.isMine) {
+          counterActions = `<button class="sm primary accept-counter-btn" data-offer="${offer.id}" data-counter="${idx}">Accept</button>`;
+        }
+      }
+      html += `<div class="counter-item">
+        <span class="counter-info">Counter from ${cPeer}:</span>
+        <span class="counter-amounts">${formatAlph(c.alphAmount)} ALPH / ${formatSat(c.btcSat)} sat</span>
+        ${counterActions}
+      </div>`;
+    });
+    html += '</div>';
+  }
+
+  card.innerHTML = html;
+  return card;
 }
 
 // ============================================================

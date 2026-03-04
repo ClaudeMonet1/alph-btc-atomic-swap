@@ -279,6 +279,15 @@
     padding: 4px 12px 6px; font-size: 10px; color: #8b949e;
     border-top: 1px solid #21262d;
   }
+  .history-toggle {
+    display: flex; align-items: center; gap: 6px; width: 100%;
+    padding: 8px 0; margin-top: 8px; font-size: 11px; color: #8b949e;
+    background: transparent; border: none; border-top: 1px solid #21262d;
+    cursor: pointer; border-radius: 0;
+  }
+  .history-toggle:hover { color: #e6edf3; background: transparent; }
+  .history-toggle .arrow { transition: transform 0.2s; font-size: 9px; }
+  .history-toggle.open .arrow { transform: rotate(90deg); }
   .offer-card .card-actions { display: flex; gap: 4px; flex-shrink: 0; }
   .offer-card .status-badge {
     font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600;

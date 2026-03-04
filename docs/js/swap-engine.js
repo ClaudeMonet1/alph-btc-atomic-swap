@@ -213,44 +213,81 @@ export class SwapEngine {
   // ── Swap: Lock BTC (Bob) ──
 
   async lockBtc(utxo) {
+    const DUST_LIMIT = 546;
     const peerPub = hexToBytes(this.peerPubHex);
     const pubkeys = [peerPub, this.pubKey]; // [alice, bob]
     const { aggPubkey } = keyAgg(pubkeys);
 
     const { address: swapBtcAddress } = createSwapOutput(aggPubkey, this.pubKey, this.csvTimeout);
 
-    const fee = await estimateFee(200);
-    const DUST_LIMIT = 546;
+    const p2tr = bitcoin.payments.p2tr({ internalPubkey: Buffer.from(this.pubKey), network: NETWORK });
 
-    let utxoTxid, utxoVout, utxoValue;
+    // Select UTXOs — single if specified, otherwise auto-select (possibly multiple)
+    let inputs;
     if (utxo) {
-      utxoTxid = utxo.txid;
-      utxoVout = utxo.vout;
-      utxoValue = utxo.value;
+      inputs = [utxo];
     } else {
-      // Pick UTXO that either covers exact amount (no change) or leaves change above dust
       const utxos = await getUtxos(this.btcAddress);
-      utxos.sort((a, b) => a.value - b.value);
-      const needed = this.btcSat + fee;
-      const picked = utxos.find(u => {
-        const change = u.value - needed;
+      utxos.sort((a, b) => b.value - a.value); // largest first
+      // Try single UTXO first
+      const estFee1 = await estimateFee(154); // 1-in 2-out ~154 vB
+      const single = utxos.find(u => {
+        const change = u.value - this.btcSat - estFee1;
         return change >= DUST_LIMIT || (change >= 0 && change < DUST_LIMIT);
       });
-      if (!picked) throw new Error(`No UTXO >= ${needed} sat (have ${utxos.length} UTXOs)`);
-      // Prefer UTXO with clean change (above dust) over dust-range change
-      const betterPick = utxos.find(u => u.value - needed >= DUST_LIMIT);
-      const use = betterPick || picked;
-      utxoTxid = use.txid;
-      utxoVout = use.vout;
-      utxoValue = use.value;
+      if (single) {
+        inputs = [single];
+      } else {
+        // Accumulate UTXOs until we have enough
+        inputs = [];
+        let total = 0;
+        for (const u of utxos) {
+          inputs.push(u);
+          total += u.value;
+          const estFee = await estimateFee(43 + inputs.length * 58 + 43 * 2);
+          if (total >= this.btcSat + estFee) break;
+        }
+        const finalFee = await estimateFee(43 + inputs.length * 58 + 43 * 2);
+        if (total < this.btcSat + finalFee) {
+          throw new Error(`Insufficient BTC: need ${this.btcSat + finalFee} sat, have ${total} sat across ${utxos.length} UTXOs`);
+        }
+      }
     }
-    const { psbt: fundPsbt, sighash: fundSighash } = buildP2TRKeyPathSpend(
-      utxoTxid, utxoVout, utxoValue,
-      swapBtcAddress, this.btcSat, this.pubKey, fee,
-    );
+
+    const totalInput = inputs.reduce((sum, u) => sum + u.value, 0);
+    const fee = await estimateFee(43 + inputs.length * 58 + (inputs.length === 1 ? 43 : 43 * 2));
+
+    // Build PSBT
+    const psbt = new bitcoin.Psbt({ network: NETWORK });
+    for (const inp of inputs) {
+      psbt.addInput({
+        hash: inp.txid,
+        index: inp.vout,
+        witnessUtxo: { script: p2tr.output, value: BigInt(inp.value) },
+        tapInternalKey: Buffer.from(this.pubKey),
+      });
+    }
+    psbt.addOutput({ address: swapBtcAddress, value: BigInt(this.btcSat) });
+
+    const change = totalInput - this.btcSat - fee;
+    if (change >= DUST_LIMIT) {
+      psbt.addOutput({ address: p2tr.address, value: BigInt(change) });
+    } else if (change < 0) {
+      throw new Error(`Insufficient UTXO: need ${this.btcSat + fee} sat, have ${totalInput} sat`);
+    }
+
+    // Sign each input
     const bobTweakedKey = computeTweakedPrivateKey(this.secBytes, this.pubKey);
-    const fundSig = schnorr.sign(fundSighash, bobTweakedKey);
-    const fundTxHex = finalizeKeyPathSpend(fundPsbt, fundSig);
+    const tx = psbt.__CACHE.__TX;
+    const allScripts = inputs.map(() => p2tr.output);
+    const allValues = inputs.map(u => BigInt(u.value));
+    for (let i = 0; i < inputs.length; i++) {
+      const sighash = tx.hashForWitnessV1(i, allScripts, allValues, bitcoin.Transaction.SIGHASH_DEFAULT);
+      const sig = schnorr.sign(new Uint8Array(sighash), bobTweakedKey);
+      psbt.updateInput(i, { tapKeySig: Buffer.from(sig) });
+    }
+    psbt.finalizeAllInputs();
+    const fundTxHex = psbt.extractTransaction().toHex();
     const fundTxid = await broadcastTx(fundTxHex);
 
     const fundVout = await findVoutWithRetry(fundTxid, swapBtcAddress);
