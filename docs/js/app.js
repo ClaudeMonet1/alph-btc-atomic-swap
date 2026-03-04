@@ -7,6 +7,7 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { bech32 } from 'bech32';
 import qrcode from 'qrcode-generator';
 import { SwapEngine } from './swap-engine.js';
+import { groupOfAddress, addressFromPublicKey } from './alph.js';
 
 // ============================================================
 // State
@@ -1281,11 +1282,25 @@ function resetSwap() {
 const STORAGE_KEY = 'btc-alph-swap-nsec';
 const BACKUP_CONFIRMED_KEY = 'btc-alph-swap-backup-confirmed';
 
+const TARGET_ALPH_GROUP = 1;
+
 function getOrCreateNsec() {
   let hex = localStorage.getItem(STORAGE_KEY);
-  if (hex && hex.length === 64) return hex;
+  if (hex && hex.length === 64) {
+    // Verify existing key is in the target group; if not, regenerate
+    const pub = schnorr.getPublicKey(hexToBytes(hex));
+    const addr = addressFromPublicKey(bytesToHex(pub), 'bip340-schnorr');
+    if (groupOfAddress(addr) === TARGET_ALPH_GROUP) return hex;
+    // Wrong group — fall through to regenerate
+  }
+  // Grind until we find a key in the target ALPH group
   const sec = new Uint8Array(32);
-  crypto.getRandomValues(sec);
+  for (;;) {
+    crypto.getRandomValues(sec);
+    const pub = schnorr.getPublicKey(sec);
+    const addr = addressFromPublicKey(bytesToHex(pub), 'bip340-schnorr');
+    if (groupOfAddress(addr) === TARGET_ALPH_GROUP) break;
+  }
   hex = bytesToHex(sec);
   localStorage.setItem(STORAGE_KEY, hex);
   return hex;
