@@ -62,15 +62,15 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
 // findVout with retry
 // ============================================================
 
-async function findVoutWithRetry(txid, address, maxRetries = 5) {
+async function findVoutWithRetry(txid, address, maxRetries = 15) {
   for (let i = 0; i < maxRetries; i++) {
     try {
       const vout = await findVout(txid, address);
       if (vout >= 0) return vout;
     } catch (_) {}
-    if (i < maxRetries - 1) await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 3000));
   }
-  return 0;
+  throw new Error(`Tx ${txid} not found on Esplora after ${maxRetries * 3}s`);
 }
 
 // ============================================================
