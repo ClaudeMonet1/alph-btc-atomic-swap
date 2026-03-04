@@ -1,7 +1,7 @@
 // BTC-ALPH Atomic Swap — Static/Browser App
 // Replaces server API calls with direct SwapEngine usage.
 
-import { schnorr } from '@noble/curves/secp256k1';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { bech32 } from 'bech32';
@@ -166,6 +166,31 @@ const SWAP_NONCE_KIND = 38391;
 const SWAP_PRESIG_KIND = 38392;
 const SWAP_CLAIM_KIND = 38393;
 
+// ============================================================
+// NIP-04 Encryption (secp256k1 ECDH + AES-256-CBC)
+// ============================================================
+
+async function nip04Encrypt(plaintext, peerPubHex) {
+  const sharedPoint = secp256k1.getSharedSecret(state.secBytes, '02' + peerPubHex);
+  const sharedX = sharedPoint.slice(1, 33);
+  const key = await crypto.subtle.importKey('raw', sharedX, { name: 'AES-CBC' }, false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(16));
+  const encoded = new TextEncoder().encode(plaintext);
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, key, encoded);
+  return btoa(String.fromCharCode(...new Uint8Array(ciphertext))) + '?iv=' + btoa(String.fromCharCode(...iv));
+}
+
+async function nip04Decrypt(ciphertext, peerPubHex) {
+  const sharedPoint = secp256k1.getSharedSecret(state.secBytes, '02' + peerPubHex);
+  const sharedX = sharedPoint.slice(1, 33);
+  const key = await crypto.subtle.importKey('raw', sharedX, { name: 'AES-CBC' }, false, ['decrypt']);
+  const [ctB64, ivB64] = ciphertext.split('?iv=');
+  const ct = Uint8Array.from(atob(ctB64), c => c.charCodeAt(0));
+  const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
+  const plainBuf = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, ct);
+  return new TextDecoder().decode(plainBuf);
+}
+
 function generateUUID() {
   return crypto.randomUUID ? crypto.randomUUID() : bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
 }
@@ -229,38 +254,46 @@ async function createCancelEvent({ offerId, offerEventId }) {
 }
 
 async function createSwapSetup({ sessionId, recipientPubHex, msgType, ...data }) {
+  const plaintext = JSON.stringify({ type: msgType, ...data });
+  const content = await nip04Encrypt(plaintext, recipientPubHex);
   return signEvent({
     kind: SWAP_SETUP_KIND,
     created_at: Math.floor(Date.now() / 1000),
     tags: [['e', sessionId], ['p', recipientPubHex], ['d', `${sessionId}:${msgType}`]],
-    content: JSON.stringify({ type: msgType, ...data }),
+    content,
   });
 }
 
 async function createSwapNonce({ sessionId, recipientPubHex, phase, ...data }) {
+  const plaintext = JSON.stringify({ phase, ...data });
+  const content = await nip04Encrypt(plaintext, recipientPubHex);
   return signEvent({
     kind: SWAP_NONCE_KIND,
     created_at: Math.floor(Date.now() / 1000),
     tags: [['e', sessionId], ['p', recipientPubHex], ['d', `${sessionId}:${phase}`]],
-    content: JSON.stringify({ phase, ...data }),
+    content,
   });
 }
 
 async function createSwapPresig({ sessionId, recipientPubHex, ...data }) {
+  const plaintext = JSON.stringify(data);
+  const content = await nip04Encrypt(plaintext, recipientPubHex);
   return signEvent({
     kind: SWAP_PRESIG_KIND,
     created_at: Math.floor(Date.now() / 1000),
     tags: [['e', sessionId], ['p', recipientPubHex], ['d', sessionId]],
-    content: JSON.stringify(data),
+    content,
   });
 }
 
 async function createSwapClaim({ sessionId, recipientPubHex, claimType, ...data }) {
+  const plaintext = JSON.stringify({ type: claimType, ...data });
+  const content = await nip04Encrypt(plaintext, recipientPubHex);
   return signEvent({
     kind: SWAP_CLAIM_KIND,
     created_at: Math.floor(Date.now() / 1000),
     tags: [['e', sessionId], ['p', recipientPubHex], ['d', `${sessionId}:${claimType}`]],
-    content: JSON.stringify({ type: claimType, ...data }),
+    content,
   });
 }
 
@@ -910,18 +943,28 @@ function subscribeToSwap(sessionId, peerPubHex) {
     kinds: [SWAP_SETUP_KIND, SWAP_NONCE_KIND, SWAP_PRESIG_KIND, SWAP_CLAIM_KIND],
     '#e': [sessionId],
     authors: [state.pubKeyHex, peerPubHex],
-  }], (event) => {
+  }], async (event) => {
     const isMine = event.pubkey === state.pubKeyHex;
     const authorLabel = isMine ? 'You' : event.pubkey.slice(0, 8) + '...';
-    addProtocolMsg(event.kind, event.content, authorLabel);
 
+    // Decrypt NIP-04 encrypted content
+    let decryptedContent = event.content;
+    try {
+      decryptedContent = await nip04Decrypt(event.content, peerPubHex);
+    } catch {
+      // Fallback: treat as plain JSON (backward compat with unencrypted events)
+    }
+
+    addProtocolMsg(event.kind, decryptedContent, authorLabel);
+
+    const decryptedEvent = { ...event, content: decryptedContent };
     for (let i = swapEventWaiters.length - 1; i >= 0; i--) {
       const w = swapEventWaiters[i];
-      if (event.kind === w.kind && event.pubkey === w.fromPub) {
-        if (!w.predicate || w.predicate(event)) {
+      if (decryptedEvent.kind === w.kind && decryptedEvent.pubkey === w.fromPub) {
+        if (!w.predicate || w.predicate(decryptedEvent)) {
           clearTimeout(w.timer);
           swapEventWaiters.splice(i, 1);
-          w.resolve(event);
+          w.resolve(decryptedEvent);
         }
       }
     }
@@ -2226,6 +2269,19 @@ document.getElementById('offer-btc-sat').addEventListener('input', updateRateDis
 updateRateDisplay();
 
 document.getElementById('publish-offer-btn').addEventListener('click', publishOffer);
+
+// Help modal
+document.getElementById('help-btn').addEventListener('click', () => {
+  document.getElementById('help-modal').classList.remove('hidden');
+});
+document.getElementById('help-close-btn').addEventListener('click', () => {
+  document.getElementById('help-modal').classList.add('hidden');
+});
+document.getElementById('help-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) {
+    document.getElementById('help-modal').classList.add('hidden');
+  }
+});
 
 // Testnet: ALPH faucet
 document.getElementById('alph-faucet-btn').addEventListener('click', async () => {

@@ -208,6 +208,25 @@
   }
   .send-modal-status.hidden { display: none; }
 
+  /* Help Modal */
+  .help-modal {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .help-modal.hidden { display: none !important; }
+  .help-modal-inner {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 24px; max-width: 560px; width: 90%; max-height: 85vh; overflow-y: auto;
+  }
+  .help-content { font-size: 12px; line-height: 1.6; color: #c9d1d9; }
+  .help-content h4 { font-size: 12px; color: #e6edf3; margin: 14px 0 6px; }
+  .help-content p { margin: 6px 0; }
+  .help-content ol, .help-content ul { margin: 6px 0 6px 20px; }
+  .help-content li { margin-bottom: 4px; }
+  .help-content table { border-collapse: collapse; margin: 6px 0; }
+  .help-content td { padding: 3px 0; font-size: 11px; }
+
   /* Two-column layout */
   .columns { display: flex; flex: 1; overflow: hidden; }
 
@@ -469,6 +488,7 @@
       <span class="alph-bal" id="bal-alph">-- ALPH</span>
       <button id="refresh-bal-btn" style="padding:4px 8px; font-size:10px">Refresh</button>
       <span id="relay-status" style="font-size:10px; color:#8b949e" title="Connected Nostr relays"></span>
+      <button id="help-btn" style="padding:4px 8px; font-size:10px" title="How it works">Help</button>
     </div>
   </div>
 
@@ -539,6 +559,50 @@
         <button id="send-cancel-btn">Cancel</button>
       </div>
       <div class="send-modal-status hidden" id="send-modal-status"></div>
+    </div>
+  </div>
+
+  <!-- Help Modal -->
+  <div class="help-modal hidden" id="help-modal">
+    <div class="help-modal-inner">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
+        <h3 style="font-size:14px; margin:0">How It Works</h3>
+        <button class="sm" id="help-close-btn" style="padding:2px 8px">X</button>
+      </div>
+      <div class="help-content">
+        <p><strong>Peer-to-peer atomic swap</strong> between Bitcoin (signet) and Alephium (testnet) using MuSig2 adaptor signatures. No intermediaries, no custodians.</p>
+
+        <h4>Roles</h4>
+        <p><strong>Alice</strong> = ALPH seller, <strong>Bob</strong> = BTC seller. If you publish a "Sell ALPH" offer or accept a "Buy ALPH" offer, you are Alice. Otherwise you are Bob.</p>
+
+        <h4>Protocol (5 steps)</h4>
+        <ol>
+          <li><strong>Setup</strong> &mdash; Alice generates an adaptor secret <em>t</em> and sends the public adaptor point <em>T</em> to Bob</li>
+          <li><strong>Lock</strong> &mdash; Bob locks BTC in a Taproot output (with CSV timelock for refund). Alice deploys an ALPH contract (with timeout for refund). Both sides cross-verify.</li>
+          <li><strong>Nonces</strong> &mdash; Commit-then-reveal MuSig2 nonce exchange (prevents grinding attacks)</li>
+          <li><strong>Pre-sign</strong> &mdash; Exchange adaptor pre-signatures for both BTC and ALPH claim transactions</li>
+          <li><strong>Claim</strong> &mdash; Alice completes the adaptor signature and claims BTC, revealing <em>t</em> on the Bitcoin blockchain. Bob extracts <em>t</em> from the Bitcoin witness data and claims ALPH.</li>
+        </ol>
+
+        <h4>Timeouts &amp; Refunds</h4>
+        <table>
+          <tr><td style="padding-right:16px; color:#f7931a">BTC refund (T1)</td><td>144 blocks after lock tx confirms (~24h mainnet, ~2.5h signet)</td></tr>
+          <tr><td style="padding-right:16px; color:#00d4aa">ALPH refund (T2)</td><td>6 hours after contract deployment</td></tr>
+          <tr><td style="padding-right:16px; color:#8b949e">Offer expiry</td><td>1 hour after publishing</td></tr>
+        </table>
+        <p style="margin-top:8px">T2 &lt; T1 is critical: Alice can refund ALPH before Bob can refund BTC, preventing a scenario where Bob claims both assets.</p>
+
+        <h4>Security</h4>
+        <ul>
+          <li>Funds are safe at every step &mdash; if the peer disappears, wait for timeout and use refund buttons</li>
+          <li>Swap messages (setup, nonces, pre-signatures, claims) are <strong>encrypted</strong> peer-to-peer (NIP-04)</li>
+          <li>Offers are public so they can be discovered by anyone on Nostr</li>
+          <li>Uses Schnorr adaptor signatures for atomicity &mdash; no hash preimages</li>
+        </ul>
+
+        <h4>Recovery</h4>
+        <p>Swap state is saved to localStorage at key checkpoints (<em>locked</em>, <em>presigned</em>, <em>btc_claimed</em>). If the page is refreshed mid-swap, recovery UI appears with available actions: resume (if peer is online), claim, or refund (after timeout).</p>
+      </div>
     </div>
   </div>
 
