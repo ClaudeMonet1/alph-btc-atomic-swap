@@ -864,6 +864,9 @@ function startSwapFromAccept(offer, acceptEvent, acceptContent) {
 
   addLogMsg('system', `Swap started as ${role}: ${formatAlph(alphAmount)} ALPH <-> ${formatSat(btcSat)} sat`, 'System');
 
+  // On mobile, scroll to the swap panel (rendered above offers via column-reverse)
+  document.getElementById('swap-active').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
   autoExecuteSwap();
 }
 
@@ -1305,7 +1308,7 @@ function showSwapComplete() {
         ${role === 'alice' ? 'Received' : 'Sent'} ${formatSat(btcSat)} sat &harr;
         ${role === 'alice' ? 'Sent' : 'Received'} ${formatAlph(alphAmount)} ALPH
       </div>
-      <button class="sm" id="new-swap-btn" style="margin-top:12px">New Swap</button>
+      <button class="sm" id="new-swap-btn" style="margin-top:12px">Clear Active Swap History</button>
     </div>
   `;
   document.getElementById('new-swap-btn').addEventListener('click', resetSwap);
