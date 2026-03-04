@@ -275,11 +275,10 @@ export class SwapEngine {
     const { aggPubkey } = keyAgg(pubkeys);
 
     const bobAlphAddress = addressFromPublicKey(this.peerPubHex, 'bip340-schnorr');
-    const bobGroup = groupOfAddress(bobAlphAddress);
 
     const deployResult = await deploySwapContract(
       wallet, bytesToHex(aggPubkey), bobAlphAddress, wallet.address,
-      this.alphTimeoutMs, this.alphAmount, compiled, bobGroup,
+      this.alphTimeoutMs, this.alphAmount, compiled,
     );
     await waitForTx(deployResult.txId);
 
