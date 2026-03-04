@@ -198,7 +198,7 @@ function waitForSwapEvent(kind, sessionId, fromPub, predicate = null, timeoutMs 
       if (idx >= 0) swapEventWaiters.splice(idx, 1);
       reject(new Error(`timeout waiting for kind ${kind}`));
     }, timeoutMs);
-    swapEventWaiters.push({ kind, fromPub, predicate, resolve, timer });
+    swapEventWaiters.push({ kind, fromPub, predicate, resolve, reject, timer });
   });
 }
 
@@ -1092,6 +1092,18 @@ function subscribeToSwap(sessionId, peerPubHex) {
       // Fallback: treat as plain JSON (backward compat with unencrypted events)
     }
 
+    // Detect abort from peer
+    if (!isMine && event.kind === SWAP_SETUP_KIND) {
+      try {
+        const parsed = JSON.parse(decryptedContent);
+        if (parsed.type === 'abort') {
+          addLogMsg('system', 'Peer aborted the swap', 'System');
+          handlePeerAbort();
+          return;
+        }
+      } catch {}
+    }
+
     addProtocolMsg(event.kind, decryptedContent, authorLabel);
 
     const decryptedEvent = { ...event, content: decryptedContent };
@@ -1106,6 +1118,27 @@ function subscribeToSwap(sessionId, peerPubHex) {
       }
     }
   });
+}
+
+async function handlePeerAbort() {
+  if (!state.activeSwap) return;
+
+  // Reject all pending swap event waiters
+  for (const w of swapEventWaiters) {
+    clearTimeout(w.timer);
+    w.reject(new Error('Peer aborted swap'));
+  }
+  swapEventWaiters.length = 0;
+
+  markOfferAborted(state.activeSwap.offerId);
+
+  const lockDone = state.stepData.lock?.status === 'done';
+  if (lockDone) {
+    saveSwapState();
+    await transitionToRecovery();
+  } else {
+    resetSwap();
+  }
 }
 
 // ============================================================
@@ -1524,25 +1557,42 @@ function showSwapComplete() {
   document.getElementById('new-swap-btn').addEventListener('click', resetSwap);
 }
 
-function abortSwap() {
+async function sendAbortNotification() {
+  if (!state.activeSwap) return;
+  const { sessionId, peerPubHex } = state.activeSwap;
+  try {
+    const event = await createSwapSetup({
+      sessionId, recipientPubHex: peerPubHex, msgType: 'abort',
+      reason: 'User aborted swap',
+    });
+    await nostrPublish(event);
+  } catch (e) {
+    console.warn('Failed to send abort notification:', e);
+  }
+}
+
+async function abortSwap() {
   if (!state.activeSwap) return;
   const lockDone = state.stepData.lock?.status === 'done';
   let msg = 'Abort this swap?';
   if (lockDone) {
-    msg += '\n\nFunds are already locked on-chain. After aborting, use the recovery UI or wait for timeouts to refund.';
+    msg += '\n\nFunds are already locked on-chain. After aborting, the recovery UI will appear with refund options.';
   } else {
     msg += '\n\nNo funds have been locked yet. Safe to abort.';
   }
   if (!confirm(msg)) return;
 
-  // Remember this offer so it won't auto-restart on refresh
   markOfferAborted(state.activeSwap.offerId);
+  await sendAbortNotification();
 
-  // Save state if funds are locked so recovery is possible
-  if (lockDone) saveSwapState();
-
-  resetSwap();
-  addLogMsg('system', 'Swap aborted' + (lockDone ? ' — use recovery to refund locked funds' : ''), 'System');
+  if (lockDone) {
+    saveSwapState();
+    addLogMsg('system', 'Swap aborted — transitioning to recovery...', 'System');
+    await transitionToRecovery();
+  } else {
+    resetSwap();
+    addLogMsg('system', 'Swap aborted', 'System');
+  }
 }
 
 function resetSwap() {
@@ -1725,24 +1775,116 @@ function showRecoveryUI(checkpoint) {
   }
 }
 
+async function transitionToRecovery() {
+  // Stop active pollers/monitors
+  stopBtcClaimPoller();
+  stopTimeoutMonitor();
+
+  // Unsubscribe active swap subscription
+  const unsub = state.subscriptions.get('active_swap');
+  if (unsub) unsub();
+
+  // Reject remaining waiters
+  for (const w of swapEventWaiters) {
+    clearTimeout(w.timer);
+    w.reject(new Error('Swap aborted'));
+  }
+  swapEventWaiters.length = 0;
+
+  // Re-subscribe for late-arriving claim events
+  if (state.activeSwap) {
+    subscribeToSwap(state.activeSwap.sessionId, state.activeSwap.peerPubHex);
+  }
+
+  // Mark active steps as errored
+  for (const step of STEPS) {
+    if (state.stepData[step.id]?.status === 'active') {
+      updateStep(step.id, { status: 'error', error: 'Swap aborted' });
+    }
+  }
+
+  // Check on-chain state for the true checkpoint
+  let checkpoint = state.engine?.getCheckpoint() || 'locked';
+  checkpoint = await checkOnChainState(checkpoint);
+
+  showRecoveryUI(checkpoint);
+}
+
+async function checkOnChainState(checkpoint) {
+  try {
+    // Check BTC lock tx exists on-chain
+    if (state.engine?.btcLockTxid) {
+      const txResp = await fetch(`https://mempool.space/signet/api/tx/${state.engine.btcLockTxid}`);
+      if (!txResp.ok) {
+        addLogMsg('system', 'BTC lock tx not found on-chain', 'System');
+      }
+
+      // Check if BTC lock output is already spent (claimed)
+      if (state.engine.btcLockVout != null) {
+        const outspendResp = await fetch(`https://mempool.space/signet/api/tx/${state.engine.btcLockTxid}/outspend/${state.engine.btcLockVout}`);
+        if (outspendResp.ok) {
+          const outspend = await outspendResp.json();
+          if (outspend.spent && outspend.txid) {
+            addLogMsg('system', `BTC already claimed on-chain: ${outspend.txid.slice(0, 24)}...`, 'System');
+            state.engine.btcClaimTxid = outspend.txid;
+            checkpoint = 'btc_claimed';
+            saveSwapState();
+          }
+        }
+      }
+    }
+
+    // Check ALPH contract balance
+    if (state.engine?.contractAddress) {
+      try {
+        const balResp = await fetch(`https://node.testnet.alephium.org/addresses/${state.engine.contractAddress}/balance`);
+        if (balResp.ok) {
+          const bal = await balResp.json();
+          const alphBalance = BigInt(bal.balance || '0');
+          if (alphBalance === 0n) {
+            state.stepData._alphContractEmpty = true;
+            addLogMsg('system', 'ALPH contract is empty (already refunded or claimed)', 'System');
+          }
+        } else if (balResp.status === 404) {
+          // Contract destroyed
+          state.stepData._alphContractEmpty = true;
+          addLogMsg('system', 'ALPH contract not found (destroyed/refunded)', 'System');
+        }
+      } catch {}
+    }
+  } catch (e) {
+    console.warn('On-chain state check error:', e);
+  }
+  return checkpoint;
+}
+
 function renderRecoveryActions(checkpoint) {
   const actionsEl = document.getElementById('swap-actions');
   const role = state.activeSwap?.role;
   if (!role) return;
 
+  const alphEmpty = state.stepData._alphContractEmpty;
   let html = `<div id="timeout-display" style="width:100%; font-size:11px; color:#8b949e; margin-bottom:8px;"></div>`;
 
   if (checkpoint === 'locked') {
     html += `<button class="sm primary" id="recovery-resume-btn">Resume Swap</button> `;
     if (role === 'alice') {
-      html += `<button class="sm danger" id="recovery-refund-alph-btn" disabled>Refund ALPH</button> `;
+      if (alphEmpty) {
+        html += `<span style="color:#8b949e; font-size:12px">ALPH already refunded/claimed</span> `;
+      } else {
+        html += `<button class="sm danger" id="recovery-refund-alph-btn" disabled>Refund ALPH</button> `;
+      }
     } else {
       html += `<button class="sm danger" id="recovery-refund-btc-btn" disabled>Refund BTC</button> `;
     }
   } else if (checkpoint === 'presigned') {
     if (role === 'alice') {
       html += `<button class="sm primary" id="recovery-claim-btc-btn">Claim BTC Now</button> `;
-      html += `<button class="sm danger" id="recovery-refund-alph-btn" disabled>Refund ALPH</button> `;
+      if (alphEmpty) {
+        html += `<span style="color:#8b949e; font-size:12px">ALPH already refunded/claimed</span> `;
+      } else {
+        html += `<button class="sm danger" id="recovery-refund-alph-btn" disabled>Refund ALPH</button> `;
+      }
     } else {
       html += `<span style="color:#d29922; font-size:12px">Watching for Alice's BTC claim...</span> `;
       html += `<button class="sm danger" id="recovery-refund-btc-btn" disabled>Refund BTC</button> `;
@@ -1750,6 +1892,8 @@ function renderRecoveryActions(checkpoint) {
   } else if (checkpoint === 'btc_claimed') {
     if (role === 'alice') {
       html += `<span style="color:#2ea043; font-size:12px">BTC claimed. Waiting for Bob to claim ALPH.</span> `;
+    } else if (alphEmpty) {
+      html += `<span style="color:#2ea043; font-size:12px">ALPH already claimed. Swap complete!</span> `;
     } else {
       html += `<button class="sm primary" id="recovery-claim-alph-btn">Claim ALPH</button> `;
     }
