@@ -86,9 +86,6 @@ export class SwapEngine {
     this.alphAddress = addressFromPublicKey(this.pubKeyHex, 'bip340-schnorr');
     this.group = groupOfAddress(this.alphAddress);
 
-    // Derive one ALPH address per group (0-3) deterministically
-    this.alphGroupKeys = this._deriveGroupKeys();
-
     // Swap state
     this.role = null;
     this.peerPubHex = null;
@@ -128,38 +125,11 @@ export class SwapEngine {
 
   // ── Identity ──
 
-  _deriveGroupKeys() {
-    const keys = [];
-    for (let g = 0; g < 4; g++) {
-      // If the main key already falls in this group, use it directly
-      if (this.group === g) {
-        keys[g] = { secBytes: this.secBytes, pubKey: this.pubKey, address: this.alphAddress, group: g };
-        continue;
-      }
-      // Deterministic derivation: sha256(secret || group || nonce) until group matches
-      for (let nonce = 0; nonce < 256; nonce++) {
-        const input = new Uint8Array(34);
-        input.set(this.secBytes);
-        input[32] = g;
-        input[33] = nonce;
-        const sec = sha256(input);
-        const pub = schnorr.getPublicKey(sec);
-        const addr = addressFromPublicKey(bytesToHex(pub), 'bip340-schnorr');
-        if (groupOfAddress(addr) === g) {
-          keys[g] = { secBytes: sec, pubKey: pub, address: addr, group: g };
-          break;
-        }
-      }
-    }
-    return keys;
-  }
-
   get addresses() {
     return {
       pubKeyHex: this.pubKeyHex,
       btcAddress: this.btcAddress,
       alphAddress: this.alphAddress,
-      alphGroupAddresses: this.alphGroupKeys.map(k => k.address),
       group: this.group,
     };
   }
@@ -167,16 +137,7 @@ export class SwapEngine {
   // ── Balance / UTXOs ──
 
   async getBalances() {
-    // Sum ALPH balance across all 4 group addresses
-    let alphTotal = 0n;
-    const alphGroupBalances = [];
-    for (const gk of this.alphGroupKeys) {
-      try {
-        const bal = await getBalance(gk.address);
-        alphTotal += bal.balance;
-        alphGroupBalances.push({ group: gk.group, balance: bal.balance, address: gk.address });
-      } catch { alphGroupBalances.push({ group: gk.group, balance: 0n, address: gk.address }); }
-    }
+    const alphBal = await getBalance(this.alphAddress);
     let btcConfirmedSat = 0, btcUnconfirmedSat = 0;
     try {
       const utxos = await getUtxos(this.btcAddress);
@@ -187,8 +148,7 @@ export class SwapEngine {
     } catch { /* balance query may fail */ }
     const btcTotalSat = btcConfirmedSat + btcUnconfirmedSat;
     return {
-      alph: (Number(alphTotal) / 1e18).toFixed(4),
-      alphGroupBalances,
+      alph: (Number(alphBal.balance) / 1e18).toFixed(4),
       btc: (btcTotalSat / 1e8).toFixed(8),
       btcConfirmedSat,
       btcUnconfirmedSat,
@@ -202,26 +162,16 @@ export class SwapEngine {
   // ── Faucet ──
 
   async requestAlphFaucet() {
-    // Fund all 4 group addresses
-    const results = [];
-    for (const gk of this.alphGroupKeys) {
-      const faucetRes = await fetch('https://faucet.testnet.alephium.org/send', {
-        method: 'POST',
-        body: gk.address,
-      });
-      if (!faucetRes.ok) {
-        const text = await faucetRes.text();
-        results.push({ group: gk.group, error: `${faucetRes.status} ${text.trim()}` });
-      } else {
-        const message = await faucetRes.text();
-        results.push({ group: gk.group, message: message.trim(), address: gk.address });
-      }
+    const faucetRes = await fetch('https://faucet.testnet.alephium.org/send', {
+      method: 'POST',
+      body: this.alphAddress,
+    });
+    if (!faucetRes.ok) {
+      const text = await faucetRes.text();
+      throw new Error(`ALPH faucet error: ${faucetRes.status} ${text}`);
     }
-    // Return summary
-    const funded = results.filter(r => r.message);
-    const errors = results.filter(r => r.error);
-    if (funded.length === 0) throw new Error(`ALPH faucet error: ${errors[0]?.error}`);
-    return { message: `Funded ${funded.length}/4 groups`, results, address: this.alphAddress };
+    const message = await faucetRes.text();
+    return { message: message.trim(), address: this.alphAddress };
   }
 
   // ── Swap: Init ──
@@ -316,6 +266,7 @@ export class SwapEngine {
   // ── Swap: Deploy ALPH (Alice) ──
 
   async deployAlph() {
+    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeProvider: alphNodeProvider });
     const compiled = await compileSwapContract();
     this.compiled = compiled;
 
@@ -324,15 +275,10 @@ export class SwapEngine {
     const { aggPubkey } = keyAgg(pubkeys);
 
     const bobAlphAddress = addressFromPublicKey(this.peerPubHex, 'bip340-schnorr');
-    const bobGroup = groupOfAddress(bobAlphAddress);
-
-    // Use the derived key that matches Bob's group so we can deploy there
-    const groupKey = this.alphGroupKeys[bobGroup];
-    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(groupKey.secBytes), keyType: 'bip340-schnorr', nodeProvider: alphNodeProvider });
 
     const deployResult = await deploySwapContract(
-      wallet, bytesToHex(aggPubkey), bobAlphAddress, groupKey.address,
-      this.alphTimeoutMs, this.alphAmount, compiled, bobGroup,
+      wallet, bytesToHex(aggPubkey), bobAlphAddress, wallet.address,
+      this.alphTimeoutMs, this.alphAmount, compiled,
     );
     await waitForTx(deployResult.txId);
 
@@ -544,10 +490,7 @@ export class SwapEngine {
   // ── Swap: Refund ALPH (Alice) ──
 
   async refundAlph() {
-    // Use the derived key matching the contract's group (same key used to deploy)
-    const contractGroup = groupOfAddress(this.contractAddress);
-    const groupKey = this.alphGroupKeys[contractGroup];
-    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(groupKey.secBytes), keyType: 'bip340-schnorr', nodeProvider: alphNodeProvider });
+    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeProvider: alphNodeProvider });
     const result = await refundSwap(wallet, this.contractId, this.compiled);
     await waitForTx(result.txId);
     return { txid: result.txId };
@@ -566,22 +509,15 @@ export class SwapEngine {
   // ── Sweep: Send all ALPH ──
 
   async sweepAlph(destAddress) {
-    // Sweep from all 4 group addresses
+    const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(this.secBytes), keyType: 'bip340-schnorr', nodeProvider: alphNodeProvider });
+    const bal = await getBalance(this.alphAddress);
+    const available = bal.balance - bal.lockedBalance;
+    // Reserve gas: 0.002 ALPH (20000 gas * 100 gwei)
     const gasReserve = ONE_ALPH / 500n;
-    const txIds = [];
-    for (const gk of this.alphGroupKeys) {
-      try {
-        const bal = await getBalance(gk.address);
-        const available = bal.balance - bal.lockedBalance;
-        const sendAmount = available - gasReserve;
-        if (sendAmount <= 0n) continue;
-        const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(gk.secBytes), keyType: 'bip340-schnorr', nodeProvider: alphNodeProvider });
-        const txId = await transferAlph(wallet, destAddress, sendAmount);
-        txIds.push(txId);
-      } catch { /* skip empty groups */ }
-    }
-    if (txIds.length === 0) throw new Error('Insufficient ALPH balance to cover gas');
-    return txIds[0];
+    const sendAmount = available - gasReserve;
+    if (sendAmount <= 0n) throw new Error('Insufficient ALPH balance to cover gas');
+    const txId = await transferAlph(wallet, destAddress, sendAmount);
+    return txId;
   }
 
   // ── Address Validation ──
