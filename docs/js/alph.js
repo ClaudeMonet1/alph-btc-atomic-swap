@@ -10,13 +10,14 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 const ALPH_NODE_URL = 'https://node.testnet.alephium.org';
 web3.setCurrentNodeProvider(ALPH_NODE_URL);
 
-// Extract 32-byte contract ID from base58-encoded contract address
-const contractIdFromAddress = alphWeb3.contractIdFromAddress || ((address) => {
+// Extract 32-byte contract ID hex from base58-encoded contract address
+// Always use manual decode — SDK version may return Uint8Array instead of hex string
+function contractIdFromAddress(address) {
   const A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
   let num = 0n;
   for (const c of address) num = num * 58n + BigInt(A.indexOf(c));
   return num.toString(16).padStart(66, '0').slice(2); // strip 1-byte prefix
-});
+}
 
 // ---- Node API helpers ----
 
@@ -121,9 +122,7 @@ export async function deploySwapContract(pubKeyHex, secBytes, swapKeyHex, claimA
 
   return {
     contractAddress: result.contractAddress,
-    contractId: (typeof result.contractId === 'string' && result.contractId.length === 64)
-      ? result.contractId
-      : contractIdFromAddress(result.contractAddress),
+    contractId: contractIdFromAddress(result.contractAddress),
     txId: result.txId,
     groupIndex: result.fromGroup,
   };
