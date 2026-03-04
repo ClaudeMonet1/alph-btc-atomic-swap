@@ -600,6 +600,12 @@
           <li>Uses Schnorr adaptor signatures for atomicity &mdash; no hash preimages</li>
         </ul>
 
+        <h4>Important Notes</h4>
+        <ul>
+          <li><strong>Bob (BTC seller) needs a small amount of ALPH (~0.01 ALPH)</strong> to pay gas fees when claiming ALPH on the Alephium side. Use the ALPH faucet to get testnet tokens before accepting a swap.</li>
+          <li>Balance warnings will appear when publishing or accepting offers if your funds appear insufficient.</li>
+        </ul>
+
         <h4>Recovery</h4>
         <p>Swap state is saved to localStorage at key checkpoints (<em>locked</em>, <em>presigned</em>, <em>btc_claimed</em>). If the page is refreshed mid-swap, recovery UI appears with available actions: resume (if peer is online), claim, or refund (after timeout).</p>
       </div>

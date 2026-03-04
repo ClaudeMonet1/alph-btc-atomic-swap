@@ -28,6 +28,7 @@ const state = {
   relays: [],
   seenEvents: new Set(),
   subscriptions: new Map(),
+  activeSubscriptions: new Map(),  // subId → { filters, onEvent } for reconnection
   // Offers
   offers: new Map(),
   myOffers: new Set(),
@@ -70,7 +71,48 @@ async function connectRelays(urls) {
   if (failed.length > 0) console.warn('Failed relays:', failed);
   if (connected.length === 0) throw new Error('Could not connect to any relay. Check your network connection.');
   state.relays = connected;
+  for (const relay of connected) setupRelayReconnect(relay);
   return connected;
+}
+
+function setupRelayReconnect(relay) {
+  const reconnect = () => {
+    relay.ready = false;
+    updateRelayStatus();
+    setTimeout(async () => {
+      try {
+        const ws = await connectRelay(relay.url);
+        relay.ws = ws;
+        relay.ready = true;
+        setupRelayReconnect(relay);
+        resubscribeRelay(relay);
+        updateRelayStatus();
+        addLogMsg('system', `Reconnected to ${relay.url.replace('wss://', '')}`, 'System');
+      } catch {
+        reconnect();  // retry on failure
+      }
+    }, 5000);
+  };
+  relay.ws.onclose = reconnect;
+  relay.ws.onerror = () => {};  // onclose fires after onerror
+}
+
+function resubscribeRelay(relay) {
+  for (const [subId, { filters, onEvent }] of state.activeSubscriptions) {
+    const handler = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg[0] === 'EVENT' && msg[1] === subId) {
+          const event = msg[2];
+          if (state.seenEvents.has(event.id)) return;
+          state.seenEvents.add(event.id);
+          onEvent(event);
+        }
+      } catch {}
+    };
+    relay.ws.addEventListener('message', handler);
+    try { relay.ws.send(JSON.stringify(['REQ', subId, ...filters])); } catch {}
+  }
 }
 
 function nostrSerialize(event) {
@@ -115,6 +157,9 @@ function nostrPublish(event) {
 }
 
 function subscribe(subId, filters, onEvent) {
+  // Track for reconnection
+  state.activeSubscriptions.set(subId, { filters, onEvent });
+
   const handlers = [];
   for (const relay of state.relays) {
     if (!relay.ready || relay.ws.readyState !== WebSocket.OPEN) continue;
@@ -134,6 +179,7 @@ function subscribe(subId, filters, onEvent) {
     handlers.push({ ws: relay.ws, handler });
   }
   const unsub = () => {
+    state.activeSubscriptions.delete(subId);
     for (const { ws, handler } of handlers) {
       ws.removeEventListener('message', handler);
       try { ws.send(JSON.stringify(['CLOSE', subId])); } catch {}
@@ -755,15 +801,67 @@ function renderOfferCard(offer) {
 // Offer Actions
 // ============================================================
 
+async function validateBalanceForSwap(role, alphAmountAtto, btcSat) {
+  const warnings = [];
+  try {
+    const bal = await state.engine.getBalances();
+    if (role === 'alice') {
+      const alphNeeded = Number(BigInt(alphAmountAtto)) / 1e18;
+      const alphHave = parseFloat(bal.alph);
+      if (alphHave < alphNeeded) {
+        warnings.push(`Insufficient ALPH: need ${alphNeeded.toFixed(4)}, have ${alphHave.toFixed(4)}`);
+      }
+    } else {
+      const btcNeeded = btcSat + 500;
+      const btcHave = bal.btcConfirmedSat + bal.btcUnconfirmedSat;
+      if (btcHave < btcNeeded) {
+        warnings.push(`Insufficient BTC: need ~${btcNeeded} sat, have ${btcHave} sat`);
+      }
+      const alphHave = parseFloat(bal.alph);
+      if (alphHave < 0.01) {
+        warnings.push(`Low ALPH balance (${alphHave.toFixed(4)} ALPH). You need ~0.01 ALPH for gas when claiming. Use the ALPH faucet.`);
+      }
+    }
+  } catch (e) {
+    console.warn('Balance check failed:', e);
+  }
+  return { ok: warnings.length === 0, warnings };
+}
+
+function showOfferWarning(text) {
+  let el = document.getElementById('offer-warning');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'offer-warning';
+    el.style.cssText = 'font-size:11px; color:#d29922; margin-top:6px; line-height:1.5;';
+    document.querySelector('.offer-form .form-actions').appendChild(el);
+  }
+  el.textContent = text;
+}
+
+function clearOfferWarning() {
+  const el = document.getElementById('offer-warning');
+  if (el) el.textContent = '';
+}
+
 async function publishOffer() {
   const btn = document.getElementById('publish-offer-btn');
   btn.disabled = true; btn.textContent = 'Publishing...';
+  clearOfferWarning();
 
   try {
     const direction = document.querySelector('#direction-toggle button.active').dataset.dir;
     const alphVal = parseFloat(document.getElementById('offer-alph').value) || 1;
     const btcSat = parseInt(document.getElementById('offer-btc-sat').value) || 5000;
     const alphAmount = BigInt(Math.round(alphVal * 1e18));
+
+    // Balance check (non-blocking warning)
+    const role = direction === 'sell_alph' ? 'alice' : 'bob';
+    const { warnings } = await validateBalanceForSwap(role, String(alphAmount), btcSat);
+    if (warnings.length > 0) {
+      showOfferWarning(warnings.join(' | '));
+    }
+
     const offerId = generateUUID();
     const expiresAt = Math.floor(Date.now() / 1000) + 3600;
 
@@ -781,6 +879,14 @@ async function publishOffer() {
 async function acceptOffer(offerId) {
   const offer = state.offers.get(offerId);
   if (!offer) return;
+
+  // Acceptor role: sell_alph offer → acceptor is bob; buy_alph offer → acceptor is alice
+  const role = offer.direction === 'sell_alph' ? 'bob' : 'alice';
+  const { ok, warnings } = await validateBalanceForSwap(role, offer.alphAmount, offer.btcSat);
+  if (!ok) {
+    const proceed = confirm('Balance warnings:\n\n' + warnings.join('\n') + '\n\nProceed anyway?');
+    if (!proceed) return;
+  }
 
   try {
     const event = await createAcceptEvent({
@@ -800,6 +906,14 @@ async function acceptCounter(offerId, counterIndex) {
   const offer = state.offers.get(offerId);
   if (!offer || !offer.counters[counterIndex]) return;
   const counter = offer.counters[counterIndex];
+
+  // Creator accepting a counter keeps their original role
+  const role = offer.direction === 'sell_alph' ? 'alice' : 'bob';
+  const { ok, warnings } = await validateBalanceForSwap(role, counter.alphAmount, counter.btcSat);
+  if (!ok) {
+    const proceed = confirm('Balance warnings:\n\n' + warnings.join('\n') + '\n\nProceed anyway?');
+    if (!proceed) return;
+  }
 
   try {
     const event = await createAcceptEvent({
@@ -1918,6 +2032,27 @@ function updateRelayStatus() {
   const total = state.relays.length;
   el.textContent = `${alive}/${total} relays`;
   el.style.color = alive === 0 ? '#f85149' : alive < total ? '#d29922' : '#2ea043';
+
+  // Fallback: trigger reconnect for relays that dropped without onclose firing
+  for (const relay of state.relays) {
+    if (relay.ready && relay.ws.readyState !== WebSocket.OPEN) {
+      relay.ready = false;
+      // Directly trigger reconnection since ws is already dead
+      setTimeout(async () => {
+        try {
+          const ws = await connectRelay(relay.url);
+          relay.ws = ws;
+          relay.ready = true;
+          setupRelayReconnect(relay);
+          resubscribeRelay(relay);
+          updateRelayStatus();
+          addLogMsg('system', `Reconnected to ${relay.url.replace('wss://', '')}`, 'System');
+        } catch {
+          // Will retry on next updateRelayStatus cycle
+        }
+      }, 1000);
+    }
+  }
 }
 
 setInterval(() => {
