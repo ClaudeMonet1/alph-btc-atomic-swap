@@ -121,7 +121,9 @@ export async function deploySwapContract(pubKeyHex, secBytes, swapKeyHex, claimA
 
   return {
     contractAddress: result.contractAddress,
-    contractId: result.contractId || contractIdFromAddress(result.contractAddress),
+    contractId: (typeof result.contractId === 'string' && result.contractId.length === 64)
+      ? result.contractId
+      : contractIdFromAddress(result.contractAddress),
     txId: result.txId,
     groupIndex: result.fromGroup,
   };

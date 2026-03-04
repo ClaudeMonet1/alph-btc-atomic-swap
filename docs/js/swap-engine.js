@@ -89,9 +89,9 @@ export class SwapEngine {
     // Swap state
     this.role = null;
     this.peerPubHex = null;
-    this.btcAmount = 0.5;
-    this.btcSat = 50000000;
-    this.alphAmount = ONE_ALPH * 10n;
+    this.btcAmount = 0.00005;
+    this.btcSat = 5000;
+    this.alphAmount = ONE_ALPH;
     this.csvTimeout = 144;
     this.alphTimeoutMs = Date.now() + 6 * 60 * 60 * 1000;
 

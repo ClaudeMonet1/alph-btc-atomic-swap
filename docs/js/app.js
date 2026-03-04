@@ -642,8 +642,8 @@ async function publishOffer() {
 
   try {
     const direction = document.querySelector('#direction-toggle button.active').dataset.dir;
-    const alphVal = parseFloat(document.getElementById('offer-alph').value) || 10;
-    const btcSat = parseInt(document.getElementById('offer-btc-sat').value) || 50000;
+    const alphVal = parseFloat(document.getElementById('offer-alph').value) || 1;
+    const btcSat = parseInt(document.getElementById('offer-btc-sat').value) || 5000;
     const alphAmount = BigInt(Math.round(alphVal * 1e18));
     const offerId = generateUUID();
     const expiresAt = Math.floor(Date.now() / 1000) + 3600;
