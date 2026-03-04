@@ -194,6 +194,7 @@ export function buildClaimTx(fundingTxid, vout, amountSat, destAddress, internal
 // ---- Build simple P2TR key-path spend (single key, no script tree) ----
 
 export function buildP2TRKeyPathSpend(fundingTxid, vout, inputAmountSat, destAddress, sendAmountSat, senderPubkey, fee = 300) {
+  const DUST_LIMIT = 546;
   const p2tr = bitcoin.payments.p2tr({
     internalPubkey: Buffer.from(senderPubkey),
     network: NETWORK,
@@ -217,12 +218,17 @@ export function buildP2TRKeyPathSpend(fundingTxid, vout, inputAmountSat, destAdd
   });
 
   const change = inputAmountSat - sendAmountSat - fee;
-  if (change > 546) {
+  if (change >= DUST_LIMIT) {
     psbt.addOutput({
       address: p2tr.address,
       value: BigInt(change),
     });
+  } else if (change < 0) {
+    // Fee exceeds available — cap fee to avoid negative balance
+    // (no change output, full excess becomes fee)
+    throw new Error(`Insufficient UTXO: need ${sendAmountSat + fee} sat, have ${inputAmountSat} sat`);
   }
+  // else: 0 <= change < DUST_LIMIT — drop change, extra goes to fee
 
   const tx = psbt.__CACHE.__TX;
   const sighash = tx.hashForWitnessV1(

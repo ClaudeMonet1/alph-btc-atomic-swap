@@ -8,6 +8,7 @@ import { bech32 } from 'bech32';
 import qrcode from 'qrcode-generator';
 import { SwapEngine } from './swap-engine.js';
 import { groupOfAddress, addressFromPublicKey } from './alph.js';
+import { getP2TRAddress } from './btc.js';
 
 // ============================================================
 // State
@@ -529,6 +530,27 @@ function formatSat(sat) {
   return Number(sat).toLocaleString();
 }
 
+function npubLink(pubkeyHex) {
+  const npub = npubEncode(pubkeyHex);
+  const short = npub.slice(0, 16) + '...';
+  return `<a href="https://njump.me/${npub}" target="_blank" title="${npub}" class="npub-link">${short}</a>`;
+}
+
+function alphAddressFromPub(pubkeyHex) {
+  try { return addressFromPublicKey(pubkeyHex, 'bip340-schnorr'); } catch { return null; }
+}
+
+function getP2TRAddressFromPub(pubkeyHex) {
+  try { return getP2TRAddress(hexToBytes(pubkeyHex)); } catch { return null; }
+}
+
+function explorerLink(chain, address, text) {
+  if (chain === 'btc') {
+    return `<a href="https://mempool.space/signet/address/${address}" target="_blank" title="${address}" class="amount-link">${text}</a>`;
+  }
+  return `<a href="https://explorer.alephium.org/addresses/${address}?network=testnet" target="_blank" title="${address}" class="amount-link">${text}</a>`;
+}
+
 function renderOffersList() {
   const listEl = document.getElementById('offers-list');
   const countEl = document.getElementById('offers-count');
@@ -563,7 +585,9 @@ function renderOffersList() {
     const dirLabel = isSell ? 'SELL' : 'BUY';
     const dirClass = isSell ? 'sell' : 'buy';
     const preposition = isSell ? 'for' : 'with';
-    const peerLabel = offer.isMine ? 'You' : offer.pubkey.slice(0, 12) + '...';
+
+    // Peer label as clickable npub
+    const peerLabel = offer.isMine ? 'You' : npubLink(offer.pubkey);
 
     let statusBadge = '';
     if (offer.status === 'accepted') statusBadge = '<span class="status-badge accepted">Accepted</span>';
@@ -581,13 +605,36 @@ function renderOffersList() {
       }
     }
 
+    // For accepted offers, determine who got what and link amounts to recipient addresses
+    let alphAmountHtml = `<span class="alph">${formatAlph(offer.alphAmount)} ALPH</span>`;
+    let btcAmountHtml = `<span class="btc">${formatSat(offer.btcSat)} sat</span>`;
+
+    if (offer.status === 'accepted' && offer.acceptEvent) {
+      const creatorPub = offer.pubkey;
+      const acceptorPub = offer.acceptEvent.pubkey;
+      // sell_alph: creator=Alice sends ALPH, gets BTC. acceptor=Bob sends BTC, gets ALPH.
+      // buy_alph: creator=Bob sends BTC, gets ALPH. acceptor=Alice sends ALPH, gets BTC.
+      let btcRecipientPub, alphRecipientPub;
+      if (isSell) {
+        btcRecipientPub = creatorPub;    // Alice gets BTC
+        alphRecipientPub = acceptorPub;  // Bob gets ALPH
+      } else {
+        btcRecipientPub = acceptorPub;   // Alice gets BTC
+        alphRecipientPub = creatorPub;   // Bob gets ALPH
+      }
+      const btcAddr = getP2TRAddressFromPub(btcRecipientPub);
+      const alphAddr = alphAddressFromPub(alphRecipientPub);
+      if (btcAddr) btcAmountHtml = `<span class="btc">${explorerLink('btc', btcAddr, `${formatSat(offer.btcSat)} sat`)}</span>`;
+      if (alphAddr) alphAmountHtml = `<span class="alph">${explorerLink('alph', alphAddr, `${formatAlph(offer.alphAmount)} ALPH`)}</span>`;
+    }
+
     let html = `
       <div class="card-header">
         <span class="amount">
           <span class="dir-badge ${dirClass}">${dirLabel}</span>
-          <span class="alph">${formatAlph(offer.alphAmount)} ALPH</span>
+          ${alphAmountHtml}
           <span style="color:#8b949e"> ${preposition} </span>
-          <span class="btc">${formatSat(offer.btcSat)} sat</span>
+          ${btcAmountHtml}
         </span>
         ${statusBadge}
       </div>
@@ -596,10 +643,18 @@ function renderOffersList() {
         <span class="card-actions">${actionsHtml}</span>
       </div>`;
 
+    // Details for accepted/expired offers
+    if (offer.status === 'accepted' && offer.acceptEvent) {
+      const acceptorLabel = offer.acceptEvent.pubkey === state.pubKeyHex ? 'You' : npubLink(offer.acceptEvent.pubkey);
+      html += `<div class="offer-details">Accepted by ${acceptorLabel}</div>`;
+    } else if (offer.status === 'expired') {
+      html += `<div class="offer-details">Expired without acceptance</div>`;
+    }
+
     if (offer.counters.length > 0) {
       html += '<div class="counters-list">';
       offer.counters.forEach((c, idx) => {
-        const cPeer = c.isMine ? 'You' : c.pubkey.slice(0, 8) + '...';
+        const cPeer = c.isMine ? 'You' : npubLink(c.pubkey);
         let counterActions = '';
         if (isActive && !state.activeSwap) {
           if (offer.isMine && !c.isMine) {
@@ -1378,11 +1433,12 @@ function stopBtcClaimPoller() {
 function renderSwapInfo(activeSwap) {
   const infoEl = document.getElementById('swap-info');
   const alphDisplay = formatAlph(activeSwap.alphAmount);
+  const peerNpub = npubEncode(activeSwap.peerPubHex);
   infoEl.innerHTML = `
     <div class="row"><span class="label">Role</span><span class="value">${activeSwap.role === 'alice' ? 'Alice (ALPH seller)' : 'Bob (BTC seller)'}</span></div>
     <div class="row"><span class="label">Amount</span><span class="value"><span class="alph">${alphDisplay} ALPH</span> &harr; <span class="btc">${formatSat(activeSwap.btcSat)} sat</span></span></div>
-    <div class="row"><span class="label">Peer</span><span class="value" style="font-size:10px">${activeSwap.peerPubHex.slice(0, 16)}...</span></div>
-    <div class="row"><span class="label">Session</span><span class="value" style="font-size:10px">${activeSwap.sessionId.slice(0, 16)}...</span></div>
+    <div class="row"><span class="label">Peer</span><span class="value" style="font-size:10px"><a href="https://njump.me/${peerNpub}" target="_blank" class="npub-link" title="${peerNpub}">${peerNpub.slice(0, 20)}...</a></span></div>
+    <div class="row"><span class="label">Session</span><span class="value" style="font-size:10px" title="Nostr event ID used to route swap messages">${activeSwap.sessionId.slice(0, 16)}...</span></div>
   `;
 }
 

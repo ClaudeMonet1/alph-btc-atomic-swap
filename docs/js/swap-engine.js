@@ -219,20 +219,31 @@ export class SwapEngine {
 
     const { address: swapBtcAddress } = createSwapOutput(aggPubkey, this.pubKey, this.csvTimeout);
 
+    const fee = await estimateFee(200);
+    const DUST_LIMIT = 546;
+
     let utxoTxid, utxoVout, utxoValue;
     if (utxo) {
       utxoTxid = utxo.txid;
       utxoVout = utxo.vout;
       utxoValue = utxo.value;
     } else {
-      const fee = await estimateFee(200);
-      const picked = await selectUtxo(this.btcAddress, this.btcSat + fee);
-      utxoTxid = picked.txid;
-      utxoVout = picked.vout;
-      utxoValue = picked.value;
+      // Pick UTXO that either covers exact amount (no change) or leaves change above dust
+      const utxos = await getUtxos(this.btcAddress);
+      utxos.sort((a, b) => a.value - b.value);
+      const needed = this.btcSat + fee;
+      const picked = utxos.find(u => {
+        const change = u.value - needed;
+        return change >= DUST_LIMIT || (change >= 0 && change < DUST_LIMIT);
+      });
+      if (!picked) throw new Error(`No UTXO >= ${needed} sat (have ${utxos.length} UTXOs)`);
+      // Prefer UTXO with clean change (above dust) over dust-range change
+      const betterPick = utxos.find(u => u.value - needed >= DUST_LIMIT);
+      const use = betterPick || picked;
+      utxoTxid = use.txid;
+      utxoVout = use.vout;
+      utxoValue = use.value;
     }
-
-    const fee = await estimateFee(200);
     const { psbt: fundPsbt, sighash: fundSighash } = buildP2TRKeyPathSpend(
       utxoTxid, utxoVout, utxoValue,
       swapBtcAddress, this.btcSat, this.pubKey, fee,

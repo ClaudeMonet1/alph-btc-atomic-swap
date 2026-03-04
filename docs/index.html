@@ -270,7 +270,15 @@
     padding: 4px 12px 8px; font-size: 11px; color: #8b949e;
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
   }
-  .offer-card .card-body .peer { overflow: hidden; text-overflow: ellipsis; }
+  .offer-card .card-body .peer { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .npub-link { color: #58a6ff; text-decoration: none; font-size: 11px; }
+  .npub-link:hover { text-decoration: underline; }
+  .amount-link { text-decoration: none; color: inherit; }
+  .amount-link:hover { text-decoration: underline; }
+  .offer-details {
+    padding: 4px 12px 6px; font-size: 10px; color: #8b949e;
+    border-top: 1px solid #21262d;
+  }
   .offer-card .card-actions { display: flex; gap: 4px; flex-shrink: 0; }
   .offer-card .status-badge {
     font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600;
@@ -401,9 +409,9 @@
 
   /* Responsive */
   @media (max-width: 768px) {
-    .columns { flex-direction: column; overflow-y: auto; }
+    .columns { flex-direction: column-reverse; overflow-y: auto; }
     .col-left { flex: none; overflow-y: visible; border-right: none; }
-    .col-right { width: 100% !important; min-width: unset !important; flex-shrink: 0; overflow-y: visible; border-top: 1px solid #30363d; border-left: none; }
+    .col-right { width: 100% !important; min-width: unset !important; flex-shrink: 0; overflow-y: visible; border-bottom: 1px solid #30363d; border-left: none; }
     .header-row { flex-wrap: wrap; }
     .identity-panel .addr-value { font-size: 10px; }
   }
