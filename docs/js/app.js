@@ -571,7 +571,7 @@ function handleAcceptEvent(event, content) {
   renderOffersList();
 
   const involvesUs = offer.isMine || isMine;
-  if (involvesUs && !state.activeSwap) {
+  if (involvesUs && !state.activeSwap && !getAbortedOffers().has(offer.id)) {
     startSwapFromAccept(offer, event, content);
   }
 }
@@ -1517,6 +1517,9 @@ function abortSwap() {
   }
   if (!confirm(msg)) return;
 
+  // Remember this offer so it won't auto-restart on refresh
+  markOfferAborted(state.activeSwap.offerId);
+
   // Save state if funds are locked so recovery is possible
   if (lockDone) saveSwapState();
 
@@ -1555,6 +1558,20 @@ function resetSwap() {
 const STORAGE_KEY = 'btc-alph-swap-nsec';
 const BACKUP_CONFIRMED_KEY = 'btc-alph-swap-backup-confirmed';
 const SWAP_STATE_KEY = 'btc-alph-swap-state';
+const ABORTED_OFFERS_KEY = 'btc-alph-swap-aborted';
+
+function getAbortedOffers() {
+  try { return new Set(JSON.parse(localStorage.getItem(ABORTED_OFFERS_KEY) || '[]')); }
+  catch { return new Set(); }
+}
+
+function markOfferAborted(offerId) {
+  const aborted = getAbortedOffers();
+  aborted.add(offerId);
+  // Keep only the last 50 to avoid unbounded growth
+  const arr = [...aborted].slice(-50);
+  localStorage.setItem(ABORTED_OFFERS_KEY, JSON.stringify(arr));
+}
 
 const TARGET_ALPH_GROUP = 1;
 
