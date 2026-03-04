@@ -493,6 +493,8 @@ function renderSwapActions() {
 // Offer State Management
 // ============================================================
 
+const pendingOfferEvents = new Map();  // offerId → [{event, content}, ...]
+
 function handleOfferEvent(event) {
   let content;
   try { content = JSON.parse(event.content); } catch { return; }
@@ -500,8 +502,13 @@ function handleOfferEvent(event) {
   if (content.network && content.network !== state.network) return;
 
   const action = content.action;
-  if (action === 'offer') handleNewOffer(event, content);
-  else if (action === 'counter') handleCounter(event, content);
+  if (action === 'offer') {
+    handleNewOffer(event, content);
+  } else if (content.offerId && !state.offers.has(content.offerId)) {
+    // Buffer events that arrive before their offer
+    if (!pendingOfferEvents.has(content.offerId)) pendingOfferEvents.set(content.offerId, []);
+    pendingOfferEvents.get(content.offerId).push({ event, content });
+  } else if (action === 'counter') handleCounter(event, content);
   else if (action === 'accept') handleAcceptEvent(event, content);
   else if (action === 'cancel') handleCancelEvent(event, content);
 }
@@ -535,6 +542,17 @@ function handleNewOffer(event, content) {
 
   addLogMsg('system', `New offer: ${offer.direction === 'sell_alph' ? 'Sell' : 'Buy'} ${formatAlph(offer.alphAmount)} ALPH for ${offer.btcSat} sat`, offer.isMine ? 'You' : event.pubkey.slice(0, 8) + '...');
   renderOffersList();
+
+  // Replay any buffered events (accept/counter/cancel that arrived before the offer)
+  const pending = pendingOfferEvents.get(offerId);
+  if (pending) {
+    pendingOfferEvents.delete(offerId);
+    for (const { event: pe, content: pc } of pending) {
+      if (pc.action === 'counter') handleCounter(pe, pc);
+      else if (pc.action === 'accept') handleAcceptEvent(pe, pc);
+      else if (pc.action === 'cancel') handleCancelEvent(pe, pc);
+    }
+  }
 }
 
 function handleCounter(event, content) {
