@@ -589,7 +589,7 @@ function handleAcceptEvent(event, content) {
   renderOffersList();
 
   const involvesUs = offer.isMine || isMine;
-  if (involvesUs && !state.activeSwap && !getAbortedOffers().has(offer.id)) {
+  if (involvesUs && !state.activeSwap && !getProcessedOffers().has(offer.id)) {
     startSwapFromAccept(offer, event, content);
   }
 }
@@ -1143,7 +1143,7 @@ async function handlePeerAbort() {
   }
   swapEventWaiters.length = 0;
 
-  markOfferAborted(state.activeSwap.offerId);
+  markOfferProcessed(state.activeSwap.offerId);
   const lockDone = state.stepData.lock?.status === 'done';
   const offer = state.offers.get(state.activeSwap.offerId);
   if (offer) offer.status = lockDone ? 'aborted_locked' : 'aborted';
@@ -1559,6 +1559,7 @@ function showSwapComplete() {
   clearSwapState();
   stopTimeoutMonitor();
   if (state.activeSwap) {
+    markOfferProcessed(state.activeSwap.offerId); // prevent auto-restart on refresh
     const offer = state.offers.get(state.activeSwap.offerId);
     if (offer) { offer.status = 'completed'; renderOffersList(); }
   }
@@ -1602,7 +1603,7 @@ async function abortSwap() {
   }
   if (!confirm(msg)) return;
 
-  markOfferAborted(state.activeSwap.offerId);
+  markOfferProcessed(state.activeSwap.offerId);
   const offer = state.offers.get(state.activeSwap.offerId);
   if (offer) offer.status = lockDone ? 'aborted_locked' : 'aborted';
   await sendAbortNotification();
@@ -1649,19 +1650,25 @@ function resetSwap() {
 const STORAGE_KEY = 'btc-alph-swap-nsec';
 const BACKUP_CONFIRMED_KEY = 'btc-alph-swap-backup-confirmed';
 const SWAP_STATE_KEY = 'btc-alph-swap-state';
-const ABORTED_OFFERS_KEY = 'btc-alph-swap-aborted';
+const PROCESSED_OFFERS_KEY = 'btc-alph-swap-processed';
 
-function getAbortedOffers() {
-  try { return new Set(JSON.parse(localStorage.getItem(ABORTED_OFFERS_KEY) || '[]')); }
+function getProcessedOffers() {
+  // Migrate from old key if needed
+  const legacy = localStorage.getItem('btc-alph-swap-aborted');
+  if (legacy) {
+    localStorage.setItem(PROCESSED_OFFERS_KEY, legacy);
+    localStorage.removeItem('btc-alph-swap-aborted');
+  }
+  try { return new Set(JSON.parse(localStorage.getItem(PROCESSED_OFFERS_KEY) || '[]')); }
   catch { return new Set(); }
 }
 
-function markOfferAborted(offerId) {
-  const aborted = getAbortedOffers();
-  aborted.add(offerId);
+function markOfferProcessed(offerId) {
+  const processed = getProcessedOffers();
+  processed.add(offerId);
   // Keep only the last 50 to avoid unbounded growth
-  const arr = [...aborted].slice(-50);
-  localStorage.setItem(ABORTED_OFFERS_KEY, JSON.stringify(arr));
+  const arr = [...processed].slice(-50);
+  localStorage.setItem(PROCESSED_OFFERS_KEY, JSON.stringify(arr));
 }
 
 const TARGET_ALPH_GROUP = 1;
