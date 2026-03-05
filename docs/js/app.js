@@ -598,21 +598,25 @@ function handleCancelEvent(event, content) {
   if (!offer) return;
   if (event.pubkey !== offer.pubkey) return; // only creator can cancel
 
-  // Post-accept cancel: offer creator matched with a specific acceptor.
-  // If we're a DIFFERENT acceptor with an active swap on this offer, abort it.
-  // The matched acceptor (content.matchedPub) should ignore the cancel.
-  if (offer.status === 'accepted') {
-    const iAmMatchedAcceptor = content.matchedPub && content.matchedPub === state.pubKeyHex;
-    if (state.activeSwap?.offerId === offer.id && !offer.isMine && !iAmMatchedAcceptor) {
-      addLogMsg('system', 'Offer was taken by another user — aborting swap', 'System');
-      markOfferProcessed(offer.id);
-      offer.status = 'cancelled';
-      resetSwap();
-      renderOffersList();
+  // Post-match cancel (has matchedPub): this is a "taken" signal, NOT a real cancel.
+  // Only affects losing acceptors — never changes offer status to cancelled.
+  if (content.matchedPub) {
+    if (offer.status === 'accepted') {
+      const iAmMatchedAcceptor = content.matchedPub === state.pubKeyHex;
+      if (state.activeSwap?.offerId === offer.id && !offer.isMine && !iAmMatchedAcceptor) {
+        addLogMsg('system', 'Offer was taken by another user — aborting swap', 'System');
+        markOfferProcessed(offer.id);
+        offer.status = 'cancelled';
+        resetSwap();
+        renderOffersList();
+      }
     }
+    // If accept hasn't arrived yet (relay ordering), ignore — accept will process normally later.
     return;
   }
 
+  // Regular cancel (user clicked Cancel button)
+  if (offer.status === 'accepted') return;
   offer.status = 'cancelled';
   addLogMsg('system', `Offer ${content.offerId.slice(0, 8)}... cancelled`, event.pubkey === state.pubKeyHex ? 'You' : event.pubkey.slice(0, 8) + '...');
   renderOffersList();
