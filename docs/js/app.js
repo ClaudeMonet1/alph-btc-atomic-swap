@@ -1329,7 +1329,7 @@ async function executeClaimAlice() {
 
   try {
     const result = await state.engine.claimBtc();
-    updateStep('claim', { info: `BTC claimed! txid: ${result.txid.slice(0, 24)}...` });
+    updateStep('claim', { info: `BTC claimed! txid: ${result.txid.slice(0, 24)}...`, btcClaimTxid: result.txid });
     saveSwapState();
 
     const event = await createSwapClaim({
@@ -1342,7 +1342,7 @@ async function executeClaimAlice() {
     const alphClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
       (e) => JSON.parse(e.content).type === 'alph_claimed');
     const alphClaimed = JSON.parse(alphClaimedEvent.content);
-    updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nBob claimed ALPH: ${alphClaimed.txid.slice(0, 16)}...` });
+    updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nBob claimed ALPH: ${alphClaimed.txid.slice(0, 16)}...`, alphClaimTxid: alphClaimed.txid });
     await refreshBalance();
   } catch (e) {
     updateStep('claim', { status: 'error', error: e.message });
@@ -1419,7 +1419,7 @@ async function executeClaimBob() {
 
     state.engine.btcClaimTxid = btcClaimed.txid;
     saveSwapState();
-    updateStep('claim', { info: `Alice claimed BTC: ${btcClaimed.txid.slice(0, 16)}...\nExtracting secret and claiming ALPH...` });
+    updateStep('claim', { info: `Alice claimed BTC: ${btcClaimed.txid.slice(0, 16)}...\nExtracting secret and claiming ALPH...`, btcClaimTxid: btcClaimed.txid });
 
     const result = await state.engine.claimAlph(btcClaimed.txid);
 
@@ -1429,7 +1429,7 @@ async function executeClaimBob() {
     });
     await nostrPublish(event);
 
-    updateStep('claim', { info: `Alice BTC: ${btcClaimed.txid.slice(0, 16)}...\nALPH claimed: ${result.txid.slice(0, 16)}...` });
+    updateStep('claim', { info: `Alice BTC: ${btcClaimed.txid.slice(0, 16)}...\nALPH claimed: ${result.txid.slice(0, 16)}...`, alphClaimTxid: result.txid });
     await refreshBalance();
   } catch (e) {
     updateStep('claim', { status: 'error', error: e.message });
@@ -1588,13 +1588,24 @@ function showSwapComplete() {
     if (offer) { offer.status = 'completed'; renderOffersList(); }
   }
   const { alphAmount, btcSat, role } = state.activeSwap;
+  const claimData = state.stepData.claim || {};
+  const btcTxid = claimData.btcClaimTxid;
+  const alphTxid = claimData.alphClaimTxid;
+  const btcLabel = `${formatSat(btcSat)} sat`;
+  const alphLabel = `${formatAlph(alphAmount)} ALPH`;
+  const btcHtml = btcTxid
+    ? `<a href="https://mempool.space/signet/tx/${btcTxid}" target="_blank" class="amount-link" style="color:#f7931a">${btcLabel}</a>`
+    : `<span style="color:#f7931a">${btcLabel}</span>`;
+  const alphHtml = alphTxid
+    ? `<a href="https://testnet.alephium.org/transactions/${alphTxid}" target="_blank" class="amount-link" style="color:#00d4aa">${alphLabel}</a>`
+    : `<span style="color:#00d4aa">${alphLabel}</span>`;
   const actionsEl = document.getElementById('swap-actions');
   actionsEl.innerHTML = `
     <div class="swap-complete" style="width:100%">
       <h3>Swap Complete!</h3>
-      <div style="color:#8b949e; font-size:12px; margin-top:4px">
-        ${role === 'alice' ? 'Received' : 'Sent'} ${formatSat(btcSat)} sat &harr;
-        ${role === 'alice' ? 'Sent' : 'Received'} ${formatAlph(alphAmount)} ALPH
+      <div style="font-size:12px; margin-top:4px">
+        ${role === 'alice' ? 'Received' : 'Sent'} ${btcHtml} &harr;
+        ${role === 'alice' ? 'Sent' : 'Received'} ${alphHtml}
       </div>
       <button class="sm" id="new-swap-btn" style="margin-top:12px">Clear Active Swap History</button>
     </div>
