@@ -287,15 +287,14 @@ async function createAcceptEvent({ offerId, offerEventId, offerCreator, alphAmou
   });
 }
 
-async function createCancelEvent({ offerId, offerEventId }) {
+async function createCancelEvent({ offerId, offerEventId, matchedPub }) {
+  const payload = { action: 'cancel', offerId };
+  if (matchedPub) payload.matchedPub = matchedPub;
   return signEvent({
     kind: SWAP_OFFER_KIND,
     created_at: Math.floor(Date.now() / 1000),
     tags: [['t', 'atomicswap'], ['t', 'cancel'], ['e', offerEventId], ['d', `${offerId}:cancel`]],
-    content: JSON.stringify({
-      action: 'cancel',
-      offerId,
-    }),
+    content: JSON.stringify(payload),
   });
 }
 
@@ -599,10 +598,12 @@ function handleCancelEvent(event, content) {
   if (!offer) return;
   if (event.pubkey !== offer.pubkey) return; // only creator can cancel
 
-  // Post-accept cancel: offer creator matched with someone else.
-  // If we're a losing acceptor with an active swap on this offer, abort it.
+  // Post-accept cancel: offer creator matched with a specific acceptor.
+  // If we're a DIFFERENT acceptor with an active swap on this offer, abort it.
+  // The matched acceptor (content.matchedPub) should ignore the cancel.
   if (offer.status === 'accepted') {
-    if (state.activeSwap?.offerId === offer.id && !offer.isMine) {
+    const iAmMatchedAcceptor = content.matchedPub && content.matchedPub === state.pubKeyHex;
+    if (state.activeSwap?.offerId === offer.id && !offer.isMine && !iAmMatchedAcceptor) {
       addLogMsg('system', 'Offer was taken by another user — aborting swap', 'System');
       markOfferProcessed(offer.id);
       offer.status = 'cancelled';
@@ -1094,7 +1095,7 @@ function startSwapFromAccept(offer, acceptEvent, acceptContent) {
 
   // Offer creator: publish cancel so other acceptors know the offer is taken
   if (iAmCreator) {
-    createCancelEvent({ offerId: offer.id, offerEventId: offer.eventId })
+    createCancelEvent({ offerId: offer.id, offerEventId: offer.eventId, matchedPub: acceptEvent.pubkey })
       .then(ev => nostrPublish(ev))
       .catch(() => {});
   }
