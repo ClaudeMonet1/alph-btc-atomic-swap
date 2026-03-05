@@ -273,17 +273,14 @@ async function createCounterEvent({ offerId, offerEventId, offerCreator, index, 
   });
 }
 
-async function createAcceptEvent({ offerId, offerEventId, offerCreator, alphAmount, btcSat }) {
+async function createAcceptEvent({ offerId, offerEventId, offerCreator, alphAmount, btcSat, counterparty }) {
+  const payload = { action: 'accept', offerId, alphAmount: String(alphAmount), btcSat };
+  if (counterparty) payload.counterparty = counterparty;
   return signEvent({
     kind: SWAP_OFFER_KIND,
     created_at: Math.floor(Date.now() / 1000),
     tags: [['t', 'atomicswap'], ['t', 'accept'], ['e', offerEventId], ['p', offerCreator], ['d', `${offerId}:accept`]],
-    content: JSON.stringify({
-      action: 'accept',
-      offerId,
-      alphAmount: String(alphAmount),
-      btcSat,
-    }),
+    content: JSON.stringify(payload),
   });
 }
 
@@ -587,7 +584,8 @@ function handleAcceptEvent(event, content) {
   addLogMsg('system', `Offer ${content.offerId.slice(0, 8)}... accepted!`, isMine ? 'You' : event.pubkey.slice(0, 8) + '...');
   renderOffersList();
 
-  const involvesUs = offer.isMine || isMine;
+  const myCounterAccepted = content.counterparty && content.counterparty === state.pubKeyHex;
+  const involvesUs = offer.isMine || isMine || myCounterAccepted;
   if (involvesUs && !state.activeSwap && !getProcessedOffers().has(offer.id)) {
     startSwapFromAccept(offer, event, content);
   }
@@ -975,6 +973,7 @@ async function acceptCounter(offerId, counterIndex) {
       offerCreator: offer.pubkey,
       alphAmount: counter.alphAmount,
       btcSat: counter.btcSat,
+      counterparty: counter.pubkey,
     });
     await nostrPublish(event);
   } catch (e) {
@@ -1049,13 +1048,17 @@ async function cancelOffer(offerId) {
 function startSwapFromAccept(offer, acceptEvent, acceptContent) {
   const iAmCreator = offer.isMine;
 
+  // Determine peer: for counter-accepts, the peer is the counter-proposer (counterparty),
+  // not the accept event author (who is the offer creator in that case).
+  const peerForCreator = acceptContent.counterparty || acceptEvent.pubkey;
+
   let role, peerPubHex;
   if (offer.direction === 'sell_alph') {
     role = iAmCreator ? 'alice' : 'bob';
-    peerPubHex = iAmCreator ? acceptEvent.pubkey : offer.pubkey;
+    peerPubHex = iAmCreator ? peerForCreator : offer.pubkey;
   } else {
     role = iAmCreator ? 'bob' : 'alice';
-    peerPubHex = iAmCreator ? acceptEvent.pubkey : offer.pubkey;
+    peerPubHex = iAmCreator ? peerForCreator : offer.pubkey;
   }
 
   const sessionId = acceptEvent.id;
@@ -1099,7 +1102,7 @@ function startSwapFromAccept(offer, acceptEvent, acceptContent) {
 
   // Offer creator: publish cancel so other acceptors know the offer is taken
   if (iAmCreator) {
-    createCancelEvent({ offerId: offer.id, offerEventId: offer.eventId, matchedPub: acceptEvent.pubkey })
+    createCancelEvent({ offerId: offer.id, offerEventId: offer.eventId, matchedPub: peerPubHex })
       .then(ev => nostrPublish(ev))
       .catch(() => {});
   }
