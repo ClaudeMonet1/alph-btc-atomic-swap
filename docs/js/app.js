@@ -597,8 +597,20 @@ function handleAcceptEvent(event, content) {
 function handleCancelEvent(event, content) {
   const offer = state.offers.get(content.offerId);
   if (!offer) return;
-  if (event.pubkey !== offer.pubkey) return;
-  if (offer.status === 'accepted') return;
+  if (event.pubkey !== offer.pubkey) return; // only creator can cancel
+
+  // Post-accept cancel: offer creator matched with someone else.
+  // If we're a losing acceptor with an active swap on this offer, abort it.
+  if (offer.status === 'accepted') {
+    if (state.activeSwap?.offerId === offer.id && !offer.isMine) {
+      addLogMsg('system', 'Offer was taken by another user — aborting swap', 'System');
+      markOfferProcessed(offer.id);
+      offer.status = 'cancelled';
+      resetSwap();
+      renderOffersList();
+    }
+    return;
+  }
 
   offer.status = 'cancelled';
   addLogMsg('system', `Offer ${content.offerId.slice(0, 8)}... cancelled`, event.pubkey === state.pubKeyHex ? 'You' : event.pubkey.slice(0, 8) + '...');
@@ -1079,6 +1091,13 @@ function startSwapFromAccept(offer, acceptEvent, acceptContent) {
 
   // On mobile, scroll to the swap panel (rendered above offers via column-reverse)
   document.getElementById('swap-active').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // Offer creator: publish cancel so other acceptors know the offer is taken
+  if (iAmCreator) {
+    createCancelEvent({ offerId: offer.id, offerEventId: offer.eventId })
+      .then(ev => nostrPublish(ev))
+      .catch(() => {});
+  }
 
   autoExecuteSwap();
 }
