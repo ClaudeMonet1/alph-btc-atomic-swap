@@ -658,7 +658,7 @@ function renderOffersList() {
   const countEl = document.getElementById('offers-count');
 
   const sorted = [...state.offers.values()].sort((a, b) => {
-    const statusOrder = { open: 0, countered: 0, accepted: 1, cancelled: 2, expired: 2 };
+    const statusOrder = { open: 0, countered: 0, accepted: 1, aborted_locked: 2, completed: 3, aborted: 3, cancelled: 3, expired: 3 };
     const oa = statusOrder[a.status] ?? 3;
     const ob = statusOrder[b.status] ?? 3;
     if (oa !== ob) return oa - ob;
@@ -666,7 +666,7 @@ function renderOffersList() {
   });
 
   const activeCount = sorted.filter(o => o.status === 'open' || o.status === 'countered').length;
-  countEl.textContent = activeCount === sorted.length ? `(${sorted.length})` : `(${activeCount} open / ${sorted.length})`;
+  countEl.textContent = `(${activeCount})`;
 
   if (sorted.length === 0) {
     listEl.innerHTML = '<div style="color:#484f58; font-size:12px; text-align:center; padding:24px;">No offers yet. Create one or wait for offers to appear.</div>';
@@ -730,8 +730,10 @@ function renderOfferCard(offer) {
   let cardClass = 'offer-card';
   if (offer.isMine) cardClass += ' mine';
   else cardClass += isSell ? ' sell' : ' buy';
-  if (offer.status === 'cancelled' || offer.status === 'expired') cardClass += ' cancelled';
+  if (offer.status === 'cancelled' || offer.status === 'expired' || offer.status === 'aborted') cardClass += ' cancelled';
+  if (offer.status === 'aborted_locked') cardClass += ' aborted-locked';
   if (offer.status === 'accepted') cardClass += ' accepted';
+  if (offer.status === 'completed') cardClass += ' completed';
   card.className = cardClass;
 
   const dirLabel = isSell ? 'SELL' : 'BUY';
@@ -740,7 +742,10 @@ function renderOfferCard(offer) {
   const peerLabel = offer.isMine ? 'You' : npubLink(offer.pubkey);
 
   let statusBadge = '';
-  if (offer.status === 'accepted') statusBadge = '<span class="status-badge accepted">Accepted</span>';
+  if (offer.status === 'completed') statusBadge = '<span class="status-badge completed">Completed</span>';
+  else if (offer.status === 'accepted') statusBadge = '<span class="status-badge accepted">Accepted</span>';
+  else if (offer.status === 'aborted_locked') statusBadge = '<span class="status-badge aborted-locked">Aborted (funds locked)</span>';
+  else if (offer.status === 'aborted') statusBadge = '<span class="status-badge aborted">Aborted</span>';
   else if (offer.status === 'cancelled') statusBadge = '<span class="status-badge cancelled">Cancelled</span>';
   else if (offer.status === 'expired') statusBadge = '<span class="status-badge expired">Expired</span>';
 
@@ -758,7 +763,8 @@ function renderOfferCard(offer) {
   let alphAmountHtml = `<span class="alph">${formatAlph(offer.alphAmount)} ALPH</span>`;
   let btcAmountHtml = `<span class="btc">${formatSat(offer.btcSat)} sat</span>`;
 
-  if (offer.status === 'accepted' && offer.acceptEvent) {
+  const hasAcceptData = (offer.status === 'accepted' || offer.status === 'completed' || offer.status === 'aborted_locked') && offer.acceptEvent;
+  if (hasAcceptData) {
     const creatorPub = offer.pubkey;
     const acceptorPub = offer.acceptEvent.pubkey;
     let btcRecipientPub, alphRecipientPub;
@@ -790,9 +796,16 @@ function renderOfferCard(offer) {
       <span class="card-actions">${actionsHtml}</span>
     </div>`;
 
-  if (offer.status === 'accepted' && offer.acceptEvent) {
+  if (offer.status === 'completed' && offer.acceptEvent) {
     const acceptorLabel = offer.acceptEvent.pubkey === state.pubKeyHex ? 'You' : npubLink(offer.acceptEvent.pubkey);
-    html += `<div class="offer-details">Accepted by ${acceptorLabel}</div>`;
+    html += `<div class="offer-details">Swapped with ${acceptorLabel}</div>`;
+  } else if (offer.status === 'accepted' && offer.acceptEvent) {
+    const acceptorLabel = offer.acceptEvent.pubkey === state.pubKeyHex ? 'You' : npubLink(offer.acceptEvent.pubkey);
+    html += `<div class="offer-details">Accepted by ${acceptorLabel} — swap in progress</div>`;
+  } else if (offer.status === 'aborted_locked') {
+    html += `<div class="offer-details" style="color:#d29922">Funds still locked on-chain — use recovery to refund</div>`;
+  } else if (offer.status === 'aborted') {
+    html += `<div class="offer-details">Aborted before funds were locked</div>`;
   } else if (offer.status === 'expired') {
     html += `<div class="offer-details">Expired without acceptance</div>`;
   }
@@ -1131,10 +1144,13 @@ async function handlePeerAbort() {
   swapEventWaiters.length = 0;
 
   markOfferAborted(state.activeSwap.offerId);
-
   const lockDone = state.stepData.lock?.status === 'done';
+  const offer = state.offers.get(state.activeSwap.offerId);
+  if (offer) offer.status = lockDone ? 'aborted_locked' : 'aborted';
+
   if (lockDone) {
     saveSwapState();
+    renderOffersList();
     await transitionToRecovery();
   } else {
     resetSwap();
@@ -1542,6 +1558,10 @@ async function refundBtc() {
 function showSwapComplete() {
   clearSwapState();
   stopTimeoutMonitor();
+  if (state.activeSwap) {
+    const offer = state.offers.get(state.activeSwap.offerId);
+    if (offer) { offer.status = 'completed'; renderOffersList(); }
+  }
   const { alphAmount, btcSat, role } = state.activeSwap;
   const actionsEl = document.getElementById('swap-actions');
   actionsEl.innerHTML = `
@@ -1583,11 +1603,14 @@ async function abortSwap() {
   if (!confirm(msg)) return;
 
   markOfferAborted(state.activeSwap.offerId);
+  const offer = state.offers.get(state.activeSwap.offerId);
+  if (offer) offer.status = lockDone ? 'aborted_locked' : 'aborted';
   await sendAbortNotification();
 
   if (lockDone) {
     saveSwapState();
     addLogMsg('system', 'Swap aborted — transitioning to recovery...', 'System');
+    renderOffersList();
     await transitionToRecovery();
   } else {
     resetSwap();
