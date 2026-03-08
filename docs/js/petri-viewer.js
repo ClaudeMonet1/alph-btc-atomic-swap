@@ -108,13 +108,14 @@ export class PetriNetViewer {
   _pos(map, id, x, y) { map[id] = { x, y }; }
 
   _layoutVertical() {
-    // Happy path: center column
-    // Abort: left column        Cancel: right column (fully separate)
+    // Happy path: center column, top to bottom
+    // Abort: left column        Cancel: right column
+    // done/stop: bottom center, below everything — all paths flow down
     const S = 55;
-    const cx = 340, lx = 100, rx = 600;
+    const cx = 350, lx = 90, rx = 640;
     const pMap = {}, tMap = {};
 
-    // Happy path — center column
+    // Happy path — center column (without done/stop, those go at bottom)
     let y = 25;
     this._pos(tMap, 'start', cx, y);            y += S;
     this._pos(pMap, 'ready', cx, y);             y += S;
@@ -128,12 +129,10 @@ export class PetriNetViewer {
     this._pos(pMap, 'presigs_ready', cx, y);     y += S;
     this._pos(tMap, 'alice_claims_btc', cx, y);  y += S;
     this._pos(pMap, 't_revealed', cx, y);        y += S;
-    this._pos(tMap, 'bob_claims_alph', cx, y);   y += S;
-    this._pos(pMap, 'done', cx, y);              y += S;
-    this._pos(tMap, 'stop', cx, y);
-    const happyBottom = y;
+    this._pos(tMap, 'bob_claims_alph', cx, y);
+    const happyEndY = y;
 
-    // Abort path (left column) — branches from swap_agreed and btc_locked
+    // Abort path (left column)
     const saY = pMap.swap_agreed.y;
     const blY = pMap.btc_locked.y;
     this._pos(tMap, 'negotiate_timeout', lx, saY);
@@ -142,33 +141,34 @@ export class PetriNetViewer {
     this._pos(tMap, 't1_timeout_abort', lx, blY + S * 2);
     this._pos(pMap, 'btc_abort_refundable', lx, blY + S * 3);
     this._pos(tMap, 'bob_abort_refund', lx, blY + S * 4);
-    // bob_abort_refund → done: long arc to center, that's fine
+    const abortEndY = blY + S * 4;
 
-    // Cancel path (right column, fully on the right)
-    // Branches from both_locked and presigs_ready
+    // Cancel path (right column)
     const bkY = pMap.both_locked.y;
     const prY = pMap.presigs_ready.y;
     this._pos(tMap, 'exchange_timeout', rx, bkY);
     this._pos(tMap, 't2_timeout', rx, prY);
-    // Fork into two sub-columns under rx
     const forkY = prY + S;
-    const rlx = rx - 60, rrx = rx + 60; // cancel left/right sub-columns
+    const rlx = rx - 60, rrx = rx + 60;
     this._pos(pMap, 'alph_refundable', rlx, forkY);
     this._pos(pMap, 'btc_cancel_wait', rrx, forkY);
     this._pos(tMap, 'alice_cancel_refund', rlx, forkY + S);
     this._pos(tMap, 't1_timeout', rrx, forkY + S);
     this._pos(pMap, 'btc_cancel_refundable', rrx, forkY + S * 2);
     this._pos(tMap, 'bob_cancel_refund', rrx, forkY + S * 3);
-    // Join back at rx column
     this._pos(pMap, 'recovery_done', rx, forkY + S * 4);
     this._pos(tMap, 'both_recovered', rx, forkY + S * 5);
-    // both_recovered → done: long arc back to center, that's fine
+    const cancelEndY = forkY + S * 5;
+
+    // done/stop at bottom center — below all three paths
+    const doneY = Math.max(happyEndY, abortEndY, cancelEndY) + S;
+    this._pos(pMap, 'done', cx, doneY);
+    this._pos(tMap, 'stop', cx, doneY + S);
 
     for (const p of this.places) { const c = pMap[p.id]; if (c) { p.x = c.x; p.y = c.y; } }
     for (const t of this.transitions) { const c = tMap[t.id]; if (c) { t.x = c.x; t.y = c.y; } }
 
-    const maxY = Math.max(happyBottom + 20, forkY + S * 5.5);
-    this.svg.setAttribute('viewBox', `0 0 760 ${maxY}`);
+    this.svg.setAttribute('viewBox', `0 0 800 ${doneY + S + 25}`);
   }
 
   _layoutHorizontal() {
