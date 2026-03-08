@@ -9,6 +9,7 @@ import qrcode from 'qrcode-generator';
 import { SwapEngine } from './swap-engine.js';
 import { groupOfAddress, addressFromPublicKey } from './alph.js';
 import { getP2TRAddress } from './btc.js';
+import { PetriNetViewer } from './petri-viewer.js';
 
 // ============================================================
 // State
@@ -2630,6 +2631,21 @@ document.getElementById('help-modal').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) {
     document.getElementById('help-modal').classList.add('hidden');
   }
+});
+
+// Help modal tabs + Petri net viewer (lazy init)
+let petriViewer = null;
+document.querySelectorAll('.help-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.help-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const target = tab.dataset.tab;
+    document.getElementById('help-tab-howto').classList.toggle('hidden', target !== 'howto');
+    document.getElementById('help-tab-petri').classList.toggle('hidden', target !== 'petri');
+    if (target === 'petri' && !petriViewer) {
+      petriViewer = new PetriNetViewer(document.getElementById('petri-viewer-container'));
+    }
+  });
 });
 
 // Testnet: ALPH faucet
