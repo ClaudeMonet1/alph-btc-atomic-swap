@@ -2633,19 +2633,12 @@ document.getElementById('help-modal').addEventListener('click', (e) => {
   }
 });
 
-// Help modal tabs + Petri net viewer (lazy init)
+// Petri net viewer (lazy init on first help open)
 let petriViewer = null;
-document.querySelectorAll('.help-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.help-tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    const target = tab.dataset.tab;
-    document.getElementById('help-tab-howto').classList.toggle('hidden', target !== 'howto');
-    document.getElementById('help-tab-petri').classList.toggle('hidden', target !== 'petri');
-    if (target === 'petri' && !petriViewer) {
-      petriViewer = new PetriNetViewer(document.getElementById('petri-viewer-container'));
-    }
-  });
+document.getElementById('help-btn').addEventListener('click', () => {
+  if (!petriViewer) {
+    petriViewer = new PetriNetViewer(document.getElementById('petri-viewer-container'));
+  }
 });
 
 // Testnet: ALPH faucet

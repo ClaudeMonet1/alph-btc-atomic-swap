@@ -226,11 +226,6 @@
   .help-content li { margin-bottom: 4px; }
   .help-content table { border-collapse: collapse; margin: 6px 0; }
   .help-content td { padding: 3px 0; font-size: 11px; }
-  .help-tabs { display: flex; gap: 0; border-bottom: 1px solid #30363d; margin-bottom: 12px; }
-  .help-tab { padding: 6px 14px; font-size: 11px; cursor: pointer; color: #8b949e;
-    background: none; border: none; border-bottom: 2px solid transparent; font-family: inherit; }
-  .help-tab:hover { color: #c9d1d9; }
-  .help-tab.active { color: #e6edf3; border-bottom-color: #58a6ff; }
   .petri-controls { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
   .petri-log { font-size: 10px; color: #8b949e; max-height: 80px; overflow-y: auto;
     border-top: 1px solid #30363d; margin-top: 8px; padding-top: 6px; }
@@ -533,19 +528,19 @@
   <!-- Help Modal -->
   <div class="help-modal hidden" id="help-modal">
     <div class="help-modal-inner">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0">
-        <h3 style="font-size:14px; margin:0">Help</h3>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
+        <h3 style="font-size:14px; margin:0">How It Works</h3>
         <button class="sm" id="help-close-btn" style="padding:2px 8px">X</button>
       </div>
-      <div class="help-tabs">
-        <button class="help-tab active" data-tab="howto">How It Works</button>
-        <button class="help-tab" data-tab="petri">Protocol Simulator</button>
-      </div>
-      <div class="help-content" id="help-tab-howto">
+      <div class="help-content">
         <p><strong>Peer-to-peer atomic swap</strong> between Bitcoin (signet) and Alephium (testnet) using MuSig2 adaptor signatures. No intermediaries, no custodians.</p>
 
         <h4>Roles</h4>
         <p><strong>Alice</strong> = ALPH seller, <strong>Bob</strong> = BTC seller. If you publish a "Sell ALPH" offer or accept a "Buy ALPH" offer, you are Alice. Otherwise you are Bob.</p>
+
+        <h4>Protocol Simulator</h4>
+        <p style="margin-bottom:8px">Click <strong>Start</strong>, then fire transitions to explore happy path, cancel, and abort scenarios.</p>
+        <div id="petri-viewer-container"></div>
 
         <h4>Protocol (5 steps)</h4>
         <ol>
@@ -580,9 +575,6 @@
 
         <h4>Recovery</h4>
         <p>Swap state is saved to localStorage at key checkpoints (<em>locked</em>, <em>presigned</em>, <em>btc_claimed</em>). If the page is refreshed mid-swap, recovery UI appears with available actions: resume (if peer is online), claim, or refund (after timeout).</p>
-      </div>
-      <div id="help-tab-petri" class="hidden">
-        <div id="petri-viewer-container"></div>
       </div>
     </div>
   </div>
