@@ -108,123 +108,118 @@ export class PetriNetViewer {
   _pos(map, id, x, y) { map[id] = { x, y }; }
 
   _layoutVertical() {
-    // Happy path: center column, top to bottom
-    // Abort: left branch off swap_agreed/btc_locked
-    // Cancel: right branch off both_locked/presigs_ready
-    const S = 60; // step size
-    const cx = 340, lx = 120, rx = 580; // center, left, right columns
+    // Happy path: center column, generous 55px steps
+    // Abort: far-left branch     Cancel: far-right branch
+    const S = 55;
+    const cx = 380, lx = 120, rx = 640;
     const pMap = {}, tMap = {};
 
-    // === Happy path (center) ===
-    let y = 30;
-    this._pos(tMap, 'start', cx, y);
-    y += S * 0.7;  this._pos(pMap, 'ready', cx, y);
-    y += S * 0.7;  this._pos(tMap, 'negotiate', cx, y);
-    y += S * 0.7;  this._pos(pMap, 'swap_agreed', cx, y);
-    y += S * 0.7;  this._pos(tMap, 'lock_btc', cx, y);
-    y += S * 0.7;  this._pos(pMap, 'btc_locked', cx, y);
-    y += S * 0.7;  this._pos(tMap, 'lock_alph', cx, y);
-    y += S * 0.7;  this._pos(pMap, 'both_locked', cx, y);
-    y += S * 0.7;  this._pos(tMap, 'exchange_presigs', cx, y);
-    y += S * 0.7;  this._pos(pMap, 'presigs_ready', cx, y);
-    y += S * 0.7;  this._pos(tMap, 'alice_claims_btc', cx, y);
-    y += S * 0.7;  this._pos(pMap, 't_revealed', cx, y);
-    y += S * 0.7;  this._pos(tMap, 'bob_claims_alph', cx, y);
-    y += S * 0.7;  this._pos(pMap, 'done', cx, y);
-    y += S * 0.7;  this._pos(tMap, 'stop', cx, y);
-    const totalH = y + 20;
+    // Happy path — alternating transitions and places down center
+    let y = 25;
+    this._pos(tMap, 'start', cx, y);            y += S;
+    this._pos(pMap, 'ready', cx, y);             y += S;
+    this._pos(tMap, 'negotiate', cx, y);         y += S;
+    this._pos(pMap, 'swap_agreed', cx, y);       y += S;
+    this._pos(tMap, 'lock_btc', cx, y);          y += S;
+    this._pos(pMap, 'btc_locked', cx, y);        y += S;
+    this._pos(tMap, 'lock_alph', cx, y);         y += S;
+    this._pos(pMap, 'both_locked', cx, y);       y += S;
+    this._pos(tMap, 'exchange_presigs', cx, y);  y += S;
+    this._pos(pMap, 'presigs_ready', cx, y);     y += S;
+    this._pos(tMap, 'alice_claims_btc', cx, y);  y += S;
+    this._pos(pMap, 't_revealed', cx, y);        y += S;
+    this._pos(tMap, 'bob_claims_alph', cx, y);   y += S;
+    this._pos(pMap, 'done', cx, y);              y += S;
+    this._pos(tMap, 'stop', cx, y);
 
-    // === Abort path (left) — branches from swap_agreed & btc_locked ===
+    // Abort path (left column) — branches at swap_agreed and btc_locked
     const saY = pMap.swap_agreed.y;
     const blY = pMap.btc_locked.y;
     this._pos(tMap, 'negotiate_timeout', lx, saY);
     this._pos(tMap, 'lock_timeout', lx, blY);
-    this._pos(pMap, 'btc_abort_wait', lx, blY + S * 0.7);
-    this._pos(tMap, 't1_timeout_abort', lx, blY + S * 1.4);
-    this._pos(pMap, 'btc_abort_refundable', lx, blY + S * 2.1);
-    this._pos(tMap, 'bob_abort_refund', lx, blY + S * 2.8);
+    this._pos(pMap, 'btc_abort_wait', lx, blY + S);
+    this._pos(tMap, 't1_timeout_abort', lx, blY + S * 2);
+    this._pos(pMap, 'btc_abort_refundable', lx, blY + S * 3);
+    this._pos(tMap, 'bob_abort_refund', lx, blY + S * 4);
 
-    // === Cancel path (right) — branches from both_locked & presigs_ready ===
+    // Cancel path (right column) — branches at both_locked and presigs_ready
     const bkY = pMap.both_locked.y;
     const prY = pMap.presigs_ready.y;
     this._pos(tMap, 'exchange_timeout', rx, bkY);
     this._pos(tMap, 't2_timeout', rx, prY);
-    // Cancel places/transitions in right column
-    const forkY = (bkY + prY) / 2 + S * 0.7;
-    this._pos(pMap, 'alph_refundable', rx - 80, forkY);
-    this._pos(pMap, 'btc_cancel_wait', rx + 80, forkY);
-    this._pos(tMap, 'alice_cancel_refund', rx - 80, forkY + S * 0.7);
-    this._pos(tMap, 't1_timeout', rx + 80, forkY + S * 0.7);
-    this._pos(pMap, 'btc_cancel_refundable', rx + 80, forkY + S * 1.4);
-    this._pos(tMap, 'bob_cancel_refund', rx + 80, forkY + S * 2.1);
-    this._pos(pMap, 'recovery_done', rx, forkY + S * 2.1);
-    this._pos(tMap, 'both_recovered', rx, forkY + S * 2.8);
+    const forkY = prY + S;
+    this._pos(pMap, 'alph_refundable', rx - 70, forkY);
+    this._pos(pMap, 'btc_cancel_wait', rx + 70, forkY);
+    this._pos(tMap, 'alice_cancel_refund', rx - 70, forkY + S);
+    this._pos(tMap, 't1_timeout', rx + 70, forkY + S);
+    this._pos(pMap, 'btc_cancel_refundable', rx + 70, forkY + S * 2);
+    this._pos(tMap, 'bob_cancel_refund', rx + 70, forkY + S * 3);
+    this._pos(pMap, 'recovery_done', rx, forkY + S * 3);
+    this._pos(tMap, 'both_recovered', rx, forkY + S * 4);
 
-    // Apply positions
     for (const p of this.places) { const c = pMap[p.id]; if (c) { p.x = c.x; p.y = c.y; } }
     for (const t of this.transitions) { const c = tMap[t.id]; if (c) { t.x = c.x; t.y = c.y; } }
 
-    const maxY = Math.max(totalH, forkY + S * 3.2);
-    this.svg.setAttribute('viewBox', `0 0 760 ${maxY}`);
+    const maxY = Math.max(y + 20, forkY + S * 4.5);
+    this.svg.setAttribute('viewBox', `0 0 810 ${maxY}`);
   }
 
   _layoutHorizontal() {
-    // Happy path: left to right (horizontal)
-    // Abort: branch down-left
-    // Cancel: branch down-right
-    const S = 70;
-    const cy = 80; // center row Y
+    // Happy path: left to right, generous 55px steps
+    // Abort: branch below-left   Cancel: branch below-right
+    const S = 55;
+    const cy = 50;
     const pMap = {}, tMap = {};
 
     let x = 30;
-    this._pos(tMap, 'start', x, cy);
-    x += S * 0.65; this._pos(pMap, 'ready', x, cy);
-    x += S * 0.65; this._pos(tMap, 'negotiate', x, cy);
-    x += S * 0.65; this._pos(pMap, 'swap_agreed', x, cy);
-    x += S * 0.65; this._pos(tMap, 'lock_btc', x, cy);
-    x += S * 0.65; this._pos(pMap, 'btc_locked', x, cy);
-    x += S * 0.65; this._pos(tMap, 'lock_alph', x, cy);
-    x += S * 0.65; this._pos(pMap, 'both_locked', x, cy);
-    x += S * 0.65; this._pos(tMap, 'exchange_presigs', x, cy);
-    x += S * 0.65; this._pos(pMap, 'presigs_ready', x, cy);
-    x += S * 0.65; this._pos(tMap, 'alice_claims_btc', x, cy);
-    x += S * 0.65; this._pos(pMap, 't_revealed', x, cy);
-    x += S * 0.65; this._pos(tMap, 'bob_claims_alph', x, cy);
-    x += S * 0.65; this._pos(pMap, 'done', x, cy);
-    x += S * 0.65; this._pos(tMap, 'stop', x, cy);
+    this._pos(tMap, 'start', x, cy);            x += S;
+    this._pos(pMap, 'ready', x, cy);             x += S;
+    this._pos(tMap, 'negotiate', x, cy);         x += S;
+    this._pos(pMap, 'swap_agreed', x, cy);       x += S;
+    this._pos(tMap, 'lock_btc', x, cy);          x += S;
+    this._pos(pMap, 'btc_locked', x, cy);        x += S;
+    this._pos(tMap, 'lock_alph', x, cy);         x += S;
+    this._pos(pMap, 'both_locked', x, cy);       x += S;
+    this._pos(tMap, 'exchange_presigs', x, cy);  x += S;
+    this._pos(pMap, 'presigs_ready', x, cy);     x += S;
+    this._pos(tMap, 'alice_claims_btc', x, cy);  x += S;
+    this._pos(pMap, 't_revealed', x, cy);        x += S;
+    this._pos(tMap, 'bob_claims_alph', x, cy);   x += S;
+    this._pos(pMap, 'done', x, cy);              x += S;
+    this._pos(tMap, 'stop', x, cy);
     const totalW = x + 30;
 
-    // Abort path (below-left)
+    // Abort path (below left section)
     const saX = pMap.swap_agreed.x;
     const blX = pMap.btc_locked.x;
-    const abY = cy + S * 0.9;
+    const abY = cy + S;
     this._pos(tMap, 'negotiate_timeout', saX, abY);
     this._pos(tMap, 'lock_timeout', blX, abY);
-    this._pos(pMap, 'btc_abort_wait', blX, abY + S * 0.7);
-    this._pos(tMap, 't1_timeout_abort', blX, abY + S * 1.4);
-    this._pos(pMap, 'btc_abort_refundable', blX, abY + S * 2.1);
-    this._pos(tMap, 'bob_abort_refund', blX, abY + S * 2.8);
+    this._pos(pMap, 'btc_abort_wait', blX, abY + S);
+    this._pos(tMap, 't1_timeout_abort', blX, abY + S * 2);
+    this._pos(pMap, 'btc_abort_refundable', blX, abY + S * 3);
+    this._pos(tMap, 'bob_abort_refund', blX, abY + S * 4);
 
-    // Cancel path (below-right)
+    // Cancel path (below right section)
     const bkX = pMap.both_locked.x;
     const prX = pMap.presigs_ready.x;
-    const cnY = cy + S * 0.9;
+    const cnY = cy + S;
     this._pos(tMap, 'exchange_timeout', bkX, cnY);
     this._pos(tMap, 't2_timeout', prX, cnY);
     const midX = (bkX + prX) / 2;
-    this._pos(pMap, 'alph_refundable', midX - 50, cnY + S * 0.7);
-    this._pos(pMap, 'btc_cancel_wait', midX + 50, cnY + S * 0.7);
-    this._pos(tMap, 'alice_cancel_refund', midX - 50, cnY + S * 1.4);
-    this._pos(tMap, 't1_timeout', midX + 50, cnY + S * 1.4);
-    this._pos(pMap, 'btc_cancel_refundable', midX + 50, cnY + S * 2.1);
-    this._pos(tMap, 'bob_cancel_refund', midX + 50, cnY + S * 2.8);
-    this._pos(pMap, 'recovery_done', midX, cnY + S * 2.8);
-    this._pos(tMap, 'both_recovered', midX, cnY + S * 3.5);
+    this._pos(pMap, 'alph_refundable', midX - 40, cnY + S);
+    this._pos(pMap, 'btc_cancel_wait', midX + 40, cnY + S);
+    this._pos(tMap, 'alice_cancel_refund', midX - 40, cnY + S * 2);
+    this._pos(tMap, 't1_timeout', midX + 40, cnY + S * 2);
+    this._pos(pMap, 'btc_cancel_refundable', midX + 40, cnY + S * 3);
+    this._pos(tMap, 'bob_cancel_refund', midX + 40, cnY + S * 4);
+    this._pos(pMap, 'recovery_done', midX, cnY + S * 4);
+    this._pos(tMap, 'both_recovered', midX, cnY + S * 5);
 
     for (const p of this.places) { const c = pMap[p.id]; if (c) { p.x = c.x; p.y = c.y; } }
     for (const t of this.transitions) { const c = tMap[t.id]; if (c) { t.x = c.x; t.y = c.y; } }
 
-    const maxY = cnY + S * 4;
+    const maxY = cnY + S * 5.5;
     this.svg.setAttribute('viewBox', `0 0 ${totalW} ${maxY}`);
   }
 
