@@ -341,51 +341,6 @@
   .counter-item .counter-info { color: #c9d1d9; }
   .counter-item .counter-amounts { color: #e6edf3; }
 
-  /* Collapsible protocol log */
-  .log-section {
-    border-top: 1px solid #30363d; flex-shrink: 0;
-  }
-  .log-toggle {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 8px 16px; cursor: pointer; background: #161b22;
-    border: none; width: 100%; font-size: 12px; color: #8b949e;
-    border-radius: 0;
-  }
-  .log-toggle:hover { background: #1c2129; color: #e6edf3; }
-  .log-toggle .arrow { transition: transform 0.2s; }
-  .log-toggle.open .arrow { transform: rotate(90deg); }
-  .log-content { display: none; max-height: 250px; overflow-y: auto; }
-  .log-content.open { display: block; }
-  .log-filter-bar {
-    display: flex; gap: 0; border-bottom: 1px solid #30363d;
-    background: #0d1117; flex-shrink: 0;
-  }
-  .log-filter-bar button {
-    border: none; border-radius: 0; padding: 4px 12px; font-size: 10px;
-    background: transparent; color: #8b949e; border-bottom: 2px solid transparent;
-  }
-  .log-filter-bar button.active { color: #e6edf3; border-bottom-color: #58a6ff; }
-  .log-filter-bar button:hover { color: #e6edf3; background: transparent; }
-  .log-messages { padding: 8px 16px; display: flex; flex-direction: column; gap: 4px; }
-  .msg {
-    padding: 4px 8px; border-radius: 3px; background: #0d1117;
-    border-left: 3px solid #30363d; font-size: 11px; word-break: break-all;
-  }
-  .msg.system { border-left-color: #8b949e; }
-  .msg.setup { border-left-color: #1f6feb; }
-  .msg.nonce { border-left-color: #8957e5; }
-  .msg.presig { border-left-color: #d29922; }
-  .msg.claim { border-left-color: #2ea043; }
-  .msg .tag {
-    display: inline-block; font-size: 9px; font-weight: 700; padding: 0px 4px;
-    border-radius: 2px; margin-right: 4px; text-transform: uppercase;
-  }
-  .msg.system .tag { background: #8b949e33; color: #8b949e; }
-  .msg.setup .tag { background: #1f6feb33; color: #1f6feb; }
-  .msg.nonce .tag { background: #8957e533; color: #8957e5; }
-  .msg.presig .tag { background: #d2992233; color: #d29922; }
-  .msg.claim .tag { background: #2ea04333; color: #2ea043; }
-
   /* Right: Swap panel */
   .col-right {
     width: 380px; min-width: 320px; display: flex; flex-direction: column;
@@ -658,21 +613,6 @@
         </div>
       </div>
 
-      <!-- Collapsible Protocol Log -->
-      <div class="log-section" id="log-section">
-        <button class="log-toggle" id="log-toggle">
-          <span>Protocol Log</span>
-          <span class="arrow">&#9654;</span>
-        </button>
-        <div class="log-content" id="log-content">
-          <div class="log-filter-bar">
-            <button class="active" data-filter="all">All</button>
-            <button data-filter="protocol">Protocol</button>
-            <button data-filter="system">System</button>
-          </div>
-          <div class="log-messages" id="log-messages"></div>
-        </div>
-      </div>
     </div>
 
     <!-- Right: Active Swap Panel -->

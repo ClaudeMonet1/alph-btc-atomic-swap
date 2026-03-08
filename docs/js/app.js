@@ -37,7 +37,6 @@ const state = {
   // Swap execution
   stepData: {},
   selectedUtxo: null,
-  logFilter: 'all',
 };
 
 // ============================================================
@@ -340,73 +339,15 @@ async function createSwapClaim({ sessionId, recipientPubHex, claimType, ...data 
 }
 
 // ============================================================
-// UI: Protocol Log
+// Logging (no-op — protocol log removed)
 // ============================================================
 
-const logMessagesEl = document.getElementById('log-messages');
-
-function addLogMsg(type, content, author = null) {
-  const div = document.createElement('div');
-  div.className = `msg ${type}`;
-  div.dataset.type = type === 'system' ? 'system' : 'protocol';
-
-  const tagNames = { system: 'SYS', setup: 'SETUP', nonce: 'NONCE', presig: 'PRESIG', claim: 'CLAIM' };
-  let html = `<span class="tag">${tagNames[type] || type}</span>`;
-  if (author) html += `<span style="color:#8b949e; font-size:10px">${author}</span> `;
-  html += `<span>${escapeHtml(content)}</span>`;
-  div.innerHTML = html;
-
-  logMessagesEl.appendChild(div);
-  applyLogFilter();
-  logMessagesEl.scrollTop = logMessagesEl.scrollHeight;
-}
-
-function addProtocolMsg(kind, content, author) {
-  const kindMap = {
-    [SWAP_SETUP_KIND]: 'setup',
-    [SWAP_NONCE_KIND]: 'nonce',
-    [SWAP_PRESIG_KIND]: 'presig',
-    [SWAP_CLAIM_KIND]: 'claim',
-  };
-  const type = kindMap[kind] || 'setup';
-  let text = content;
-  try {
-    const parsed = JSON.parse(content);
-    text = Object.entries(parsed).map(([k, v]) => {
-      const vs = String(v);
-      return `${k}: ${vs.length > 24 ? vs.slice(0, 24) + '...' : vs}`;
-    }).join(' | ');
-  } catch {}
-  addLogMsg(type, text, author);
-}
+function addLogMsg() {}
+function addProtocolMsg() {}
 
 function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
-
-function applyLogFilter() {
-  const filter = state.logFilter;
-  logMessagesEl.querySelectorAll('.msg').forEach(el => {
-    if (filter === 'all') { el.style.display = ''; return; }
-    el.style.display = el.dataset.type === filter ? '' : 'none';
-  });
-}
-
-document.getElementById('log-toggle').addEventListener('click', () => {
-  const btn = document.getElementById('log-toggle');
-  const content = document.getElementById('log-content');
-  btn.classList.toggle('open');
-  content.classList.toggle('open');
-});
-
-document.querySelectorAll('.log-filter-bar button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.log-filter-bar button').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    state.logFilter = btn.dataset.filter;
-    applyLogFilter();
-  });
-});
 
 // ============================================================
 // UI: Swap Steps
@@ -1099,11 +1040,6 @@ function startSwapFromAccept(offer, acceptEvent, acceptContent) {
   }
 
   subscribeToSwap(sessionId, peerPubHex);
-
-  document.getElementById('log-toggle').classList.add('open');
-  document.getElementById('log-content').classList.add('open');
-
-  addLogMsg('system', `Swap started as ${role}: ${formatAlph(alphAmount)} ALPH <-> ${formatSat(btcSat)} sat`, 'System');
 
   // On mobile, scroll to the swap panel (rendered above offers via column-reverse)
   document.getElementById('swap-active').scrollIntoView({ behavior: 'smooth', block: 'start' });
