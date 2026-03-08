@@ -811,7 +811,7 @@ function renderOfferCard(offer) {
       ${statusBadge}
     </div>
     <div class="card-body">
-      <span class="peer">by ${peerLabel}${!isActive && timeStr ? ` <span style="color:#484f58; font-size:10px">${timeStr}</span>` : ''}</span>
+      <span class="peer">by ${peerLabel}</span>
       <span class="card-actions">${actionsHtml}</span>
     </div>`;
 
@@ -846,6 +846,10 @@ function renderOfferCard(offer) {
       </div>`;
     });
     html += '</div>';
+  }
+
+  if (!isActive && timeStr) {
+    html += `<div class="offer-details" style="color:#6e7681">${timeStr}</div>`;
   }
 
   card.innerHTML = html;
