@@ -1,5 +1,6 @@
 // Petri Net Protocol Viewer — Interactive SVG simulator
 // Matches the formal model in docs/protocol.md
+// Responsive: vertical happy path on wide screens, horizontal on narrow
 
 export class PetriNetViewer {
   constructor(container) {
@@ -7,30 +8,33 @@ export class PetriNetViewer {
     this.marking = {};
     this.log = [];
     this.completed = false;
-    this._define();
+    this._defineNet();
     this._build();
+    this._onResize = () => this._applyLayout();
+    window.addEventListener('resize', this._onResize);
     this.reset();
   }
 
-  // ── Net definition ──────────────────────────────────────────
+  // ── Net definition (topology only, no coords) ──────────────
 
-  _define() {
+  _defineNet() {
     this.places = [
-      { id: 'ready', label: 'ready', x: 425, y: 30 },
-      { id: 'swap_agreed', label: 'swap_agreed', x: 425, y: 90 },
-      { id: 'btc_locked', label: 'btc_locked', x: 425, y: 150 },
-      { id: 'both_locked', label: 'both_locked', x: 425, y: 210 },
-      { id: 'presigs_ready', label: 'presigs_ready', x: 425, y: 290 },
-      { id: 't_revealed', label: 't_revealed', x: 425, y: 370 },
-      { id: 'done', label: 'done', x: 425, y: 450 },
+      // Happy path (center column)
+      { id: 'ready', label: 'ready' },
+      { id: 'swap_agreed', label: 'swap_agreed' },
+      { id: 'btc_locked', label: 'btc_locked' },
+      { id: 'both_locked', label: 'both_locked' },
+      { id: 'presigs_ready', label: 'presigs_ready' },
+      { id: 't_revealed', label: 't_revealed' },
+      { id: 'done', label: 'done' },
       // Cancel path
-      { id: 'alph_refundable', label: 'alph_refundable', x: 220, y: 350 },
-      { id: 'btc_cancel_wait', label: 'btc_cancel_wait', x: 630, y: 350 },
-      { id: 'btc_cancel_refundable', label: 'btc_cancel_refundable', x: 630, y: 410 },
-      { id: 'recovery_done', label: 'recovery_done', x: 425, y: 410 },
+      { id: 'alph_refundable', label: 'alph_refundable' },
+      { id: 'btc_cancel_wait', label: 'btc_cancel_wait' },
+      { id: 'btc_cancel_refundable', label: 'btc_cancel_refundable' },
+      { id: 'recovery_done', label: 'recovery_done' },
       // Abort path
-      { id: 'btc_abort_wait', label: 'btc_abort_wait', x: 150, y: 180 },
-      { id: 'btc_abort_refundable', label: 'btc_abort_refundable', x: 150, y: 240 },
+      { id: 'btc_abort_wait', label: 'btc_abort_wait' },
+      { id: 'btc_abort_refundable', label: 'btc_abort_refundable' },
     ];
 
     this.transitions = [
@@ -40,7 +44,7 @@ export class PetriNetViewer {
       { id: 'negotiate', label: 'negotiate', actor: null,
         inputs: ['ready'], outputs: ['swap_agreed'],
         desc: 'Both parties agree on swap parameters' },
-      { id: 'negotiate_timeout', label: 'negotiate_timeout', actor: 'timeout',
+      { id: 'negotiate_timeout', label: 'neg_timeout', actor: 'timeout',
         inputs: ['swap_agreed'], outputs: ['done'],
         desc: 'Bob doesn\'t lock BTC — abort' },
       { id: 'lock_btc', label: 'lock_btc', actor: 'Bob',
@@ -52,71 +56,176 @@ export class PetriNetViewer {
       { id: 'lock_alph', label: 'lock_alph', actor: 'Alice',
         inputs: ['btc_locked'], outputs: ['both_locked'],
         desc: 'Alice locks ALPH in Ralph contract' },
-      { id: 'exchange_presigs', label: 'exchange_presigs', actor: null,
+      { id: 'exchange_presigs', label: 'exch_presigs', actor: null,
         inputs: ['both_locked'], outputs: ['presigs_ready'],
         desc: 'Exchange adaptor pre-signatures via Nostr' },
-      { id: 'exchange_timeout', label: 'exchange_timeout', actor: 'timeout',
+      { id: 'exchange_timeout', label: 'exch_timeout', actor: 'timeout',
         inputs: ['both_locked'], outputs: ['alph_refundable', 'btc_cancel_wait'],
         desc: 'Pre-sig exchange stalls — fork to cancel' },
-      { id: 'alice_claims_btc', label: 'alice_claims_btc', actor: 'Alice',
+      { id: 'alice_claims_btc', label: 'alice_claim', actor: 'Alice',
         inputs: ['presigs_ready'], outputs: ['t_revealed'],
         desc: 'Alice claims BTC, revealing adaptor secret t' },
       { id: 't2_timeout', label: 't2_timeout', actor: 'timeout',
         inputs: ['presigs_ready'], outputs: ['alph_refundable', 'btc_cancel_wait'],
         desc: 'Alice doesn\'t claim — fork to cancel' },
-      { id: 'bob_claims_alph', label: 'bob_claims_alph', actor: 'Bob',
+      { id: 'bob_claims_alph', label: 'bob_claim', actor: 'Bob',
         inputs: ['t_revealed'], outputs: ['done'],
         desc: 'Bob extracts t and claims ALPH' },
       // Cancel path
-      { id: 'alice_cancel_refund', label: 'alice_cancel_refund', actor: 'Alice',
+      { id: 'alice_cancel_refund', label: 'alice_refund', actor: 'Alice',
         inputs: ['alph_refundable'], outputs: ['recovery_done'],
         desc: 'Alice refunds ALPH after T2' },
       { id: 't1_timeout', label: 't1_timeout', actor: 'timeout',
         inputs: ['btc_cancel_wait'], outputs: ['btc_cancel_refundable'],
         desc: 'T1 expires — Bob can refund BTC' },
-      { id: 'bob_cancel_refund', label: 'bob_cancel_refund', actor: 'Bob',
+      { id: 'bob_cancel_refund', label: 'bob_refund', actor: 'Bob',
         inputs: ['btc_cancel_refundable'], outputs: ['recovery_done'],
         desc: 'Bob refunds BTC after T1' },
-      { id: 'both_recovered', label: 'both_recovered', actor: null,
+      { id: 'both_recovered', label: 'both_recov', actor: null,
         inputs: ['recovery_done', 'recovery_done'], outputs: ['done'],
         desc: 'Both refunds complete — join' },
       // Abort path
-      { id: 't1_timeout_abort', label: 't1_timeout_abort', actor: 'timeout',
+      { id: 't1_timeout_abort', label: 't1_abort', actor: 'timeout',
         inputs: ['btc_abort_wait'], outputs: ['btc_abort_refundable'],
         desc: 'T1 expires — Bob can refund locked BTC' },
-      { id: 'bob_abort_refund', label: 'bob_abort_refund', actor: 'Bob',
+      { id: 'bob_abort_refund', label: 'bob_abort', actor: 'Bob',
         inputs: ['btc_abort_refundable'], outputs: ['done'],
         desc: 'Bob refunds BTC (abort path)' },
       { id: 'stop', label: 'stop', actor: null,
         inputs: ['done'], outputs: [],
         desc: 'Protocol terminates — net is empty' },
     ];
+  }
 
-    // Transition positions (manual layout)
-    const tPos = {
-      start:               { x: 425, y: 10 },
-      negotiate:           { x: 425, y: 60 },
-      negotiate_timeout:   { x: 280, y: 90 },
-      lock_btc:            { x: 425, y: 120 },
-      lock_timeout:        { x: 280, y: 150 },
-      lock_alph:           { x: 425, y: 180 },
-      exchange_presigs:    { x: 425, y: 250 },
-      exchange_timeout:    { x: 280, y: 240 },
-      alice_claims_btc:    { x: 425, y: 330 },
-      t2_timeout:          { x: 280, y: 310 },
-      bob_claims_alph:     { x: 425, y: 410 },
-      alice_cancel_refund: { x: 220, y: 390 },
-      t1_timeout:          { x: 630, y: 380 },
-      bob_cancel_refund:   { x: 630, y: 440 },
-      both_recovered:      { x: 425, y: 440 },
-      t1_timeout_abort:    { x: 150, y: 210 },
-      bob_abort_refund:    { x: 150, y: 270 },
-      stop:                { x: 425, y: 480 },
-    };
-    for (const t of this.transitions) {
-      const p = tPos[t.id];
-      if (p) { t.x = p.x; t.y = p.y; }
-    }
+  // ── Layout (responsive) ────────────────────────────────────
+
+  _applyLayout() {
+    const wide = this.container.offsetWidth > 540;
+    if (wide) this._layoutVertical(); else this._layoutHorizontal();
+    this._render();
+  }
+
+  _pos(map, id, x, y) { map[id] = { x, y }; }
+
+  _layoutVertical() {
+    // Happy path: center column, top to bottom
+    // Abort: left branch off swap_agreed/btc_locked
+    // Cancel: right branch off both_locked/presigs_ready
+    const S = 60; // step size
+    const cx = 340, lx = 120, rx = 580; // center, left, right columns
+    const pMap = {}, tMap = {};
+
+    // === Happy path (center) ===
+    let y = 30;
+    this._pos(tMap, 'start', cx, y);
+    y += S * 0.7;  this._pos(pMap, 'ready', cx, y);
+    y += S * 0.7;  this._pos(tMap, 'negotiate', cx, y);
+    y += S * 0.7;  this._pos(pMap, 'swap_agreed', cx, y);
+    y += S * 0.7;  this._pos(tMap, 'lock_btc', cx, y);
+    y += S * 0.7;  this._pos(pMap, 'btc_locked', cx, y);
+    y += S * 0.7;  this._pos(tMap, 'lock_alph', cx, y);
+    y += S * 0.7;  this._pos(pMap, 'both_locked', cx, y);
+    y += S * 0.7;  this._pos(tMap, 'exchange_presigs', cx, y);
+    y += S * 0.7;  this._pos(pMap, 'presigs_ready', cx, y);
+    y += S * 0.7;  this._pos(tMap, 'alice_claims_btc', cx, y);
+    y += S * 0.7;  this._pos(pMap, 't_revealed', cx, y);
+    y += S * 0.7;  this._pos(tMap, 'bob_claims_alph', cx, y);
+    y += S * 0.7;  this._pos(pMap, 'done', cx, y);
+    y += S * 0.7;  this._pos(tMap, 'stop', cx, y);
+    const totalH = y + 20;
+
+    // === Abort path (left) — branches from swap_agreed & btc_locked ===
+    const saY = pMap.swap_agreed.y;
+    const blY = pMap.btc_locked.y;
+    this._pos(tMap, 'negotiate_timeout', lx, saY);
+    this._pos(tMap, 'lock_timeout', lx, blY);
+    this._pos(pMap, 'btc_abort_wait', lx, blY + S * 0.7);
+    this._pos(tMap, 't1_timeout_abort', lx, blY + S * 1.4);
+    this._pos(pMap, 'btc_abort_refundable', lx, blY + S * 2.1);
+    this._pos(tMap, 'bob_abort_refund', lx, blY + S * 2.8);
+
+    // === Cancel path (right) — branches from both_locked & presigs_ready ===
+    const bkY = pMap.both_locked.y;
+    const prY = pMap.presigs_ready.y;
+    this._pos(tMap, 'exchange_timeout', rx, bkY);
+    this._pos(tMap, 't2_timeout', rx, prY);
+    // Cancel places/transitions in right column
+    const forkY = (bkY + prY) / 2 + S * 0.7;
+    this._pos(pMap, 'alph_refundable', rx - 80, forkY);
+    this._pos(pMap, 'btc_cancel_wait', rx + 80, forkY);
+    this._pos(tMap, 'alice_cancel_refund', rx - 80, forkY + S * 0.7);
+    this._pos(tMap, 't1_timeout', rx + 80, forkY + S * 0.7);
+    this._pos(pMap, 'btc_cancel_refundable', rx + 80, forkY + S * 1.4);
+    this._pos(tMap, 'bob_cancel_refund', rx + 80, forkY + S * 2.1);
+    this._pos(pMap, 'recovery_done', rx, forkY + S * 2.1);
+    this._pos(tMap, 'both_recovered', rx, forkY + S * 2.8);
+
+    // Apply positions
+    for (const p of this.places) { const c = pMap[p.id]; if (c) { p.x = c.x; p.y = c.y; } }
+    for (const t of this.transitions) { const c = tMap[t.id]; if (c) { t.x = c.x; t.y = c.y; } }
+
+    const maxY = Math.max(totalH, forkY + S * 3.2);
+    this.svg.setAttribute('viewBox', `0 0 760 ${maxY}`);
+  }
+
+  _layoutHorizontal() {
+    // Happy path: left to right (horizontal)
+    // Abort: branch down-left
+    // Cancel: branch down-right
+    const S = 70;
+    const cy = 80; // center row Y
+    const pMap = {}, tMap = {};
+
+    let x = 30;
+    this._pos(tMap, 'start', x, cy);
+    x += S * 0.65; this._pos(pMap, 'ready', x, cy);
+    x += S * 0.65; this._pos(tMap, 'negotiate', x, cy);
+    x += S * 0.65; this._pos(pMap, 'swap_agreed', x, cy);
+    x += S * 0.65; this._pos(tMap, 'lock_btc', x, cy);
+    x += S * 0.65; this._pos(pMap, 'btc_locked', x, cy);
+    x += S * 0.65; this._pos(tMap, 'lock_alph', x, cy);
+    x += S * 0.65; this._pos(pMap, 'both_locked', x, cy);
+    x += S * 0.65; this._pos(tMap, 'exchange_presigs', x, cy);
+    x += S * 0.65; this._pos(pMap, 'presigs_ready', x, cy);
+    x += S * 0.65; this._pos(tMap, 'alice_claims_btc', x, cy);
+    x += S * 0.65; this._pos(pMap, 't_revealed', x, cy);
+    x += S * 0.65; this._pos(tMap, 'bob_claims_alph', x, cy);
+    x += S * 0.65; this._pos(pMap, 'done', x, cy);
+    x += S * 0.65; this._pos(tMap, 'stop', x, cy);
+    const totalW = x + 30;
+
+    // Abort path (below-left)
+    const saX = pMap.swap_agreed.x;
+    const blX = pMap.btc_locked.x;
+    const abY = cy + S * 0.9;
+    this._pos(tMap, 'negotiate_timeout', saX, abY);
+    this._pos(tMap, 'lock_timeout', blX, abY);
+    this._pos(pMap, 'btc_abort_wait', blX, abY + S * 0.7);
+    this._pos(tMap, 't1_timeout_abort', blX, abY + S * 1.4);
+    this._pos(pMap, 'btc_abort_refundable', blX, abY + S * 2.1);
+    this._pos(tMap, 'bob_abort_refund', blX, abY + S * 2.8);
+
+    // Cancel path (below-right)
+    const bkX = pMap.both_locked.x;
+    const prX = pMap.presigs_ready.x;
+    const cnY = cy + S * 0.9;
+    this._pos(tMap, 'exchange_timeout', bkX, cnY);
+    this._pos(tMap, 't2_timeout', prX, cnY);
+    const midX = (bkX + prX) / 2;
+    this._pos(pMap, 'alph_refundable', midX - 50, cnY + S * 0.7);
+    this._pos(pMap, 'btc_cancel_wait', midX + 50, cnY + S * 0.7);
+    this._pos(tMap, 'alice_cancel_refund', midX - 50, cnY + S * 1.4);
+    this._pos(tMap, 't1_timeout', midX + 50, cnY + S * 1.4);
+    this._pos(pMap, 'btc_cancel_refundable', midX + 50, cnY + S * 2.1);
+    this._pos(tMap, 'bob_cancel_refund', midX + 50, cnY + S * 2.8);
+    this._pos(pMap, 'recovery_done', midX, cnY + S * 2.8);
+    this._pos(tMap, 'both_recovered', midX, cnY + S * 3.5);
+
+    for (const p of this.places) { const c = pMap[p.id]; if (c) { p.x = c.x; p.y = c.y; } }
+    for (const t of this.transitions) { const c = tMap[t.id]; if (c) { t.x = c.x; t.y = c.y; } }
+
+    const maxY = cnY + S * 4;
+    this.svg.setAttribute('viewBox', `0 0 ${totalW} ${maxY}`);
   }
 
   // ── State logic ─────────────────────────────────────────────
@@ -125,16 +234,13 @@ export class PetriNetViewer {
     this.marking = {};
     this.log = [];
     this.completed = false;
-    this._render();
+    this._applyLayout();
   }
 
-  _tokens(placeId) {
-    return this.marking[placeId] || 0;
-  }
+  _tokens(placeId) { return this.marking[placeId] || 0; }
 
   getEnabled() {
     return this.transitions.filter(t => {
-      // Count required tokens per input place
       const needed = {};
       for (const p of t.inputs) needed[p] = (needed[p] || 0) + 1;
       return Object.entries(needed).every(([p, n]) => this._tokens(p) >= n);
@@ -144,24 +250,18 @@ export class PetriNetViewer {
   fire(id) {
     const t = this.transitions.find(tr => tr.id === id);
     if (!t) return;
-    // Check enabled
     const needed = {};
     for (const p of t.inputs) needed[p] = (needed[p] || 0) + 1;
     for (const [p, n] of Object.entries(needed)) {
       if (this._tokens(p) < n) return;
     }
-    // Consume inputs
     for (const p of t.inputs) this.marking[p]--;
-    // Produce outputs
     for (const p of t.outputs) this.marking[p] = (this.marking[p] || 0) + 1;
-    // Clean up zeros
     for (const p of Object.keys(this.marking)) {
       if (this.marking[p] <= 0) delete this.marking[p];
     }
-    // Log
     const actor = t.actor ? ` (${t.actor})` : '';
     this.log.push(`${t.label}${actor}`);
-    // Check stop
     if (t.id === 'stop') this.completed = true;
     this._render();
   }
@@ -187,10 +287,17 @@ export class PetriNetViewer {
     controls.append(this.startBtn, this.resetBtn, this.statusEl);
     this.container.appendChild(controls);
 
+    // Legend
+    const legend = document.createElement('div');
+    legend.style.cssText = 'display:flex; gap:12px; margin-bottom:6px; font-size:10px; flex-wrap:wrap;';
+    legend.innerHTML = [
+      ['#00d4aa', 'Alice'], ['#f7931a', 'Bob'], ['#d29922', 'Timeout'], ['#8b949e', 'System']
+    ].map(([c, l]) => `<span><span style="display:inline-block;width:8px;height:8px;background:${c};border-radius:2px;margin-right:3px;vertical-align:middle"></span><span style="color:${c}">${l}</span></span>`).join('');
+    this.container.appendChild(legend);
+
     // SVG
     this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     this.svg.setAttribute('width', '100%');
-    this.svg.setAttribute('viewBox', '0 0 830 500');
     this.svg.style.cssText = 'display:block; background:#0d1117; border:1px solid #30363d; border-radius:6px;';
     this.container.appendChild(this.svg);
 
@@ -210,27 +317,16 @@ export class PetriNetViewer {
     this.completeEl.textContent = 'Protocol complete — all tokens consumed';
     this.container.appendChild(this.completeEl);
 
-    // Defs for arrowhead
+    // SVG defs
     const defs = this._svgEl('defs');
-    const marker = this._svgEl('marker', {
-      id: 'arrowhead', markerWidth: 8, markerHeight: 6,
-      refX: 7, refY: 3, orient: 'auto', markerUnits: 'userSpaceOnUse'
-    });
-    const arrowPath = this._svgEl('path', {
-      d: 'M0,0 L8,3 L0,6 Z', fill: '#484f58'
-    });
-    marker.appendChild(arrowPath);
-    defs.appendChild(marker);
-
-    // Enabled arrowhead (brighter)
-    const markerOn = this._svgEl('marker', {
-      id: 'arrowhead-on', markerWidth: 8, markerHeight: 6,
-      refX: 7, refY: 3, orient: 'auto', markerUnits: 'userSpaceOnUse'
-    });
-    markerOn.appendChild(this._svgEl('path', {
-      d: 'M0,0 L8,3 L0,6 Z', fill: '#8b949e'
-    }));
-    defs.appendChild(markerOn);
+    for (const [id, fill] of [['arrowhead', '#484f58'], ['arrowhead-on', '#8b949e']]) {
+      const marker = this._svgEl('marker', {
+        id, markerWidth: 8, markerHeight: 6,
+        refX: 7, refY: 3, orient: 'auto', markerUnits: 'userSpaceOnUse'
+      });
+      marker.appendChild(this._svgEl('path', { d: 'M0,0 L8,3 L0,6 Z', fill }));
+      defs.appendChild(marker);
+    }
     this.svg.appendChild(defs);
   }
 
@@ -248,7 +344,6 @@ export class PetriNetViewer {
   }
 
   _render() {
-    // Clear SVG content (keep defs)
     const defs = this.svg.querySelector('defs');
     this.svg.innerHTML = '';
     this.svg.appendChild(defs);
@@ -257,175 +352,127 @@ export class PetriNetViewer {
     const placeMap = {};
     for (const p of this.places) placeMap[p.id] = p;
 
-    // Draw arcs first (behind everything)
+    // Draw arcs
     for (const t of this.transitions) {
-      const isEnabled = enabled.has(t.id);
-      // Input arcs: place → transition
-      const inputCounts = {};
-      for (const p of t.inputs) inputCounts[p] = (inputCounts[p] || 0) + 1;
-      for (const pId of Object.keys(inputCounts)) {
-        const place = placeMap[pId];
-        if (!place) continue;
-        this._drawArc(place.x, place.y, t.x, t.y, isEnabled, 'to-transition');
+      const isOn = enabled.has(t.id);
+      const seen = {};
+      for (const pId of t.inputs) {
+        if (!seen[pId]) { seen[pId] = 1; const p = placeMap[pId]; if (p) this._drawArc(p.x, p.y, t.x, t.y, isOn, 'to-t'); }
       }
-      // Output arcs: transition → place
-      const outputCounts = {};
-      for (const p of t.outputs) outputCounts[p] = (outputCounts[p] || 0) + 1;
-      for (const pId of Object.keys(outputCounts)) {
-        const place = placeMap[pId];
-        if (!place) continue;
-        this._drawArc(t.x, t.y, place.x, place.y, isEnabled, 'to-place');
+      const seenO = {};
+      for (const pId of t.outputs) {
+        if (!seenO[pId]) { seenO[pId] = 1; const p = placeMap[pId]; if (p) this._drawArc(t.x, t.y, p.x, p.y, isOn, 'to-p'); }
       }
     }
 
     // Draw places
     for (const p of this.places) {
-      const tokens = this._tokens(p.id);
+      const tok = this._tokens(p.id);
       const g = this._svgEl('g');
-
-      // Circle
-      const circle = this._svgEl('circle', {
-        cx: p.x, cy: p.y, r: 18,
-        fill: tokens > 0 ? '#161b22' : '#0d1117',
-        stroke: tokens > 0 ? '#58a6ff' : '#30363d',
-        'stroke-width': tokens > 0 ? 2 : 1
-      });
-      g.appendChild(circle);
-
-      // Tokens
-      if (tokens === 1) {
-        g.appendChild(this._svgEl('circle', {
-          cx: p.x, cy: p.y, r: 5, fill: '#58a6ff'
-        }));
-      } else if (tokens === 2) {
-        g.appendChild(this._svgEl('circle', {
-          cx: p.x - 6, cy: p.y, r: 4, fill: '#58a6ff'
-        }));
-        g.appendChild(this._svgEl('circle', {
-          cx: p.x + 6, cy: p.y, r: 4, fill: '#58a6ff'
-        }));
+      g.appendChild(this._svgEl('circle', {
+        cx: p.x, cy: p.y, r: 16,
+        fill: tok > 0 ? '#161b22' : '#0d1117',
+        stroke: tok > 0 ? '#58a6ff' : '#30363d',
+        'stroke-width': tok > 0 ? 2 : 1
+      }));
+      if (tok === 1) {
+        g.appendChild(this._svgEl('circle', { cx: p.x, cy: p.y, r: 5, fill: '#58a6ff' }));
+      } else if (tok >= 2) {
+        g.appendChild(this._svgEl('circle', { cx: p.x - 5, cy: p.y, r: 4, fill: '#58a6ff' }));
+        g.appendChild(this._svgEl('circle', { cx: p.x + 5, cy: p.y, r: 4, fill: '#58a6ff' }));
       }
-
-      // Label
-      const label = this._svgEl('text', {
-        x: p.x, y: p.y + 30, 'text-anchor': 'middle',
-        fill: '#8b949e', 'font-size': 9, 'font-family': 'monospace'
+      const lbl = this._svgEl('text', {
+        x: p.x, y: p.y + 27, 'text-anchor': 'middle',
+        fill: '#8b949e', 'font-size': 8, 'font-family': 'monospace'
       });
-      label.textContent = p.label;
-      g.appendChild(label);
-
+      lbl.textContent = p.label;
+      g.appendChild(lbl);
       this.svg.appendChild(g);
     }
 
     // Draw transitions
     for (const t of this.transitions) {
-      const isEnabled = enabled.has(t.id);
+      const isOn = enabled.has(t.id);
       const color = this._actorColor(t.actor);
       const g = this._svgEl('g', {
-        opacity: isEnabled ? 1 : 0.35,
-        style: isEnabled ? 'cursor:pointer' : 'cursor:default'
+        opacity: isOn ? 1 : 0.35,
+        style: isOn ? 'cursor:pointer' : 'cursor:default'
       });
-
-      // Glow filter for enabled
-      if (isEnabled) {
-        const rect = this._svgEl('rect', {
-          x: t.x - 28, y: t.y - 10, width: 56, height: 20, rx: 4,
+      if (isOn) {
+        g.appendChild(this._svgEl('rect', {
+          x: t.x - 30, y: t.y - 10, width: 60, height: 20, rx: 4,
           fill: color, opacity: 0.15
-        });
-        g.appendChild(rect);
+        }));
       }
-
-      // Rect
-      const rect = this._svgEl('rect', {
-        x: t.x - 26, y: t.y - 9, width: 52, height: 18, rx: 3,
-        fill: '#161b22', stroke: color,
-        'stroke-width': isEnabled ? 1.5 : 1
-      });
-      g.appendChild(rect);
-
-      // Label
-      const label = this._svgEl('text', {
+      g.appendChild(this._svgEl('rect', {
+        x: t.x - 28, y: t.y - 9, width: 56, height: 18, rx: 3,
+        fill: '#161b22', stroke: color, 'stroke-width': isOn ? 1.5 : 1
+      }));
+      const lbl = this._svgEl('text', {
         x: t.x, y: t.y + 3, 'text-anchor': 'middle',
-        fill: isEnabled ? '#e6edf3' : color,
+        fill: isOn ? '#e6edf3' : color,
         'font-size': 8, 'font-family': 'monospace', 'font-weight': 600
       });
-      label.textContent = t.label.length > 10 ? t.label.slice(0, 9) + '..' : t.label;
-      g.appendChild(label);
-
-      // Interaction
-      if (isEnabled) {
-        g.addEventListener('click', () => this.fire(t.id));
-      }
+      lbl.textContent = t.label;
+      g.appendChild(lbl);
+      if (isOn) g.addEventListener('click', () => this.fire(t.id));
       g.addEventListener('mouseenter', (e) => {
-        const actor = t.actor ? ` [@${t.actor}]` : '';
-        this.tooltip.textContent = `${t.label}${actor}: ${t.desc}`;
+        this.tooltip.textContent = `${t.id}${t.actor ? ' @' + t.actor : ''}: ${t.desc}`;
         this.tooltip.style.display = 'block';
-        this.tooltip.style.left = (e.clientX + 12) + 'px';
-        this.tooltip.style.top = (e.clientY - 8) + 'px';
+        this._moveTooltip(e);
       });
-      g.addEventListener('mousemove', (e) => {
-        this.tooltip.style.left = (e.clientX + 12) + 'px';
-        this.tooltip.style.top = (e.clientY - 8) + 'px';
-      });
-      g.addEventListener('mouseleave', () => {
-        this.tooltip.style.display = 'none';
-      });
-
+      g.addEventListener('mousemove', (e) => this._moveTooltip(e));
+      g.addEventListener('mouseleave', () => { this.tooltip.style.display = 'none'; });
       this.svg.appendChild(g);
     }
 
-    // Update controls
+    // Controls
     const hasTokens = Object.keys(this.marking).length > 0;
     this.startBtn.disabled = hasTokens || this.completed;
-    if (this.completed) {
-      this.statusEl.textContent = '';
-    } else if (!hasTokens) {
-      this.statusEl.textContent = 'Click Start to begin';
-    } else {
+    if (this.completed) this.statusEl.textContent = '';
+    else if (!hasTokens) this.statusEl.textContent = 'Click Start to begin';
+    else {
       const names = this.getEnabled().map(t => t.label);
-      this.statusEl.textContent = names.length ? `Enabled: ${names.join(', ')}` : 'No transitions enabled (deadlock)';
+      this.statusEl.textContent = names.length ? `Enabled: ${names.join(', ')}` : 'Deadlock';
     }
 
-    // Log
     this.logEl.innerHTML = this.log.length
-      ? this.log.map((l, i) => `<div style="padding:1px 0"><span style="color:#484f58">${i + 1}.</span> ${l}</div>`).join('')
-      : '<div style="color:#484f58">No transitions fired yet</div>';
+      ? this.log.map((l, i) => `<span style="color:#484f58">${i + 1}.</span> ${l}`).join(' &rarr; ')
+      : '<span style="color:#484f58">No transitions fired yet</span>';
     this.logEl.scrollTop = this.logEl.scrollHeight;
-
-    // Completion
     this.completeEl.style.display = this.completed ? 'block' : 'none';
   }
 
-  _drawArc(x1, y1, x2, y2, isEnabled, direction) {
-    // Shorten line to stop at circle/rect boundary
+  _moveTooltip(e) {
+    this.tooltip.style.left = (e.clientX + 12) + 'px';
+    this.tooltip.style.top = (e.clientY - 8) + 'px';
+  }
+
+  _drawArc(x1, y1, x2, y2, isOn, dir) {
     const dx = x2 - x1, dy = y2 - y1;
     const dist = Math.sqrt(dx * dx + dy * dy);
     if (dist < 1) return;
     const ux = dx / dist, uy = dy / dist;
-
+    const r = 16; // place radius
+    const tr = 10; // half transition rect
     let sx, sy, ex, ey;
-    if (direction === 'to-transition') {
-      // Start from circle edge (r=18), end at rect edge
-      sx = x1 + ux * 19; sy = y1 + uy * 19;
-      ex = x2 - ux * 12; ey = y2 - uy * 12;
+    if (dir === 'to-t') {
+      sx = x1 + ux * (r + 1); sy = y1 + uy * (r + 1);
+      ex = x2 - ux * tr; ey = y2 - uy * tr;
     } else {
-      // Start from rect edge, end at circle edge (r=18)
-      sx = x1 + ux * 12; sy = y1 + uy * 12;
-      ex = x2 - ux * 19; ey = y2 - uy * 19;
+      sx = x1 + ux * tr; sy = y1 + uy * tr;
+      ex = x2 - ux * (r + 1); ey = y2 - uy * (r + 1);
     }
-
-    const line = this._svgEl('line', {
+    this.svg.appendChild(this._svgEl('line', {
       x1: sx, y1: sy, x2: ex, y2: ey,
-      stroke: isEnabled ? '#8b949e' : '#484f58',
-      'stroke-width': isEnabled ? 1.2 : 0.8,
-      'marker-end': isEnabled ? 'url(#arrowhead-on)' : 'url(#arrowhead)'
-    });
-    this.svg.appendChild(line);
+      stroke: isOn ? '#8b949e' : '#484f58',
+      'stroke-width': isOn ? 1.2 : 0.8,
+      'marker-end': isOn ? 'url(#arrowhead-on)' : 'url(#arrowhead)'
+    }));
   }
 
   destroy() {
-    if (this.tooltip && this.tooltip.parentNode) {
-      this.tooltip.parentNode.removeChild(this.tooltip);
-    }
+    window.removeEventListener('resize', this._onResize);
+    if (this.tooltip?.parentNode) this.tooltip.parentNode.removeChild(this.tooltip);
   }
 }
