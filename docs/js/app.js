@@ -849,7 +849,7 @@ function renderOfferCard(offer) {
   }
 
   if (!isActive && timeStr) {
-    html += `<div class="offer-details" style="color:#6e7681">${timeStr}</div>`;
+    html += `<div class="offer-details">${timeStr}</div>`;
   }
 
   card.innerHTML = html;
