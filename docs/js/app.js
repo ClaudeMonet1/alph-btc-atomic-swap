@@ -709,7 +709,7 @@ function renderOffersList() {
   if (inactiveOffers.length > 0) {
     const historyToggle = document.createElement('button');
     historyToggle.className = 'history-toggle';
-    historyToggle.innerHTML = `<span class="arrow">&#9654;</span> History (${inactiveOffers.length})`;
+    historyToggle.innerHTML = `<span class="arrow">&#9654;</span> Recent History (${inactiveOffers.length})`;
     const historyContainer = document.createElement('div');
     historyContainer.className = 'history-container';
     historyContainer.style.display = 'none';
@@ -796,6 +796,10 @@ function renderOfferCard(offer) {
     if (alphAddr) alphAmountHtml = `<span class="alph">${explorerLink('alph', alphAddr, `${formatAlph(offer.alphAmount)} ALPH`)}</span>`;
   }
 
+  const timeStr = offer.createdAt
+    ? new Date(offer.createdAt * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : '';
+
   let html = `
     <div class="card-header">
       <span class="amount">
@@ -807,7 +811,7 @@ function renderOfferCard(offer) {
       ${statusBadge}
     </div>
     <div class="card-body">
-      <span class="peer">by ${peerLabel}</span>
+      <span class="peer">by ${peerLabel}${!isActive && timeStr ? ` <span style="color:#484f58; font-size:10px">${timeStr}</span>` : ''}</span>
       <span class="card-actions">${actionsHtml}</span>
     </div>`;
 
@@ -914,12 +918,12 @@ async function publishOffer() {
     }
 
     const offerId = generateUUID();
-    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+    const expiresAt = Math.floor(Date.now() / 1000) + 86400;
 
     const event = await createOfferEvent({ offerId, direction, alphAmount, btcSat, expiresAt });
     await nostrPublish(event);
 
-    addLogMsg('system', `Published offer: ${direction === 'sell_alph' ? 'Sell' : 'Buy'} ${alphVal} ALPH for ${btcSat} sat (expires in 1h)`, 'You');
+    addLogMsg('system', `Published offer: ${direction === 'sell_alph' ? 'Sell' : 'Buy'} ${alphVal} ALPH for ${btcSat} sat (expires in 24h)`, 'You');
   } catch (e) {
     addLogMsg('system', `Publish error: ${e.message}`, 'Error');
   }
@@ -2268,7 +2272,7 @@ function subscribeToOffers() {
   subscribe('offer_feed', [{
     kinds: [SWAP_OFFER_KIND],
     '#t': ['atomicswap'],
-    since: Math.floor(Date.now() / 1000) - 86400,
+    since: Math.floor(Date.now() / 1000) - 172800,
   }], handleOfferEvent);
 }
 
