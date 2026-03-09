@@ -1875,10 +1875,9 @@ async function checkOnChainState(checkpoint) {
             state.stepData._alphContractEmpty = true;
             addLogMsg('system', 'ALPH contract is empty (already refunded or claimed)', 'System');
           }
-        } else if (balResp.status === 404) {
-          // Contract destroyed
+        } else {
+          // 404 or 500 = contract destroyed (node returns 500 for destroyed contracts)
           state.stepData._alphContractEmpty = true;
-          addLogMsg('system', 'ALPH contract not found (destroyed/refunded)', 'System');
         }
       } catch {}
     }
