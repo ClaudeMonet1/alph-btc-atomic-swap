@@ -565,6 +565,7 @@
           <li>Swap messages (setup, nonces, pre-signatures, claims) are <strong>encrypted</strong> peer-to-peer (NIP-04)</li>
           <li>Offers are public so they can be discovered by anyone on Nostr</li>
           <li>Uses Schnorr adaptor signatures for atomicity &mdash; no hash preimages</li>
+          <li>BTC side uses Taproot MuSig2. ALPH side uses a Ralph contract &mdash; asymmetric by design for inspectable state, unilateral locking, and explicit timeouts (a symmetric MuSig2 construction is possible but adds complexity)</li>
         </ul>
 
         <h4>Important Notes</h4>
