@@ -22,11 +22,20 @@ Bob funds from his nsec-derived P2TR address and locks BTC in a taproot output. 
 ;lock_btc@Bob swap_agreed -> btc_locked
 ```
 
-Alice verifies Bob's lock on Bitcoin, then locks ALPH in a Ralph Contract. `swap(sig)` verifies a MuSig2 signature against P_swap and sends funds to Bob's address. `refund()` lets Alice reclaim after timelock T2, where T2 < T1.
+Alice verifies Bob's lock on Bitcoin, then locks ALPH in a Ralph contract. `swap(sig)` verifies a MuSig2 signature against P_swap and sends funds to Bob's address. `refund()` lets Alice reclaim after timelock T2, where T2 < T1.
 
 ```
 ;lock_alph@Alice btc_locked -> both_locked
 ```
+
+**Why a contract on ALPH instead of MuSig2?** Alephium supports Schnorr natively, so a symmetric MuSig2 construction is possible on both chains. The protocol uses a Ralph contract on the ALPH side instead for pragmatic reasons:
+
+- **Inspectable state** — contract fields (swap key, claim/refund addresses, timeout) are readable on-chain, so the counterparty can verify the lock without trusting key aggregation.
+- **Unilateral locking** — deploying a contract is a single tx from Alice. A MuSig2 funding output would require an interactive signing round just to lock.
+- **Explicit timeouts** — the contract enforces `blockTimeStamp > timeout` directly. MuSig2 would need Alephium script-path opcodes equivalent to Bitcoin's CSV/CLTL.
+- **Atomic destruction** — after claim or refund, the contract self-destructs and returns all ALPH automatically.
+
+The trade-off is asymmetry: BTC uses taproot MuSig2, ALPH uses a contract. A pure MuSig2 design on both chains would be more elegant but would add interactive rounds and verification complexity.
 
 Both parties exchange adaptor pre-signatures via Nostr DMs (NIP-44 encrypted). Each side provides a partial MuSig2 signature tweaked by the adaptor point T. Both verify the other's adaptor is valid. If the exchange stalls (party goes offline, Nostr fails), `exchange_timeout` fires when T2 passes, forking into the cancel path so both parties recover their assets.
 
