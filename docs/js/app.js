@@ -1502,25 +1502,42 @@ async function executePresign() {
 // ============================================================
 
 async function refundAlph() {
+  const btn = document.getElementById('recovery-refund-alph-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Refunding...'; }
   try {
-    addLogMsg('system', 'Refunding ALPH...', 'System');
     const result = await state.engine.refundAlph();
-    addLogMsg('system', `ALPH refunded! txid: ${result.txid.slice(0, 24)}...`, 'System');
+    showRecoveryStatus(`ALPH refunded! txid: ${result.txid.slice(0, 16)}...`, 'ok');
     await refreshBalance();
   } catch (e) {
-    addLogMsg('system', `Refund error: ${e.message}`, 'Error');
+    showRecoveryStatus(`ALPH refund error: ${e.message}`, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Refund ALPH'; }
   }
 }
 
 async function refundBtc() {
+  const btn = document.getElementById('recovery-refund-btc-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Refunding...'; }
   try {
-    addLogMsg('system', 'Refunding BTC (requires CSV timeout)...', 'System');
     const result = await state.engine.refundBtc();
-    addLogMsg('system', `BTC refunded! txid: ${result.txid.slice(0, 24)}...`, 'System');
+    showRecoveryStatus(`BTC refunded! txid: ${result.txid.slice(0, 16)}...`, 'ok');
     await refreshBalance();
   } catch (e) {
-    addLogMsg('system', `Refund error: ${e.message}`, 'Error');
+    showRecoveryStatus(`BTC refund error: ${e.message}`, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Refund BTC'; }
   }
+}
+
+function showRecoveryStatus(msg, type) {
+  let el = document.getElementById('recovery-status-msg');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'recovery-status-msg';
+    el.style.cssText = 'font-size:11px; padding:6px 0; word-break:break-all;';
+    const actions = document.getElementById('swap-actions');
+    if (actions) actions.appendChild(el);
+  }
+  el.style.color = type === 'error' ? '#f85149' : '#2ea043';
+  el.textContent = msg;
 }
 
 // ============================================================
@@ -1959,7 +1976,7 @@ async function recoveryClaimBtc() {
     await refreshBalance();
     renderRecoveryActions('btc_claimed');
   } catch (e) {
-    addLogMsg('system', `Claim BTC error: ${e.message}`, 'Error');
+    showRecoveryStatus(`Claim BTC error: ${e.message}`, 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Claim BTC Now'; }
   }
 }
@@ -1994,7 +2011,7 @@ async function recoveryClaimAlph() {
     await refreshBalance();
     showSwapComplete();
   } catch (e) {
-    addLogMsg('system', `Claim ALPH error: ${e.message}`, 'Error');
+    showRecoveryStatus(`Claim ALPH error: ${e.message}`, 'error');
     if (btn) { btn.disabled = false; btn.textContent = 'Claim ALPH'; }
   }
 }
