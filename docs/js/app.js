@@ -258,6 +258,24 @@ async function createOfferEvent({ offerId, direction, alphAmount, btcSat, expire
   });
 }
 
+async function createOfferNote(offerEvent, { direction, alphAmount, btcSat }) {
+  const alphVal = Number(BigInt(alphAmount)) / 1e18;
+  const rate = Math.round(btcSat / alphVal);
+  const verb = direction === 'sell_alph' ? 'Selling' : 'Buying';
+  const text = [
+    `${verb} ${alphVal} ALPH for ${btcSat.toLocaleString()} sats (${rate.toLocaleString()} sat/ALPH)`,
+    `\u26a0 Testnet only \u2014 BTC signet + ALPH testnet coins, no real value`,
+    `Peer-to-peer atomic swap \u2014 MuSig2 adaptor signatures, no custodian`,
+    `https://claudemonet1.github.io/alph-btc-atomic-swap/`,
+  ].join('\n');
+  return signEvent({
+    kind: 1,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', offerEvent.id], ['t', 'atomicswap'], ['t', 'bitcoin'], ['t', 'alephium']],
+    content: text,
+  });
+}
+
 async function createCounterEvent({ offerId, offerEventId, offerCreator, index, alphAmount, btcSat, message }) {
   return signEvent({
     kind: SWAP_OFFER_KIND,
@@ -868,6 +886,9 @@ async function publishOffer() {
 
     const event = await createOfferEvent({ offerId, direction, alphAmount, btcSat, expiresAt });
     await nostrPublish(event);
+
+    const note = await createOfferNote(event, { direction, alphAmount: String(alphAmount), btcSat });
+    await nostrPublish(note).catch(() => {}); // best-effort
 
     addLogMsg('system', `Published offer: ${direction === 'sell_alph' ? 'Sell' : 'Buy'} ${alphVal} ALPH for ${btcSat} sat (expires in 24h)`, 'You');
   } catch (e) {
