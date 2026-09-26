@@ -27,7 +27,7 @@ import {
   web3, ONE_ALPH, addressFromPublicKey, groupOfAddress,
 } from './alph.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, MIN_LOCK_CONFIRMATIONS, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS } from './timelocks.js';
 
 // ============================================================
 // Shared context computation
@@ -304,9 +304,12 @@ export class SwapEngine {
 
   // ── Swap: Verify BTC (Alice) ──
   // Bob's chosen refund locktime must lie within the accepted window; the ALPH
-  // timeout is derived from it so that Alice's refund opens after Bob's.
+  // timeout is derived from it so that Alice's refund opens after Bob's. The
+  // lock must be confirmed (MIN_LOCK_CONFIRMATIONS) before Alice locks anything:
+  // an unconfirmed lock is Bob's to replace. After the wait the window is
+  // checked again, since confirmation may have eaten into it.
 
-  async verifyBtc(txid, vout, btcLocktime) {
+  async verifyBtc(txid, vout, btcLocktime, onProgress = null) {
     checkBtcLocktime(btcLocktime);
     this.btcLocktime = btcLocktime;
     this.alphTimeoutMs = alphTimeoutFor(btcLocktime);
@@ -317,9 +320,12 @@ export class SwapEngine {
     const pubkeys = [this.pubKey, peerPub]; // [alice, bob]
     const { aggPubkey } = keyAgg(pubkeys);
     const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, btcLocktime);
-    await verifySwapOutput(txid, swapBtcAddress, this.btcAmount, { allowUnconfirmed: true });
+    const { confirmations } = await verifySwapOutput(txid, swapBtcAddress, this.btcAmount, {
+      minConfirmations: MIN_LOCK_CONFIRMATIONS, pollMs: LOCK_CONFIRMATION_POLL_MS, timeoutMs: LOCK_CONFIRMATION_TIMEOUT_MS, onProgress,
+    });
+    checkBtcLocktime(btcLocktime);
 
-    return { valid: true };
+    return { valid: true, confirmations };
   }
 
   // ── Swap: Deploy ALPH (Alice) ──

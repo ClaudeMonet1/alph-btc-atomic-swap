@@ -77,6 +77,7 @@ If it were the other way round (as in versions before 2026-09-27, which had ALPH
 - Bob chooses `T_btc` when he locks and sends it with the lock; Alice refuses a lock that expires in less than 1 h or more than 48 h, recomputes the swap address from it, and deploys her contract with `T_alph = T_btc + 12 h`.
 - Bob reads the contract's `timeout` and refuses to pre-sign unless `T_btc + 6 h <= T_alph <= T_btc + 7 d`.
 - Both timeouts are absolute timestamps. Bitcoin evaluates the leaf against median time past, which lags wall-clock time by one to two hours; the 12 h margin covers that lag, confirmation times on both chains, and Bob's reaction time.
+- Alice locks her ALPH only once Bob's funding transaction has `MIN_LOCK_CONFIRMATIONS` confirmations (one on the signet demo; raise it with the amount on mainnet): an unconfirmed lock is Bob's to replace. She re-checks the locktime window after the wait.
 - Bob must refund promptly once `T_btc` has passed, or keep watching for Alice's claim until `T_alph`: Alice can claim the BTC until his refund confirms. The web app attempts the refund automatically as soon as median time past reaches the locktime.
 
 ## State Persistence and Recovery
