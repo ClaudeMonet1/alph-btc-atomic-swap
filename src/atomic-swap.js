@@ -25,7 +25,7 @@ import {
 import {
   bitcoinRpc, createSwapOutput, verifySwapOutput,
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
-  mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin,
+  mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin, estimateFeeRate, mineMatureCoinbase,
 } from './btc-swap.js';
 import {
   compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
@@ -33,7 +33,7 @@ import {
   web3, ONE_ALPH, PrivateKeyWallet,
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS, claimFeeFor, checkClaimFee } from './timelocks.js';
 
 const log = (phase, msg) => console.log(`[${phase}] ${msg}`);
 
@@ -95,7 +95,7 @@ export async function recoverSwap(bobSecHex) {
       const scriptTree = { output: Buffer.from(hexToBytes(state.scriptTreeOutput)) };
       const { psbt } = buildClaimTx(
         state.fundTxid, state.fundVout, state.btcSat,
-        state.aliceBtcAddress, internalPubkey, scriptTree,
+        state.aliceBtcAddress, internalPubkey, scriptTree, state.claimFeeSat,
       );
       const signedTxHex = finalizeKeyPathSpend(psbt, btcFinalSig);
       const claimTxid = await broadcastTx(signedTxHex);
@@ -212,12 +212,11 @@ async function main() {
 
   // Mine blocks to Bob's nsec-derived P2TR (coinbase matures after 100 confirmations)
   log('SETUP', 'Mining 101 blocks to Bob\'s BTC address...');
-  const blockHashes = await bitcoinRpc('generatetoaddress', [101, bobBtcAddress]);
-  const block = await bitcoinRpc('getblock', [blockHashes[0], 2]);
-  const coinbaseTx = block.tx[0];
-  const coinbaseVout = coinbaseTx.vout.findIndex(o => o.scriptPubKey.address === bobBtcAddress);
-  const coinbaseAmountSat = Math.round(coinbaseTx.vout[coinbaseVout].value * 1e8);
-  log('SETUP', `Bob BTC balance: ${coinbaseTx.vout[coinbaseVout].value} BTC (mature coinbase)`);
+  const coinbase = await mineMatureCoinbase(bobBtcAddress, 50_100_000);
+  const coinbaseTx = { txid: coinbase.txid, vout: [] };
+  const coinbaseVout = coinbase.vout;
+  const coinbaseAmountSat = coinbase.amountSat;
+  log('SETUP', `Bob BTC balance: ${coinbaseAmountSat / 1e8} BTC (mature coinbase)`);
 
   const aliceAlphBal = await getBalance(aliceAlphWallet.address);
   log('SETUP', `Alice ALPH balance: ${Number(aliceAlphBal.balance) / 1e18} ALPH`);
@@ -278,6 +277,9 @@ async function main() {
   const compiled = await compileSwapContract();
   const ALPH_AMOUNT = ONE_ALPH * 10n;
   checkBtcLocktime(btcLocktime); // Alice: Bob's lock must expire within the accepted window
+  // the claim fee is fixed before pre-signing: Alice proposes, Bob checks the bounds
+  const claimFeeSat = claimFeeFor(await estimateFeeRate(), BTC_SAT);
+  checkClaimFee(claimFeeSat, BTC_SAT);
   const ALPH_TIMEOUT_MS = alphTimeoutFor(btcLocktime); // Alice's refund opens 12 h after Bob's
 
   // Deploy contract to Bob's group so Bob can claim from same group
@@ -329,6 +331,7 @@ async function main() {
     fundVout,
     btcSat: BTC_SAT,
     btcLocktime,
+    claimFeeSat,
     aliceBtcAddress,
     bobBtcAddress,
     aliceAlphAddress: aliceAlphWallet.address,
@@ -347,9 +350,9 @@ async function main() {
   // --- BTC claim: sign with taproot-tweaked key Q ---
   // Taproot key path requires signing against Q = P + H_TapTweak(P||m)*G
   const { sighash: btcSighash } = buildClaimTx(
-    fundTxid, fundVout, BTC_SAT, aliceBtcAddress, internalPubkey, scriptTree,
+    fundTxid, fundVout, BTC_SAT, aliceBtcAddress, internalPubkey, scriptTree, claimFeeSat,
   );
-  log('PRESIGN', `BTC sighash: ${bytesToHex(btcSighash).slice(0, 16)}...`);
+  log('PRESIGN', `BTC sighash: ${bytesToHex(btcSighash).slice(0, 16)}... (claim fee ${claimFeeSat} sat)`);
 
   const { Qbytes, tweakScalar, negated: tweakNeg } = computeTweakedKey(aggPubkey, p2tr.hash);
   log('PRESIGN', `Tweaked output key Q: ${bytesToHex(Qbytes).slice(0, 16)}...`);
@@ -439,7 +442,7 @@ async function main() {
   if (!btcFinalValid) throw new Error('BTC completed signature invalid!');
 
   log('CLAIM', 'Alice broadcasts BTC key-path spend...');
-  const { psbt } = buildClaimTx(fundTxid, fundVout, BTC_SAT, aliceBtcAddress, internalPubkey, scriptTree);
+  const { psbt } = buildClaimTx(fundTxid, fundVout, BTC_SAT, aliceBtcAddress, internalPubkey, scriptTree, claimFeeSat);
   const signedTxHex = finalizeKeyPathSpend(psbt, btcFinalSig);
   const claimTxid = await broadcastTx(signedTxHex);
   await mineBlocks(1, bobBtcAddress);
@@ -593,11 +596,10 @@ async function testBtcRefund() {
 
   // Mine to Bob's P2TR and fund the swap
   log('REFUND-BTC', 'Mining 101 blocks to Bob...');
-  const blockHashes = await bitcoinRpc('generatetoaddress', [101, bobBtcAddr]);
-  const block = await bitcoinRpc('getblock', [blockHashes[0], 2]);
-  const coinbaseTx = block.tx[0];
-  const coinbaseVout = coinbaseTx.vout.findIndex(o => o.scriptPubKey.address === bobBtcAddr);
-  const coinbaseAmountSat = Math.round(coinbaseTx.vout[coinbaseVout].value * 1e8);
+  const coinbase = await mineMatureCoinbase(bobBtcAddr, BTC_SAT + 100_000);
+  const coinbaseTx = { txid: coinbase.txid };
+  const coinbaseVout = coinbase.vout;
+  const coinbaseAmountSat = coinbase.amountSat;
 
   log('REFUND-BTC', 'Bob funds swap from his P2TR...');
   const { psbt: fundPsbt, sighash: fundSighash } = buildP2TRKeyPathSpend(

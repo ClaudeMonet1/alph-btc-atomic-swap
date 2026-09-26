@@ -25,7 +25,7 @@ import {
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
   mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin,
   setBtcNetwork, getBtcNetwork, getP2TRAddress, getUtxos, selectUtxo,
-  getBtcBalance, estimateFee, findVout, waitForConfirmation,
+  getBtcBalance, estimateFee, estimateFeeRate, findVout, waitForConfirmation,
 } from './btc-swap.js';
 import {
   compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
@@ -34,7 +34,7 @@ import {
   setAlphNetwork,
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, MIN_LOCK_CONFIRMATIONS, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, MIN_LOCK_CONFIRMATIONS, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, REFUND_VBYTES } from './timelocks.js';
 
 // ============================================================
 // Network Mode Detection
@@ -73,7 +73,7 @@ function getSession(token) {
 // Shared context computation (same as nostr-swap.js)
 // ============================================================
 
-function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, btcLocktime }) {
+function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, btcLocktime, claimFeeSat }) {
   const pubkeys = [alicePub, bobPub];
   const { aggPubkey, keyCoeffs, gacc } = keyAgg(pubkeys);
 
@@ -87,7 +87,7 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
   const tacc = tweakNeg ? Fn.neg(tweakScalar) : tweakScalar;
 
   const { sighash: btcSighash } = buildClaimTx(
-    btcLockTxid, btcLockVout, btcSat, aliceBtcAddress, internalPubkey, scriptTree,
+    btcLockTxid, btcLockVout, btcSat, aliceBtcAddress, internalPubkey, scriptTree, claimFeeSat,
   );
   const alphMsg = hexToBytes(contractId);
 
@@ -95,7 +95,7 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
     aggPubkey, keyCoeffs, gacc, gaccTweaked, tacc,
     Qbytes, btcSighash, alphMsg,
     swapBtcAddress, internalPubkey, scriptTree, p2tr,
-    aliceBtcAddress,
+    aliceBtcAddress, claimFeeSat,
   };
 }
 
@@ -190,6 +190,7 @@ async function handleApi(req, res, urlPath) {
         // Swap params
         btcAmount: 0.5, btcSat: 50000000, alphAmount: ONE_ALPH * 10n,
         btcLocktime: null, alphTimeoutMs: null, // set when Bob locks / Alice learns the lock
+        claimFeeSat: null, // proposed by Alice with the contract, checked by Bob
         // Swap state
         adaptorSecret: null, adaptorPoint: null, // Alice's t, T
         peerAdaptorPoint: null,
@@ -426,11 +427,14 @@ async function handleApi(req, res, urlPath) {
       s.contractId = deployResult.contractId;
       s.contractAddress = deployResult.contractAddress;
       s.deployResult = deployResult;
+      s.claimFeeSat = claimFeeFor(await estimateFeeRate(), s.btcSat);
+      checkClaimFee(s.claimFeeSat, s.btcSat);
 
       return json(res, {
         contractId: deployResult.contractId,
         contractAddress: deployResult.contractAddress,
         txId: deployResult.txId,
+        claimFeeSat: s.claimFeeSat,
       });
     }
 
@@ -439,6 +443,8 @@ async function handleApi(req, res, urlPath) {
       const s = getSession(body.token);
       s.contractId = body.contractId;
       s.contractAddress = body.contractAddress;
+      checkClaimFee(body.claimFeeSat, s.btcSat);
+      s.claimFeeSat = body.claimFeeSat;
 
       const compiled = await compileSwapContract();
       s.compiled = compiled;
@@ -472,7 +478,7 @@ async function handleApi(req, res, urlPath) {
       s.ctx = computeSharedContext({
         alicePub, bobPub,
         btcLockTxid: s.btcLockTxid, btcLockVout: s.btcLockVout,
-        btcSat: s.btcSat, contractId: s.contractId, btcLocktime: s.btcLocktime,
+        btcSat: s.btcSat, contractId: s.contractId, btcLocktime: s.btcLocktime, claimFeeSat: s.claimFeeSat,
       });
 
       return json(res, { swapBtcAddress: s.ctx.swapBtcAddress });
@@ -603,7 +609,7 @@ async function handleApi(req, res, urlPath) {
 
       const { psbt } = buildClaimTx(
         s.btcLockTxid, s.btcLockVout, s.btcSat,
-        s.ctx.aliceBtcAddress, s.ctx.internalPubkey, s.ctx.scriptTree,
+        s.ctx.aliceBtcAddress, s.ctx.internalPubkey, s.ctx.scriptTree, s.claimFeeSat,
       );
       const signedTxHex = finalizeKeyPathSpend(psbt, btcFinalSig);
       const claimTxid = await broadcastTx(signedTxHex);
@@ -661,6 +667,7 @@ async function handleApi(req, res, urlPath) {
       const { psbt: refundPsbt } = buildRefundTx(
         s.btcLockTxid, s.btcLockVout, s.btcSat,
         s.btcAddress, internalPubkey, scriptTree, s.btcLocktime,
+        Math.max(Math.ceil((await estimateFeeRate()) * REFUND_VBYTES), 300),
       );
 
       refundPsbt.signInput(0, {

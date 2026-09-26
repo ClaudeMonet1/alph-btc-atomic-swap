@@ -38,9 +38,13 @@ async function esploraApi(path, method = 'GET', body = null) {
 // ---- Utility functions ----
 
 export async function estimateFee(vBytes = 150) {
+  return Math.max(Math.ceil((await estimateFeeRate()) * vBytes), 300);
+}
+
+// Current fee rate in sat/vB from Esplora's half-hour estimate.
+export async function estimateFeeRate() {
   const fees = await esploraApi('/v1/fees/recommended');
-  const feeRate = fees.halfHourFee || 2; // sat/vB
-  return Math.max(feeRate * vBytes, 300);
+  return Math.max(1, fees.halfHourFee || 1);
 }
 
 export async function getUtxos(address) {
@@ -255,6 +259,25 @@ export function buildP2TRKeyPathSpend(fundingTxid, vout, inputAmountSat, destAdd
 
   return { psbt, sighash: new Uint8Array(sighash), fee };
 }
+
+// ---- Child-pays-for-parent: spend an unconfirmed P2TR output we own to bump its parent ----
+// `parentVbytes` and `parentFee` describe the stuck transaction; the child pays
+// enough so that parent plus child reach `feeRate` sat/vB. Returns the child's
+// PSBT and sighash for the owner to sign with the tweaked key.
+export function buildCpfpChild(parentTxid, vout, outputSat, ownerPubkey, feeRate, parentVbytes, parentFee) {
+  const CHILD_VBYTES = 111;
+  const wanted = Math.ceil(feeRate * (parentVbytes + CHILD_VBYTES));
+  const childFee = Math.max(wanted - parentFee, MIN_CHILD_FEE);
+  if (outputSat - childFee < 330) throw new Error(`output too small to bump: ${outputSat} sat, child fee ${childFee} sat`);
+  const p2tr = bitcoin.payments.p2tr({ internalPubkey: Buffer.from(ownerPubkey), network: NETWORK });
+  const psbt = new bitcoin.Psbt({ network: NETWORK });
+  psbt.addInput({ hash: parentTxid, index: vout, witnessUtxo: { script: p2tr.output, value: BigInt(outputSat) }, tapInternalKey: Buffer.from(ownerPubkey) });
+  psbt.addOutput({ address: p2tr.address, value: BigInt(outputSat - childFee) });
+  const tx = psbt.__CACHE.__TX;
+  const sighash = tx.hashForWitnessV1(0, [p2tr.output], [BigInt(outputSat)], bitcoin.Transaction.SIGHASH_DEFAULT);
+  return { psbt, sighash: new Uint8Array(sighash), childFee };
+}
+const MIN_CHILD_FEE = 111;
 
 // ---- Finalize and broadcast key-path spend ----
 

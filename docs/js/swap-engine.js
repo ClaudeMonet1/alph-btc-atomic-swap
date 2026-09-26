@@ -18,7 +18,8 @@ import {
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
   extractSignatureFromTx, buildRefundTx, bitcoin, NETWORK,
   getP2TRAddress, getUtxos, selectUtxo,
-  getBtcBalance, estimateFee, findVout, waitForConfirmation,
+  getBtcBalance, estimateFee, estimateFeeRate, findVout, waitForConfirmation,
+  buildCpfpChild, getConfirmations,
   sweepBtc as sweepBtcTx,
 } from './btc.js';
 import {
@@ -27,13 +28,13 @@ import {
   web3, ONE_ALPH, addressFromPublicKey, groupOfAddress,
 } from './alph.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, MIN_LOCK_CONFIRMATIONS, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, MIN_LOCK_CONFIRMATIONS, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, CLAIM_VBYTES, REFUND_VBYTES } from './timelocks.js';
 
 // ============================================================
 // Shared context computation
 // ============================================================
 
-function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, btcLocktime }) {
+function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, btcLocktime, claimFeeSat }) {
   const pubkeys = [alicePub, bobPub];
   const { aggPubkey, keyCoeffs, gacc } = keyAgg(pubkeys);
 
@@ -47,7 +48,7 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
   const tacc = tweakNeg ? Fn.neg(tweakScalar) : tweakScalar;
 
   const { sighash: btcSighash } = buildClaimTx(
-    btcLockTxid, btcLockVout, btcSat, aliceBtcAddress, internalPubkey, scriptTree,
+    btcLockTxid, btcLockVout, btcSat, aliceBtcAddress, internalPubkey, scriptTree, claimFeeSat,
   );
   const alphMsg = hexToBytes(contractId);
 
@@ -55,7 +56,7 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
     aggPubkey, keyCoeffs, gacc, gaccTweaked, tacc,
     Qbytes, btcSighash, alphMsg,
     swapBtcAddress, internalPubkey, scriptTree, p2tr,
-    aliceBtcAddress,
+    aliceBtcAddress, claimFeeSat,
   };
 }
 
@@ -97,6 +98,8 @@ export class SwapEngine {
     // alphTimeoutMs from it; Bob refuses a contract whose timeout opens too early.
     this.btcLocktime = null;
     this.alphTimeoutMs = null;
+    // Fee of the pre-signed claim, proposed by Alice with the contract and accepted by Bob within bounds.
+    this.claimFeeSat = null;
 
     this.adaptorSecret = null;
     this.adaptorPoint = null;
@@ -329,10 +332,14 @@ export class SwapEngine {
   }
 
   // ── Swap: Deploy ALPH (Alice) ──
+  // Alice also fixes the claim fee here (twice the current estimate, bounded), since
+  // the pre-signed claim cannot change it later; Bob checks it against the same bounds.
 
   async deployAlph() {
     const compiled = await compileSwapContract();
     this.compiled = compiled;
+    this.claimFeeSat = claimFeeFor(await estimateFeeRate(), this.btcSat);
+    checkClaimFee(this.claimFeeSat, this.btcSat);
 
     const peerPub = hexToBytes(this.peerPubHex);
     const pubkeys = [this.pubKey, peerPub];
@@ -354,12 +361,15 @@ export class SwapEngine {
       contractId: deployResult.contractId,
       contractAddress: deployResult.contractAddress,
       txId: deployResult.txId,
+      claimFeeSat: this.claimFeeSat,
     };
   }
 
   // ── Swap: Verify ALPH (Bob) ──
 
-  async verifyAlph(contractId, contractAddress) {
+  async verifyAlph(contractId, contractAddress, claimFeeSat) {
+    checkClaimFee(claimFeeSat, this.btcSat);
+    this.claimFeeSat = claimFeeSat;
     this.contractId = contractId;
     this.contractAddress = contractAddress;
 
@@ -394,7 +404,7 @@ export class SwapEngine {
     this.ctx = computeSharedContext({
       alicePub, bobPub,
       btcLockTxid: this.btcLockTxid, btcLockVout: this.btcLockVout,
-      btcSat: this.btcSat, contractId: this.contractId, btcLocktime: this.btcLocktime,
+      btcSat: this.btcSat, contractId: this.contractId, btcLocktime: this.btcLocktime, claimFeeSat: this.claimFeeSat,
     });
 
     return { swapBtcAddress: this.ctx.swapBtcAddress };
@@ -522,13 +532,27 @@ export class SwapEngine {
 
     const { psbt } = buildClaimTx(
       this.btcLockTxid, this.btcLockVout, this.btcSat,
-      this.ctx.aliceBtcAddress, this.ctx.internalPubkey, this.ctx.scriptTree,
+      this.ctx.aliceBtcAddress, this.ctx.internalPubkey, this.ctx.scriptTree, this.claimFeeSat,
     );
     const signedTxHex = finalizeKeyPathSpend(psbt, btcFinalSig);
     const claimTxid = await broadcastTx(signedTxHex);
     this.btcClaimTxid = claimTxid;
 
     return { txid: claimTxid };
+  }
+
+  // ── Swap: Bump the claim (Alice) ──
+  // The claim's output is Alice's own P2TR: a child spending it pays for the parent.
+
+  async bumpClaimFee() {
+    if (!this.btcClaimTxid) throw new Error('no claim to bump');
+    if (await getConfirmations(this.btcClaimTxid) > 0) throw new Error('claim already confirmed');
+    const feeRate = Math.ceil((await estimateFeeRate()) * 1.5);
+    const outputSat = this.btcSat - this.claimFeeSat;
+    const { psbt, sighash, childFee } = buildCpfpChild(this.btcClaimTxid, 0, outputSat, this.pubKey, feeRate, CLAIM_VBYTES, this.claimFeeSat);
+    const sig = schnorr.sign(sighash, computeTweakedPrivateKey(this.secBytes, this.pubKey));
+    const txid = await broadcastTx(finalizeKeyPathSpend(psbt, sig));
+    return { txid, childFee, feeRate };
   }
 
   // ── Swap: Claim ALPH (Bob) ──
@@ -613,9 +637,10 @@ export class SwapEngine {
     const { aggPubkey } = keyAgg(pubkeys);
     const { internalPubkey, scriptTree } = createSwapOutput(aggPubkey, this.pubKey, this.btcLocktime);
 
+    const refundFee = Math.max(Math.ceil((await estimateFeeRate()) * REFUND_VBYTES), 300);
     const { psbt: refundPsbt } = buildRefundTx(
       this.btcLockTxid, this.btcLockVout, this.btcSat,
-      this.btcAddress, internalPubkey, scriptTree, this.btcLocktime,
+      this.btcAddress, internalPubkey, scriptTree, this.btcLocktime, refundFee,
     );
 
     refundPsbt.signInput(0, {
@@ -667,7 +692,7 @@ export class SwapEngine {
     }
 
     return {
-      version: 2,
+      version: 3,
       role: this.role,
       peerPubHex: this.peerPubHex,
       btcAmount: this.btcAmount,
@@ -675,6 +700,7 @@ export class SwapEngine {
       alphAmount: String(this.alphAmount),
       btcLocktime: this.btcLocktime,
       alphTimeoutMs: this.alphTimeoutMs,
+      claimFeeSat: this.claimFeeSat,
       adaptorSecret: hex(this.adaptorSecret),
       adaptorPoint: this.adaptorPoint ? hex(pointToBytes(this.adaptorPoint)) : null,
       peerAdaptorPoint: this.peerAdaptorPoint ? hex(pointToBytes(this.peerAdaptorPoint)) : null,
@@ -703,7 +729,7 @@ export class SwapEngine {
   }
 
   restoreFromJSON(data) {
-    if (data.version !== 2) throw new Error(`Swap state version ${data.version} predates the timelock fix and cannot be resumed; recover manually`);
+    if (data.version !== 3) throw new Error(`Swap state version ${data.version} predates the timelock and fee fixes and cannot be resumed; recover manually`);
 
     const bytes = (h) => h ? hexToBytes(h) : null;
     const point = (h) => h ? lift_x(bytesToNum(hexToBytes(h))) : null;
@@ -717,6 +743,7 @@ export class SwapEngine {
     this.alphAmount = BigInt(data.alphAmount);
     this.btcLocktime = data.btcLocktime;
     this.alphTimeoutMs = data.alphTimeoutMs;
+    this.claimFeeSat = data.claimFeeSat;
     this.adaptorSecret = bytes(data.adaptorSecret);
     this.adaptorPoint = point(data.adaptorPoint);
     this.peerAdaptorPoint = point(data.peerAdaptorPoint);
