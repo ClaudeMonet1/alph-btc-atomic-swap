@@ -80,6 +80,10 @@ If it were the other way round (as in versions before 2026-09-27, which had ALPH
 - Alice locks her ALPH only once Bob's funding transaction has `MIN_LOCK_CONFIRMATIONS` confirmations (one on the signet demo; raise it with the amount on mainnet): an unconfirmed lock is Bob's to replace. She re-checks the locktime window after the wait.
 - Bob must refund promptly once `T_btc` has passed, or keep watching for Alice's claim until `T_alph`: Alice can claim the BTC until his refund confirms. The web app attempts the refund automatically as soon as median time past reaches the locktime.
 
+## Fees
+
+The claim is pre-signed, so its fee is fixed before either party signs: Alice proposes it when she deploys the contract (twice the current half-hour estimate for a 111 vB key-path spend, at least 1 sat/vB, at most 5% of the amount), Bob checks the same bounds before pre-signing, and both build the identical claim transaction from it. If the claim still gets stuck, Alice bumps it by spending its output, which is her own P2TR, with a child that pays for the parent (`bumpClaimFee`, "Bump claim fee" in the recovery panel). Bob's refund is built at refund time at the current rate and can be bumped the same way. Before 2026-09-27 both used a hard-coded 300 satoshis.
+
 ## State Persistence and Recovery
 
 The swap orchestrator saves state at three checkpoints:

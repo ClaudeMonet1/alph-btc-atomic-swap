@@ -67,3 +67,31 @@ export function alphTimeoutBounds(btcLocktime) {
     maxTimeout: (btcLocktime + MAX_MARGIN_SECONDS) * 1000,
   };
 }
+
+// ---- Fees ----
+// The claim transaction is pre-signed, so its fee cannot be changed afterwards
+// except by a child transaction: Alice proposes the fee when she deploys the
+// contract (current estimate times a headroom), Bob accepts it within bounds,
+// and both build the identical claim transaction from it. Once broadcast, the
+// claim can be bumped by spending its output (child pays for parent); the same
+// holds for Bob's refund, which he builds at refund time at the current rate.
+export const CLAIM_VBYTES = 111;              // one P2TR input (key path), one P2TR output
+export const REFUND_VBYTES = 150;             // one P2TR script-path input with the CLTV leaf, one output
+export const FEE_HEADROOM = 2;                // pre-signed fee = headroom x current estimate
+export const MIN_FEE_RATE = 1;                // sat/vB
+export const MAX_CLAIM_FEE_FRACTION = 0.05;   // Bob refuses a claim fee above this share of the amount
+export const P2TR_DUST = 330;
+
+export function claimFeeFor(feeRate, btcSat) {
+  const rate = Math.max(MIN_FEE_RATE, Math.ceil(feeRate * FEE_HEADROOM));
+  const fee = rate * CLAIM_VBYTES;
+  const cap = Math.floor(btcSat * MAX_CLAIM_FEE_FRACTION);
+  return Math.max(MIN_FEE_RATE * CLAIM_VBYTES, Math.min(fee, cap));
+}
+
+export function checkClaimFee(feeSat, btcSat) {
+  if (!Number.isInteger(feeSat) || feeSat < MIN_FEE_RATE * CLAIM_VBYTES) throw new Error(`claim fee ${feeSat} sat is below the relay minimum`);
+  if (feeSat > Math.floor(btcSat * MAX_CLAIM_FEE_FRACTION)) throw new Error(`claim fee ${feeSat} sat exceeds ${MAX_CLAIM_FEE_FRACTION * 100}% of the amount`);
+  if (btcSat - feeSat < P2TR_DUST) throw new Error(`claim output would be dust`);
+}
+
