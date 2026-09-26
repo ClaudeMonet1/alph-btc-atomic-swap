@@ -34,7 +34,7 @@ import {
   setAlphNetwork,
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, MIN_LOCK_CONFIRMATIONS, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS } from './timelocks.js';
 
 // ============================================================
 // Network Mode Detection
@@ -396,7 +396,9 @@ async function handleApi(req, res, urlPath) {
       const pubkeys = [s.pubKey, peerPub]; // [alice, bob]
       const { aggPubkey } = keyAgg(pubkeys);
       const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, s.btcLocktime);
-      await verifySwapOutput(body.txid, swapBtcAddress, s.btcAmount, { allowUnconfirmed: isTestnet });
+      // the lock must be confirmed before Alice locks anything; on signet this waits for a block
+      await verifySwapOutput(body.txid, swapBtcAddress, s.btcAmount, { minConfirmations: MIN_LOCK_CONFIRMATIONS, pollMs: LOCK_CONFIRMATION_POLL_MS, timeoutMs: LOCK_CONFIRMATION_TIMEOUT_MS });
+      checkBtcLocktime(s.btcLocktime);
 
       return json(res, { valid: true });
     }

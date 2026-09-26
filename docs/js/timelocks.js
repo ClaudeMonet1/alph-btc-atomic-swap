@@ -22,6 +22,14 @@ export const MIN_BTC_LOCK_SECONDS = 1 * 3600;      // Alice refuses a BTC lock t
 export const MAX_BTC_LOCK_SECONDS = 48 * 3600;     // ... or later than this
 export const LOCKTIME_THRESHOLD = 500_000_000;     // below this nLockTime means a block height
 
+// Alice locks her ALPH only once Bob's funding transaction has this many
+// confirmations: an unconfirmed lock is Bob's to replace. One is the floor that
+// makes the check mean anything and is what the signet demo uses; a mainnet
+// deployment should raise it with the amount.
+export const MIN_LOCK_CONFIRMATIONS = 1;
+export const LOCK_CONFIRMATION_POLL_MS = 15_000;
+export const LOCK_CONFIRMATION_TIMEOUT_MS = 6 * 3600 * 1000;
+
 export function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }

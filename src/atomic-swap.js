@@ -33,7 +33,7 @@ import {
   web3, ONE_ALPH, PrivateKeyWallet,
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS } from './timelocks.js';
 
 const log = (phase, msg) => console.log(`[${phase}] ${msg}`);
 
@@ -295,8 +295,8 @@ async function main() {
 
   // Alice verifies Bob's BTC lock: correct address, amount, confirmed
   log('VERIFY-LOCK', 'Alice verifies BTC taproot output...');
-  await verifySwapOutput(fundTxid, swapBtcAddress, BTC_AMOUNT);
-  log('VERIFY-LOCK', 'BTC output verified: correct address, amount, confirmed');
+  const { confirmations } = await verifySwapOutput(fundTxid, swapBtcAddress, BTC_AMOUNT, { minConfirmations: MIN_LOCK_CONFIRMATIONS, pollMs: 2000 });
+  log('VERIFY-LOCK', `BTC output verified: correct address, amount, ${confirmations} confirmation(s)`);
 
   // Bob verifies Alice's ALPH lock: correct swapKey, claimAddress, refundAddress, amount,
   // and a timeout that opens only after his own BTC refund plus the margin
