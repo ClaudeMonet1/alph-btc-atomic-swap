@@ -135,4 +135,4 @@ The protocol phases map to structured Nostr events:
 | `alice_claims_btc` | 38393 | `claim-btc` | BTC claim txid (reveals t) |
 | `bob_claims_alph` | 38393 | `claim-alph` | ALPH claim txid |
 
-Offer events (38389) are public. All other events are NIP-44 encrypted between the two swap parties.
+Offer events (38389) are public. All other events are NIP-44 v2 encrypted between the two swap parties (`nip44.js`, cross-checked against nostr-tools; NIP-04 in the browser and plaintext in the Node scripts until 2026-09-27). A message that does not decrypt is ignored; there is no plaintext fallback.

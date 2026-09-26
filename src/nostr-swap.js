@@ -145,8 +145,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
 
   // ── SETUP: Wait for Bob's BTC lock ──
   log('ALICE', 'Waiting for Bob to lock BTC...');
-  const btcLockedEvent = await waitForSwapEvent(ws, SWAP_SETUP_KIND, sessionId, bobPubHex,
-    (e) => JSON.parse(e.content).type === 'btc_locked', DM_TIMEOUT);
+  const btcLockedEvent = await waitForSwapEvent(ws, SWAP_SETUP_KIND, sessionId, bobPubHex, (e) => JSON.parse(e.content).type === 'btc_locked', DM_TIMEOUT, aliceSec);
   const btcLocked = JSON.parse(btcLockedEvent.content);
   log('ALICE', `Bob locked BTC: txid=${btcLocked.txid.slice(0, 16)}... vout=${btcLocked.vout} refund at ${btcLocked.btcLocktime}`);
 
@@ -185,8 +184,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
 
   // ── SETUP: Wait for Bob's verification ──
   log('ALICE', 'Waiting for Bob to verify ALPH contract...');
-  await waitForSwapEvent(ws, SWAP_SETUP_KIND, sessionId, bobPubHex,
-    (e) => JSON.parse(e.content).type === 'verified', DM_TIMEOUT);
+  await waitForSwapEvent(ws, SWAP_SETUP_KIND, sessionId, bobPubHex, (e) => JSON.parse(e.content).type === 'verified', DM_TIMEOUT, aliceSec);
   log('ALICE', 'Bob verified ALPH contract');
 
   // ── Compute shared context ──
@@ -209,8 +207,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
     alphNonceHash: alphNonceHashA,
   }));
 
-  const bobCommitEvent = await waitForSwapEvent(ws, SWAP_NONCE_KIND, sessionId, bobPubHex,
-    (e) => JSON.parse(e.content).phase === 'commit', DM_TIMEOUT);
+  const bobCommitEvent = await waitForSwapEvent(ws, SWAP_NONCE_KIND, sessionId, bobPubHex, (e) => JSON.parse(e.content).phase === 'commit', DM_TIMEOUT, aliceSec);
   const bobCommit = JSON.parse(bobCommitEvent.content);
   log('ALICE', 'Got Bob\'s nonce commitments');
 
@@ -222,8 +219,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
     alphPubNonce: bytesToHex(alphNonceA.pubNonce),
   }));
 
-  const bobRevealEvent = await waitForSwapEvent(ws, SWAP_NONCE_KIND, sessionId, bobPubHex,
-    (e) => JSON.parse(e.content).phase === 'reveal', DM_TIMEOUT);
+  const bobRevealEvent = await waitForSwapEvent(ws, SWAP_NONCE_KIND, sessionId, bobPubHex, (e) => JSON.parse(e.content).phase === 'reveal', DM_TIMEOUT, aliceSec);
   const bobReveal = JSON.parse(bobRevealEvent.content);
   log('ALICE', 'Got Bob\'s nonce reveals');
 
@@ -249,7 +245,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
     alphPresig: bytesToHex(alphAdaptorA),
   }));
 
-  const bobPresigEvent = await waitForSwapEvent(ws, SWAP_PRESIG_KIND, sessionId, bobPubHex, null, DM_TIMEOUT);
+  const bobPresigEvent = await waitForSwapEvent(ws, SWAP_PRESIG_KIND, sessionId, bobPubHex, null, DM_TIMEOUT, aliceSec);
   const bobPresigs = JSON.parse(bobPresigEvent.content);
   log('ALICE', 'Got Bob\'s pre-signatures');
 
@@ -303,8 +299,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
 
   // Wait for Bob's ALPH claim
   log('ALICE', 'Waiting for Bob to claim ALPH...');
-  const alphClaimedEvent = await waitForSwapEvent(ws, SWAP_CLAIM_KIND, sessionId, bobPubHex,
-    (e) => JSON.parse(e.content).type === 'alph_claimed', DM_TIMEOUT);
+  const alphClaimedEvent = await waitForSwapEvent(ws, SWAP_CLAIM_KIND, sessionId, bobPubHex, (e) => JSON.parse(e.content).type === 'alph_claimed', DM_TIMEOUT, aliceSec);
   const alphClaimed = JSON.parse(alphClaimedEvent.content);
   log('ALICE', `Bob claimed ALPH: txid=${alphClaimed.txid}`);
 
@@ -336,8 +331,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
 
   // ── SETUP: Wait for Alice's confirmation ──
   log('BOB', 'Waiting for Alice\'s confirmation...');
-  const confirmEvent = await waitForSwapEvent(ws, SWAP_SETUP_KIND, sessionId, alicePubHex,
-    (e) => JSON.parse(e.content).type === 'confirm', DM_TIMEOUT);
+  const confirmEvent = await waitForSwapEvent(ws, SWAP_SETUP_KIND, sessionId, alicePubHex, (e) => JSON.parse(e.content).type === 'confirm', DM_TIMEOUT, bobSec);
   const confirm = JSON.parse(confirmEvent.content);
   log('BOB', `Alice confirmed. Adaptor point: ${confirm.adaptorPoint.slice(0, 16)}...`);
 
@@ -372,8 +366,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
 
   // ── SETUP: Wait for Alice's ALPH contract ──
   log('BOB', 'Waiting for Alice to deploy ALPH contract...');
-  const alphDeployedEvent = await waitForSwapEvent(ws, SWAP_SETUP_KIND, sessionId, alicePubHex,
-    (e) => JSON.parse(e.content).type === 'alph_deployed', DM_TIMEOUT);
+  const alphDeployedEvent = await waitForSwapEvent(ws, SWAP_SETUP_KIND, sessionId, alicePubHex, (e) => JSON.parse(e.content).type === 'alph_deployed', DM_TIMEOUT, bobSec);
   const alphDeployed = JSON.parse(alphDeployedEvent.content);
   log('BOB', `ALPH contract: ${alphDeployed.contractAddress}, proposed claim fee ${alphDeployed.claimFeeSat} sat`);
   checkClaimFee(alphDeployed.claimFeeSat, BTC_SAT);
@@ -402,8 +395,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
 
   // ── NONCE: Wait for Alice's commit, then send ours ──
   log('BOB', 'Waiting for Alice\'s nonce commitments...');
-  const aliceCommitEvent = await waitForSwapEvent(ws, SWAP_NONCE_KIND, sessionId, alicePubHex,
-    (e) => JSON.parse(e.content).phase === 'commit', DM_TIMEOUT);
+  const aliceCommitEvent = await waitForSwapEvent(ws, SWAP_NONCE_KIND, sessionId, alicePubHex, (e) => JSON.parse(e.content).phase === 'commit', DM_TIMEOUT, bobSec);
   const aliceCommit = JSON.parse(aliceCommitEvent.content);
   log('BOB', 'Got Alice\'s nonce commitments');
 
@@ -421,8 +413,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
 
   // ── NONCE: Wait for Alice's reveal, verify, send ours ──
   log('BOB', 'Waiting for Alice\'s nonce reveals...');
-  const aliceRevealEvent = await waitForSwapEvent(ws, SWAP_NONCE_KIND, sessionId, alicePubHex,
-    (e) => JSON.parse(e.content).phase === 'reveal', DM_TIMEOUT);
+  const aliceRevealEvent = await waitForSwapEvent(ws, SWAP_NONCE_KIND, sessionId, alicePubHex, (e) => JSON.parse(e.content).phase === 'reveal', DM_TIMEOUT, bobSec);
   const aliceReveal = JSON.parse(aliceRevealEvent.content);
   log('BOB', 'Got Alice\'s nonce reveals');
 
@@ -446,7 +437,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
 
   // ── PRESIG: Wait for Alice's, verify, send ours ──
   log('BOB', 'Waiting for Alice\'s pre-signatures...');
-  const alicePresigEvent = await waitForSwapEvent(ws, SWAP_PRESIG_KIND, sessionId, alicePubHex, null, DM_TIMEOUT);
+  const alicePresigEvent = await waitForSwapEvent(ws, SWAP_PRESIG_KIND, sessionId, alicePubHex, null, DM_TIMEOUT, bobSec);
   const alicePresigs = JSON.parse(alicePresigEvent.content);
   log('BOB', 'Got Alice\'s pre-signatures');
 
@@ -491,8 +482,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
 
   // ── CLAIM: Wait for Alice's BTC claim ──
   log('BOB', 'Waiting for Alice to claim BTC...');
-  const btcClaimedEvent = await waitForSwapEvent(ws, SWAP_CLAIM_KIND, sessionId, alicePubHex,
-    (e) => JSON.parse(e.content).type === 'btc_claimed', DM_TIMEOUT);
+  const btcClaimedEvent = await waitForSwapEvent(ws, SWAP_CLAIM_KIND, sessionId, alicePubHex, (e) => JSON.parse(e.content).type === 'btc_claimed', DM_TIMEOUT, bobSec);
   const btcClaimed = JSON.parse(btcClaimedEvent.content);
   log('BOB', `Alice claimed BTC: txid=${btcClaimed.txid}`);
 
