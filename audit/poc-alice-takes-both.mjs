@@ -113,7 +113,7 @@ const { psbt } = buildClaimTx(fundTxid, fundVout, BTC_SAT, aliceBtc, internalPub
 const claimTxid = await broadcastTx(finalizeKeyPathSpend(psbt, sig));
 await mineBlocks(1, aliceBtc);
 const claimed = (await bitcoinRpc('getrawtransaction', [claimTxid, true])).vout.find(o => o.scriptPubKey.address === aliceBtc);
-log('ALICE', `claimed ${claimed.value} BTC in ${claimTxid} (Bob's CSV refund is ${CSV} blocks away)`);
+log('ALICE', `claimed ${claimed.value} BTC in ${claimTxid} (Bob's CLTV refund opens at ${btcLocktime})`);
 
 // ---- Bob extracts t and tries to claim ALPH: the contract no longer exists
 const onChain = await extractSignatureFromTx(claimTxid);

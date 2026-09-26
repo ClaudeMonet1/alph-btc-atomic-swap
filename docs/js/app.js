@@ -526,6 +526,12 @@ function handleAcceptEvent(event, content) {
   if (!offer) return;
   if (offer.status === 'accepted' || offer.status === 'cancelled') return;
 
+  if (offer.isMine) {
+    const acceptor = content.counterparty || event.pubkey;
+    const groupProblem = acceptor === state.pubKeyHex ? null : peerGroupProblem(acceptor);
+    if (groupProblem) { addLogMsg('system', `Ignoring accept of ${content.offerId.slice(0, 8)}... : ${groupProblem}`, 'System'); return; }
+  }
+
   offer.status = 'accepted';
   offer.acceptEvent = event;
 
@@ -887,9 +893,19 @@ async function publishOffer() {
   btn.disabled = false; btn.textContent = 'Publish Offer';
 }
 
+// The swap contract lives in one Alephium group and can only be called by, and
+// pay, addresses of that group; a peer in another group cannot trade with us.
+function peerGroupProblem(peerPubHex) {
+  const mine = groupOfAddress(addressFromPublicKey(state.pubKeyHex, 'bip340-schnorr'));
+  const theirs = groupOfAddress(addressFromPublicKey(peerPubHex, 'bip340-schnorr'));
+  return theirs === mine ? null : `peer's Alephium address is in group ${theirs}, yours in group ${mine}`;
+}
+
 async function acceptOffer(offerId) {
   const offer = state.offers.get(offerId);
   if (!offer) return;
+  const groupProblem = peerGroupProblem(offer.pubkey);
+  if (groupProblem) { alert(`Cannot take this offer: ${groupProblem}. The swap contract cannot be claimed or refunded across groups.`); return; }
 
   // Acceptor role: sell_alph offer → acceptor is bob; buy_alph offer → acceptor is alice
   const role = offer.direction === 'sell_alph' ? 'bob' : 'alice';

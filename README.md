@@ -156,10 +156,11 @@ Contract AtomicSwap(
     destroySelf!(claimAddress)
   }
 
-  @using(assetsInContract = true)
+  // Anyone in the contract's group may trigger the refund once the timeout has
+  // passed; the funds always go to refundAddress.
+  @using(assetsInContract = true, checkExternalCaller = false)
   pub fn refund() -> () {
     assert!(blockTimeStamp!() >= timeout, 0)
-    checkCaller!(callerAddress!() == refundAddress, 1)
     destroySelf!(refundAddress)
   }
 }
