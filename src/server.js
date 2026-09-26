@@ -139,8 +139,7 @@ async function findVoutWithRetry(txid, address, maxRetries = 5) {
     } catch (_) {}
     if (i < maxRetries - 1) await new Promise(r => setTimeout(r, 2000));
   }
-  // Fallback: destination is always first output
-  return 0;
+  throw new Error(`swap output for ${address} not found in ${txid} after ${maxRetries} attempts`);
 }
 
 // ============================================================

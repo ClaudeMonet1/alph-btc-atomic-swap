@@ -28,7 +28,7 @@ import {
   web3, ONE_ALPH, addressFromPublicKey, groupOfAddress,
 } from './alph.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, MIN_LOCK_CONFIRMATIONS, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, CLAIM_VBYTES, REFUND_VBYTES } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, MIN_LOCK_CONFIRMATIONS, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, CLAIM_VBYTES, REFUND_VBYTES, CLAIM_CONFIRMATIONS } from './timelocks.js';
 
 // ============================================================
 // Shared context computation
@@ -566,7 +566,7 @@ export class SwapEngine {
 
   // ── Swap: Claim ALPH (Bob) ──
 
-  async claimAlph(btcClaimTxid) {
+  async claimAlph(btcClaimTxid, onProgress = null) {
     // Retry extractSignatureFromTx — tx may still be propagating to Esplora mempool
     let onChainSig;
     for (let i = 0; i < 15; i++) {
@@ -588,6 +588,15 @@ export class SwapEngine {
 
     if (!schnorr.verify(alphFinalSig, this.ctx.alphMsg, this.ctx.aggPubkey))
       throw new Error('ALPH completed signature invalid');
+
+    // Alice's claim must be confirmed before Bob spends the ALPH (a reorganised claim
+    // would otherwise leave Alice with nothing); the 12 h margin leaves ample time.
+    for (;;) {
+      const c = await getConfirmations(btcClaimTxid);
+      if (onProgress) onProgress(c, CLAIM_CONFIRMATIONS);
+      if (c >= CLAIM_CONFIRMATIONS) break;
+      await new Promise(r => setTimeout(r, LOCK_CONFIRMATION_POLL_MS));
+    }
 
     const alphClaimResult = await claimSwap(this.pubKeyHex, this.secBytes, this.contractId, bytesToHex(alphFinalSig), this.compiled);
     await waitForTx(alphClaimResult.txId);

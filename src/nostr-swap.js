@@ -29,7 +29,7 @@ import {
 import {
   bitcoinRpc, createSwapOutput, verifySwapOutput,
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
-  mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin, estimateFeeRate, mineMatureCoinbase,
+  mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin, estimateFeeRate, mineMatureCoinbase, getConfirmations,
 } from './btc-swap.js';
 import {
   compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
@@ -38,7 +38,7 @@ import {
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
 import { startRelay } from './relay.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS, claimFeeFor, checkClaimFee, REFUND_VBYTES } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS, claimFeeFor, checkClaimFee, REFUND_VBYTES, CLAIM_CONFIRMATIONS } from './timelocks.js';
 import {
   connectRelay, publish, waitForSwapEvent, waitForEvent,
   createPublicEvent, createSwapSetup, createSwapNonce, createSwapPresig, createSwapClaim,
@@ -498,7 +498,8 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
   if (!schnorr.verify(alphFinalSig, ctx.alphMsg, ctx.aggPubkey))
     throw new Error('ALPH completed signature invalid');
 
-  // Claim ALPH
+  // Claim ALPH once Alice's claim is confirmed (a reorganised claim would leave her with nothing)
+  while ((await getConfirmations(btcClaimed.txid)) < CLAIM_CONFIRMATIONS) await new Promise(r => setTimeout(r, 2000));
   await new Promise(r => setTimeout(r, 3000));
   log('BOB', 'Calling swap() on Alephium contract...');
   const alphClaimResult = await claimSwap(bobAlphWallet, alphDeployed.contractId, bytesToHex(alphFinalSig), compiled, bobAlphWallet.group);
