@@ -33,7 +33,7 @@ The adaptor extension in `src/adaptor.js` modifies the challenge computation: `e
 
 The swap output is a P2TR with:
 - **Key path**: MuSig2 aggregated key P_swap (cooperative claim)
-- **Script path**: `<timeout> OP_CSV OP_DROP <bob_pubkey> OP_CHECKSIG` (Bob's refund)
+- **Script path**: `<locktime> OP_CHECKLOCKTIMEVERIFY OP_DROP <bob_pubkey> OP_CHECKSIG` (Bob's refund, absolute Unix time)
 
 For the key-path claim, the signature must be against the **tweaked** output key Q = P + H_TapTweak(P || merkle_root) * G. The MuSig2 signing accounts for this by adjusting `gacc` and adding `tacc * e` to the aggregated scalar.
 
@@ -65,15 +65,19 @@ In production with ephemeral per-swap keys, the initiator picks the target group
 
 ## Timelock Ordering
 
-The BTC timelock (T1 = 144 blocks, ~1 day on mainnet) must be strictly longer than the ALPH timelock (T2 = 6 hours). This prevents the following attack:
+Alice's BTC claim is what reveals the adaptor secret `t`; Bob claims ALPH only afterwards. So the leg that is claimed first (Bob's BTC) must become refundable **first**, and the leg claimed second (Alice's ALPH) only later, with a margin:
 
-1. Alice refunds ALPH (after T2)
-2. Alice claims BTC (before T1)
+```
+T_btc  = lock time + 24 h         Bob's refund leaf (OP_CHECKLOCKTIMEVERIFY, Unix time)
+T_alph = T_btc + 12 h             Alice's contract timeout (blockTimeStamp, ms)
+```
 
-With T1 > T2, if Alice refunds her ALPH, Bob still has time to refund his BTC before T1 expires. The margin between T1 and T2 must account for:
-- Block confirmation times on both chains
-- Time to detect Alice's ALPH refund
-- Time to broadcast Bob's BTC refund
+If it were the other way round (as in versions before 2026-09-27, which had ALPH at 6 h and BTC at 144 blocks), Alice could wait for her ALPH refund, take it, and then still claim the BTC with the completed adaptor signature, which has no timelock at all: she would end with both assets. That attack was demonstrated against the old code and is why both parties now enforce the ordering (`src/timelocks.js`, `docs/js/timelocks.js`):
+
+- Bob chooses `T_btc` when he locks and sends it with the lock; Alice refuses a lock that expires in less than 1 h or more than 48 h, recomputes the swap address from it, and deploys her contract with `T_alph = T_btc + 12 h`.
+- Bob reads the contract's `timeout` and refuses to pre-sign unless `T_btc + 6 h <= T_alph <= T_btc + 7 d`.
+- Both timeouts are absolute timestamps. Bitcoin evaluates the leaf against median time past, which lags wall-clock time by one to two hours; the 12 h margin covers that lag, confirmation times on both chains, and Bob's reaction time.
+- Bob must refund promptly once `T_btc` has passed, or keep watching for Alice's claim until `T_alph`: Alice can claim the BTC until his refund confirms. The web app attempts the refund automatically as soon as median time past reaches the locktime.
 
 ## State Persistence and Recovery
 

@@ -222,7 +222,7 @@ No Bitcoin Core wallet is used anywhere. Bob signs the funding transaction with 
 |----------|-------------|
 | **Atomicity** | Adaptor secret `t` links both chains — either both claims succeed or neither does |
 | **No theft** | `swap()` always sends to `claimAddress` (Bob), regardless of caller |
-| **No timeout race** | T_btc (144 blocks ~ 1 day) > T_alph (6 hours) |
+| **No timeout race** | T_alph = T_btc + 12 h: Bob's BTC refund opens first, Alice's ALPH refund only after; Bob refuses a contract that breaks this (`src/timelocks.js`) |
 | **Signature unforgeability** | MuSig2 2-of-2 — neither party can sign alone |
 | **No replay** | Signature message is `selfContractId!()`, unique per contract |
 

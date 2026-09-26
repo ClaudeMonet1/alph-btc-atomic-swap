@@ -34,6 +34,7 @@ import {
   setAlphNetwork,
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime } from './timelocks.js';
 
 // ============================================================
 // Network Mode Detection
@@ -72,12 +73,12 @@ function getSession(token) {
 // Shared context computation (same as nostr-swap.js)
 // ============================================================
 
-function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, csvTimeout }) {
+function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, btcLocktime }) {
   const pubkeys = [alicePub, bobPub];
   const { aggPubkey, keyCoeffs, gacc } = keyAgg(pubkeys);
 
   const { address: swapBtcAddress, internalPubkey, scriptTree, p2tr } =
-    createSwapOutput(aggPubkey, bobPub, csvTimeout);
+    createSwapOutput(aggPubkey, bobPub, btcLocktime);
 
   const aliceBtcAddress = getP2TRAddress(alicePub);
 
@@ -188,7 +189,7 @@ async function handleApi(req, res, urlPath) {
         role: null, peerPubHex: null,
         // Swap params
         btcAmount: 0.5, btcSat: 50000000, alphAmount: ONE_ALPH * 10n,
-        csvTimeout: 144, alphTimeoutMs: Date.now() + 6 * 60 * 60 * 1000,
+        btcLocktime: null, alphTimeoutMs: null, // set when Bob locks / Alice learns the lock
         // Swap state
         adaptorSecret: null, adaptorPoint: null, // Alice's t, T
         peerAdaptorPoint: null,
@@ -301,7 +302,6 @@ async function handleApi(req, res, urlPath) {
       s.peerPubHex = body.peerPubHex;
       if (body.btcAmount !== undefined) { s.btcAmount = body.btcAmount; s.btcSat = Math.round(body.btcAmount * 1e8); }
       if (body.alphAmount !== undefined) s.alphAmount = BigInt(body.alphAmount);
-      if (body.csvTimeout !== undefined) s.csvTimeout = body.csvTimeout;
       if (body.sessionId !== undefined) s.sessionId = body.sessionId;
 
       const result = { role: s.role };
@@ -336,7 +336,8 @@ async function handleApi(req, res, urlPath) {
       const pubkeys = [peerPub, s.pubKey]; // [alice, bob]
       const { aggPubkey } = keyAgg(pubkeys);
 
-      const { address: swapBtcAddress } = createSwapOutput(aggPubkey, s.pubKey, s.csvTimeout);
+      s.btcLocktime = btcLocktimeNow();
+      const { address: swapBtcAddress } = createSwapOutput(aggPubkey, s.pubKey, s.btcLocktime);
 
       // Determine UTXO to spend
       let utxoTxid, utxoVout, utxoValue;
@@ -379,7 +380,7 @@ async function handleApi(req, res, urlPath) {
       s.btcLockTxid = fundTxid;
       s.btcLockVout = fundVout;
 
-      return json(res, { txid: fundTxid, vout: fundVout, amountSat: s.btcSat });
+      return json(res, { txid: fundTxid, vout: fundVout, amountSat: s.btcSat, btcLocktime: s.btcLocktime });
     }
 
     // ── Swap: Verify BTC (Alice) ──
@@ -387,11 +388,14 @@ async function handleApi(req, res, urlPath) {
       const s = getSession(body.token);
       s.btcLockTxid = body.txid;
       s.btcLockVout = body.vout;
+      checkBtcLocktime(body.btcLocktime); // Bob's refund must open within the accepted window
+      s.btcLocktime = body.btcLocktime;
+      s.alphTimeoutMs = alphTimeoutFor(s.btcLocktime);
 
       const peerPub = hexToBytes(s.peerPubHex);
       const pubkeys = [s.pubKey, peerPub]; // [alice, bob]
       const { aggPubkey } = keyAgg(pubkeys);
-      const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, s.csvTimeout);
+      const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, s.btcLocktime);
       await verifySwapOutput(body.txid, swapBtcAddress, s.btcAmount, { allowUnconfirmed: isTestnet });
 
       return json(res, { valid: true });
@@ -444,10 +448,11 @@ async function handleApi(req, res, urlPath) {
       const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(s.secBytes), keyType: 'bip340-schnorr' });
       const aliceAlphAddress = addressFromPublicKey(s.peerPubHex, 'bip340-schnorr');
 
+      const bounds = alphTimeoutBounds(s.btcLocktime);
       await verifyContractState(
         body.contractAddress, bytesToHex(aggPubkey),
         wallet.address, aliceAlphAddress,
-        s.alphAmount, undefined, compiled,
+        s.alphAmount, bounds.maxTimeout, compiled, bounds.minTimeout,
       );
 
       return json(res, { valid: true });
@@ -465,7 +470,7 @@ async function handleApi(req, res, urlPath) {
       s.ctx = computeSharedContext({
         alicePub, bobPub,
         btcLockTxid: s.btcLockTxid, btcLockVout: s.btcLockVout,
-        btcSat: s.btcSat, contractId: s.contractId, csvTimeout: s.csvTimeout,
+        btcSat: s.btcSat, contractId: s.contractId, btcLocktime: s.btcLocktime,
       });
 
       return json(res, { swapBtcAddress: s.ctx.swapBtcAddress });
@@ -649,11 +654,11 @@ async function handleApi(req, res, urlPath) {
       const peerPub = hexToBytes(s.peerPubHex);
       const pubkeys = [peerPub, s.pubKey]; // [alice, bob]
       const { aggPubkey } = keyAgg(pubkeys);
-      const { internalPubkey, scriptTree } = createSwapOutput(aggPubkey, s.pubKey, s.csvTimeout);
+      const { internalPubkey, scriptTree } = createSwapOutput(aggPubkey, s.pubKey, s.btcLocktime);
 
       const { psbt: refundPsbt } = buildRefundTx(
         s.btcLockTxid, s.btcLockVout, s.btcSat,
-        s.btcAddress, internalPubkey, scriptTree, s.csvTimeout,
+        s.btcAddress, internalPubkey, scriptTree, s.btcLocktime,
       );
 
       refundPsbt.signInput(0, {

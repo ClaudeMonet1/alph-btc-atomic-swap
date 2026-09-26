@@ -10,8 +10,8 @@ bitcoin.initEccLib(ecc);
 // ---- Network configuration ----
 
 const REGTEST = bitcoin.networks.regtest;
-const RPC_URL = 'http://127.0.0.1:18443';
-const RPC_AUTH = 'Basic ' + Buffer.from('nostralph:nostralph').toString('base64');
+const RPC_URL = process.env.BTC_RPC_URL || 'http://127.0.0.1:18443';
+const RPC_AUTH = 'Basic ' + Buffer.from(process.env.BTC_RPC_AUTH || 'nostralph:nostralph').toString('base64');
 
 const NETWORKS = {
   regtest: { network: bitcoin.networks.regtest, esploraUrl: null, useRpc: true },
@@ -157,13 +157,16 @@ export async function setupRegtestWallet(walletName) {
 
 // ---- Taproot swap output ----
 
-export function createSwapOutput(aggPubkey, bobPubkey, timeoutBlocks) {
+// Refund leaf: <locktime> OP_CHECKLOCKTIMEVERIFY OP_DROP <bob> OP_CHECKSIG, with
+// `locktime` an absolute Unix timestamp (compared against median time past).
+export function createSwapOutput(aggPubkey, bobPubkey, locktime) {
+  if (!Number.isInteger(locktime) || locktime < 500_000_000) throw new Error(`refund locktime must be a Unix timestamp, got ${locktime}`);
   const internalPubkey = Buffer.from(aggPubkey);
 
   const { OPS } = bitcoin.script;
   const refundScript = bitcoin.script.compile([
-    bitcoin.script.number.encode(timeoutBlocks),
-    OPS.OP_CHECKSEQUENCEVERIFY,
+    bitcoin.script.number.encode(locktime),
+    OPS.OP_CHECKLOCKTIMEVERIFY,
     OPS.OP_DROP,
     Buffer.from(bobPubkey),
     OPS.OP_CHECKSIG,
@@ -342,7 +345,7 @@ export async function broadcastTx(signedTxHex) {
 
 // ---- Build refund transaction (script path spend) ----
 
-export function buildRefundTx(fundingTxid, vout, amountSat, bobAddress, internalPubkey, scriptTree, csvTimeout, fee = 300) {
+export function buildRefundTx(fundingTxid, vout, amountSat, bobAddress, internalPubkey, scriptTree, locktime, fee = 300) {
   const p2tr = bitcoin.payments.p2tr({
     internalPubkey: Buffer.from(internalPubkey),
     scriptTree,
@@ -372,8 +375,9 @@ export function buildRefundTx(fundingTxid, vout, amountSat, bobAddress, internal
       script: redeemOutput,
       leafVersion: 0xc0,
     }],
-    sequence: csvTimeout,
+    sequence: 0xfffffffe, // nLockTime is enforced only when a sequence is not final
   });
+  psbt.setLocktime(locktime);
 
   psbt.addOutput({
     address: bobAddress,
@@ -397,6 +401,19 @@ export async function extractSignatureFromTx(txid) {
   const witness = tx.vin[0].witness;
   if (!witness || witness.length === 0) throw new Error('No witness data');
   return hexToBytes(witness[0]);
+}
+
+// ---- Median time past: what OP_CHECKLOCKTIMEVERIFY compares a timestamp locktime against ----
+
+export async function getMedianTimePast() {
+  if (activeConfig.useRpc) {
+    const info = await bitcoinRpc('getblockchaininfo');
+    return info.mediantime;
+  }
+  const tip = await esploraApi('/blocks');
+  const older = await esploraApi(`/blocks/${tip[tip.length - 1].height - 1}`);
+  const times = [...tip, ...older].map(b => b.timestamp).sort((a, b) => b - a).slice(0, 11).sort((a, b) => a - b);
+  return times[Math.floor(times.length / 2)];
 }
 
 // ---- Mine blocks helper ----

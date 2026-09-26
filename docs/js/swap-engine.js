@@ -27,17 +27,18 @@ import {
   web3, ONE_ALPH, addressFromPublicKey, groupOfAddress,
 } from './alph.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime } from './timelocks.js';
 
 // ============================================================
 // Shared context computation
 // ============================================================
 
-function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, csvTimeout }) {
+function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, btcLocktime }) {
   const pubkeys = [alicePub, bobPub];
   const { aggPubkey, keyCoeffs, gacc } = keyAgg(pubkeys);
 
   const { address: swapBtcAddress, internalPubkey, scriptTree, p2tr } =
-    createSwapOutput(aggPubkey, bobPub, csvTimeout);
+    createSwapOutput(aggPubkey, bobPub, btcLocktime);
 
   const aliceBtcAddress = getP2TRAddress(alicePub);
 
@@ -92,8 +93,10 @@ export class SwapEngine {
     this.btcAmount = 0.00005;
     this.btcSat = 5000;
     this.alphAmount = ONE_ALPH;
-    this.csvTimeout = 144;
-    this.alphTimeoutMs = Date.now() + 6 * 60 * 60 * 1000;
+    // Timelocks (timelocks.js): Bob chooses btcLocktime when he locks; Alice derives
+    // alphTimeoutMs from it; Bob refuses a contract whose timeout opens too early.
+    this.btcLocktime = null;
+    this.alphTimeoutMs = null;
 
     this.adaptorSecret = null;
     this.adaptorPoint = null;
@@ -218,7 +221,8 @@ export class SwapEngine {
     const pubkeys = [peerPub, this.pubKey]; // [alice, bob]
     const { aggPubkey } = keyAgg(pubkeys);
 
-    const { address: swapBtcAddress } = createSwapOutput(aggPubkey, this.pubKey, this.csvTimeout);
+    this.btcLocktime = btcLocktimeNow();
+    const { address: swapBtcAddress } = createSwapOutput(aggPubkey, this.pubKey, this.btcLocktime);
 
     const p2tr = bitcoin.payments.p2tr({ internalPubkey: Buffer.from(this.pubKey), network: NETWORK });
 
@@ -295,19 +299,24 @@ export class SwapEngine {
     this.btcLockTxid = fundTxid;
     this.btcLockVout = fundVout;
 
-    return { txid: fundTxid, vout: fundVout, amountSat: this.btcSat };
+    return { txid: fundTxid, vout: fundVout, amountSat: this.btcSat, btcLocktime: this.btcLocktime };
   }
 
   // ── Swap: Verify BTC (Alice) ──
+  // Bob's chosen refund locktime must lie within the accepted window; the ALPH
+  // timeout is derived from it so that Alice's refund opens after Bob's.
 
-  async verifyBtc(txid, vout) {
+  async verifyBtc(txid, vout, btcLocktime) {
+    checkBtcLocktime(btcLocktime);
+    this.btcLocktime = btcLocktime;
+    this.alphTimeoutMs = alphTimeoutFor(btcLocktime);
     this.btcLockTxid = txid;
     this.btcLockVout = vout;
 
     const peerPub = hexToBytes(this.peerPubHex);
     const pubkeys = [this.pubKey, peerPub]; // [alice, bob]
     const { aggPubkey } = keyAgg(pubkeys);
-    const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, this.csvTimeout);
+    const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, btcLocktime);
     await verifySwapOutput(txid, swapBtcAddress, this.btcAmount, { allowUnconfirmed: true });
 
     return { valid: true };
@@ -357,10 +366,13 @@ export class SwapEngine {
 
     const aliceAlphAddress = addressFromPublicKey(this.peerPubHex, 'bip340-schnorr');
 
+    // The contract's timeout must open after Bob's own BTC refund plus the margin,
+    // otherwise Alice could refund her ALPH and then claim the BTC.
+    const bounds = alphTimeoutBounds(this.btcLocktime);
     await verifyContractState(
       contractAddress, bytesToHex(aggPubkey),
       this.alphAddress, aliceAlphAddress,
-      this.alphAmount, undefined, compiled,
+      this.alphAmount, bounds.maxTimeout, compiled, bounds.minTimeout,
     );
 
     return { valid: true };
@@ -376,7 +388,7 @@ export class SwapEngine {
     this.ctx = computeSharedContext({
       alicePub, bobPub,
       btcLockTxid: this.btcLockTxid, btcLockVout: this.btcLockVout,
-      btcSat: this.btcSat, contractId: this.contractId, csvTimeout: this.csvTimeout,
+      btcSat: this.btcSat, contractId: this.contractId, btcLocktime: this.btcLocktime,
     });
 
     return { swapBtcAddress: this.ctx.swapBtcAddress };
@@ -593,11 +605,11 @@ export class SwapEngine {
     const peerPub = hexToBytes(this.peerPubHex);
     const pubkeys = [peerPub, this.pubKey]; // [alice, bob]
     const { aggPubkey } = keyAgg(pubkeys);
-    const { internalPubkey, scriptTree } = createSwapOutput(aggPubkey, this.pubKey, this.csvTimeout);
+    const { internalPubkey, scriptTree } = createSwapOutput(aggPubkey, this.pubKey, this.btcLocktime);
 
     const { psbt: refundPsbt } = buildRefundTx(
       this.btcLockTxid, this.btcLockVout, this.btcSat,
-      this.btcAddress, internalPubkey, scriptTree, this.csvTimeout,
+      this.btcAddress, internalPubkey, scriptTree, this.btcLocktime,
     );
 
     refundPsbt.signInput(0, {
@@ -649,13 +661,13 @@ export class SwapEngine {
     }
 
     return {
-      version: 1,
+      version: 2,
       role: this.role,
       peerPubHex: this.peerPubHex,
       btcAmount: this.btcAmount,
       btcSat: this.btcSat,
       alphAmount: String(this.alphAmount),
-      csvTimeout: this.csvTimeout,
+      btcLocktime: this.btcLocktime,
       alphTimeoutMs: this.alphTimeoutMs,
       adaptorSecret: hex(this.adaptorSecret),
       adaptorPoint: this.adaptorPoint ? hex(pointToBytes(this.adaptorPoint)) : null,
@@ -685,7 +697,7 @@ export class SwapEngine {
   }
 
   restoreFromJSON(data) {
-    if (data.version !== 1) throw new Error(`Unknown swap state version: ${data.version}`);
+    if (data.version !== 2) throw new Error(`Swap state version ${data.version} predates the timelock fix and cannot be resumed; recover manually`);
 
     const bytes = (h) => h ? hexToBytes(h) : null;
     const point = (h) => h ? lift_x(bytesToNum(hexToBytes(h))) : null;
@@ -697,7 +709,7 @@ export class SwapEngine {
     this.btcAmount = data.btcAmount;
     this.btcSat = data.btcSat;
     this.alphAmount = BigInt(data.alphAmount);
-    this.csvTimeout = data.csvTimeout;
+    this.btcLocktime = data.btcLocktime;
     this.alphTimeoutMs = data.alphTimeoutMs;
     this.adaptorSecret = bytes(data.adaptorSecret);
     this.adaptorPoint = point(data.adaptorPoint);

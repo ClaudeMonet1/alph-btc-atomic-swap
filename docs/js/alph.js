@@ -181,7 +181,7 @@ export async function refundSwap(pubKeyHex, secBytes, contractId, compiled) {
 
 // ---- Verify contract state ----
 
-export async function verifyContractState(contractAddress, expectedSwapKey, expectedClaimAddress, expectedRefundAddress, minAmount, maxTimeout, compiled) {
+export async function verifyContractState(contractAddress, expectedSwapKey, expectedClaimAddress, expectedRefundAddress, minAmount, maxTimeout, compiled, minTimeout) {
   const state = await nodeApi(`/contracts/${contractAddress}/state`);
   const fields = state.immFields;
   const swapKey = fields[0].value;
@@ -200,6 +200,7 @@ export async function verifyContractState(contractAddress, expectedSwapKey, expe
   if (swapKey !== expectedSwapKey) errors.push(`swapKey mismatch: ${swapKey} != ${expectedSwapKey}`);
   if (claimAddress !== expectedClaimAddress) errors.push(`claimAddress mismatch: ${claimAddress} != ${expectedClaimAddress}`);
   if (refundAddress !== expectedRefundAddress) errors.push(`refundAddress mismatch: ${refundAddress} != ${expectedRefundAddress}`);
+  if (minTimeout !== undefined && timeout < BigInt(minTimeout)) errors.push(`timeout too early: ${timeout} < ${minTimeout} (the ALPH refund must open after the BTC refund plus the margin)`);
   if (maxTimeout !== undefined && timeout > BigInt(maxTimeout)) errors.push(`timeout too far: ${timeout} > ${maxTimeout}`);
 
   const balance = await nodeApi(`/addresses/${contractAddress}/balance`);

@@ -16,13 +16,13 @@ Both parties agree on swap parameters. Each uses a single Nostr nsec — the sam
 ;negotiate ready -> swap_agreed
 ```
 
-Bob funds from his nsec-derived P2TR address and locks BTC in a taproot output. Key path: P_swap (2-of-2). Script path: Bob can refund after timelock T1.
+Bob funds from his nsec-derived P2TR address and locks BTC in a taproot output. Key path: P_swap (2-of-2). Script path: Bob can refund after the absolute locktime T_btc (OP_CHECKLOCKTIMEVERIFY), which he chooses and sends to Alice.
 
 ```
 ;lock_btc@Bob swap_agreed -> btc_locked
 ```
 
-Alice verifies Bob's lock on Bitcoin, then locks ALPH in a Ralph contract. `swap(sig)` verifies a MuSig2 signature against P_swap and sends funds to Bob's address. `refund()` lets Alice reclaim after timelock T2, where T2 < T1.
+Alice verifies Bob's lock on Bitcoin (address, amount, and that T_btc lies within her accepted window), then locks ALPH in a Ralph contract with timeout T_alph = T_btc + 12 h. `swap(sig)` verifies a MuSig2 signature against P_swap and sends funds to Bob's address. `refund()` lets Alice reclaim after T_alph. Bob verifies the contract, including T_alph >= T_btc + 6 h, before he pre-signs: Alice's refund must open only after Bob's, otherwise she could refund and then claim the BTC.
 
 ```
 ;lock_alph@Alice btc_locked -> both_locked
@@ -37,18 +37,18 @@ Alice verifies Bob's lock on Bitcoin, then locks ALPH in a Ralph contract. `swap
 
 The trade-off is asymmetry: BTC uses taproot MuSig2, ALPH uses a contract. A pure MuSig2 design on both chains would be more elegant but would add interactive rounds and verification complexity.
 
-Both parties exchange adaptor pre-signatures via Nostr DMs (NIP-44 encrypted). Each side provides a partial MuSig2 signature tweaked by the adaptor point T. Both verify the other's adaptor is valid. If the exchange stalls (party goes offline, Nostr fails), `exchange_timeout` fires when T2 passes, forking into the cancel path so both parties recover their assets.
+Both parties exchange adaptor pre-signatures via Nostr DMs (NIP-44 encrypted). Each side provides a partial MuSig2 signature tweaked by the adaptor point T. Both verify the other's adaptor is valid. If the exchange stalls (party goes offline, Nostr fails), `exchange_timeout` fires when the timeouts pass, forking into the cancel path so both parties recover their assets.
 
 ```
 ;exchange_presigs both_locked -> presigs_ready
 ;exchange_timeout both_locked -> alph_refundable btc_cancel_wait
 ```
 
-**Conflict**: `alice_claims_btc` and `t2_timeout` both consume `presigs_ready`. Exactly one fires. This is the protocol's decision point — everything after is deterministic.
+**Conflict**: `alice_claims_btc` and `t2_timeout` (Bob's refund at T_btc) both consume `presigs_ready`. Exactly one fires. This is the protocol's decision point — everything after is deterministic.
 
 ### Happy path
 
-Alice completes her adaptor, producing a valid MuSig2 signature. She claims BTC to her nsec-derived P2TR address. The completed signature reveals the adaptor secret t (anyone can compute t = s_complete - s_pre). Bob extracts t from Alice's Bitcoin claim transaction, completes his own adaptor, and claims ALPH. The T2 < T1 timelock ordering guarantees Bob sufficient time to extract t and claim.
+Alice completes her adaptor, producing a valid MuSig2 signature. She claims BTC to her nsec-derived P2TR address. The completed signature reveals the adaptor secret t (anyone can compute t = s_complete - s_pre). Bob extracts t from Alice's Bitcoin claim transaction, completes his own adaptor, and claims ALPH. Alice must claim before Bob refunds; Bob then has until T_alph (12 h after T_btc) to extract t and claim.
 
 ```
 ;alice_claims_btc@Alice presigs_ready -> t_revealed
@@ -57,13 +57,13 @@ Alice completes her adaptor, producing a valid MuSig2 signature. She claims BTC 
 
 ### Cancel path
 
-If Alice doesn't claim BTC before T2, the timeout fires. This produces tokens in two independent places via a fork — ALPH and BTC refunds happen on different chains with different timelocks, so they proceed in parallel.
+If Alice doesn't claim BTC before Bob refunds it, the cancel path is taken. This produces tokens in two independent places via a fork — ALPH and BTC refunds happen on different chains with different timelocks, so they proceed in parallel.
 
 ```
 ;t2_timeout presigs_ready -> alph_refundable btc_cancel_wait
 ```
 
-Alice refunds ALPH immediately after T2. Bob waits for T1 (> T2) then refunds BTC. These are independent — neither blocks the other. Both must complete before the protocol terminates.
+Bob refunds BTC once T_btc has passed (and should do so promptly). Alice refunds ALPH after T_alph, 12 h later. These are independent — neither blocks the other. Both must complete before the protocol terminates.
 
 ```
 ;alice_cancel_refund@Alice alph_refundable -> recovery_done
@@ -90,7 +90,7 @@ The cancel path is reachable from two places: `t2_timeout` at `presigs_ready` (A
 
 **Safety**: The net is 2-bounded. All places are 1-bounded except `recovery_done`, which holds 2 tokens on the cancel path (one per refund). The `both_recovered` join consumes both. Conflicts at `both_locked` and `presigs_ready` ensure mutual exclusion between the swap and cancel paths.
 
-**Atomicity**: If `alice_claims_btc` fires, `t_revealed` is produced, guaranteeing `bob_claims_alph` fires. The T2 < T1 timelock ordering ensures Bob always has sufficient time to extract t and claim ALPH. Neither party can get both assets.
+**Atomicity**: If `alice_claims_btc` fires, `t_revealed` is produced, guaranteeing `bob_claims_alph` fires. The ordering T_alph = T_btc + 12 h ensures Bob always has time to extract t and claim ALPH, and that Alice cannot refund ALPH while the BTC is still claimable. Neither party can get both assets.
 
 **Liveness**: Under clock fairness, if either party is unresponsive, a timeout eventually fires. `exchange_timeout` covers the presig exchange phase, `t2_timeout` covers the claim phase. The `both_recovered` join ensures the cancel path completes only after both parties have reclaimed their assets.
 
@@ -107,7 +107,7 @@ Either party can abandon the swap before committing assets on-chain. These early
 
 `negotiate_timeout` — Bob doesn't lock BTC. Alice loses nothing (she hasn't locked yet).
 
-`lock_timeout` — Alice doesn't lock ALPH after seeing Bob's lock. Bob's BTC is already on-chain, so the token moves to `btc_abort_wait`. After T1 expires, Bob refunds via the script path.
+`lock_timeout` — Alice doesn't lock ALPH after seeing Bob's lock. Bob's BTC is already on-chain, so the token moves to `btc_abort_wait`. After T_btc, Bob refunds via the script path.
 
 ## Composition
 

@@ -7,6 +7,7 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { bech32 } from 'bech32';
 import qrcode from 'qrcode-generator';
 import { SwapEngine } from './swap-engine.js';
+import { getMedianTimePast } from './btc.js';
 import { groupOfAddress, addressFromPublicKey } from './alph.js';
 import { getP2TRAddress } from './btc.js';
 import { PetriNetViewer } from './petri-viewer.js';
@@ -255,6 +256,24 @@ async function createOfferEvent({ offerId, direction, alphAmount, btcSat, expire
       network: state.network,
       expiresAt,
     }),
+  });
+}
+
+async function createOfferNote(offerEvent, { direction, alphAmount, btcSat }) {
+  const alphVal = Number(BigInt(alphAmount)) / 1e18;
+  const rate = Math.round(btcSat / alphVal);
+  const verb = direction === 'sell_alph' ? 'Selling' : 'Buying';
+  const text = [
+    `${verb} ${alphVal} ALPH for ${btcSat.toLocaleString()} sats (${rate.toLocaleString()} sat/ALPH)`,
+    `\u26a0 Testnet only \u2014 BTC signet + ALPH testnet coins, no real value`,
+    `Peer-to-peer atomic swap \u2014 MuSig2 adaptor signatures, no custodian`,
+    `https://claudemonet1.github.io/alph-btc-atomic-swap/`,
+  ].join('\n');
+  return signEvent({
+    kind: 1,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', offerEvent.id], ['t', 'atomicswap'], ['t', 'bitcoin'], ['t', 'alephium']],
+    content: text,
   });
 }
 
@@ -869,6 +888,9 @@ async function publishOffer() {
     const event = await createOfferEvent({ offerId, direction, alphAmount, btcSat, expiresAt });
     await nostrPublish(event);
 
+    const note = await createOfferNote(event, { direction, alphAmount: String(alphAmount), btcSat });
+    await nostrPublish(note).catch(() => {}); // best-effort
+
     addLogMsg('system', `Published offer: ${direction === 'sell_alph' ? 'Sell' : 'Buy'} ${alphVal} ALPH for ${btcSat} sat (expires in 24h)`, 'You');
   } catch (e) {
     addLogMsg('system', `Publish error: ${e.message}`, 'Error');
@@ -1238,7 +1260,8 @@ async function executeSetupAlice() {
       (e) => JSON.parse(e.content).type === 'btc_locked');
     const btcLocked = JSON.parse(btcLockedEvent.content);
 
-    await state.engine.verifyBtc(btcLocked.txid, btcLocked.vout);
+    if (btcLocked.btcLocktime === undefined) throw new Error('Peer runs an old version without the BTC locktime: refusing to lock');
+    await state.engine.verifyBtc(btcLocked.txid, btcLocked.vout, btcLocked.btcLocktime);
 
     updateStep('setup', { info: `BTC locked: ${btcLocked.txid.slice(0, 16)}... verified` });
   } catch (e) {
@@ -1332,7 +1355,7 @@ async function executeLockBob() {
 
     const event = await createSwapSetup({
       sessionId, recipientPubHex: peerPubHex, msgType: 'btc_locked',
-      txid: lockResult.txid, vout: lockResult.vout, amountSat: lockResult.amountSat,
+      txid: lockResult.txid, vout: lockResult.vout, amountSat: lockResult.amountSat, btcLocktime: lockResult.btcLocktime,
     });
     await nostrPublish(event);
 
@@ -2129,33 +2152,30 @@ async function updateTimeoutDisplay() {
     }
   }
 
-  // BTC timeout (T1 = csvTimeout blocks)
-  if (state.engine.btcLockTxid && state.engine.csvTimeout) {
+  // BTC timeout: the refund leaf's locktime against Bitcoin's median time past
+  if (state.engine.btcLockTxid && state.engine.btcLocktime) {
     try {
-      const txResp = await fetch(`https://mempool.space/signet/api/tx/${state.engine.btcLockTxid}`);
-      if (txResp.ok) {
-        const tx = await txResp.json();
-        if (tx.status?.confirmed && tx.status.block_height) {
-          const tipResp = await fetch('https://mempool.space/signet/api/blocks/tip/height');
-          if (tipResp.ok) {
-            const tipHeight = parseInt(await tipResp.text());
-            const confirmations = tipHeight - tx.status.block_height + 1;
-            const needed = state.engine.csvTimeout;
-            if (confirmations >= needed) {
-              lines.push(`BTC refund: <span style="color:#2ea043">AVAILABLE NOW</span> (${confirmations}/${needed} blocks)`);
-              const refundBtn = document.getElementById('recovery-refund-btc-btn');
-              if (refundBtn) refundBtn.disabled = false;
-            } else {
-              lines.push(`BTC refund: ${confirmations}/${needed} blocks`);
-            }
-          }
-        } else {
-          lines.push('BTC refund: lock tx unconfirmed');
+      const mtp = await getMedianTimePast();
+      const remaining = state.engine.btcLocktime - mtp;
+      if (remaining <= 0) {
+        lines.push('BTC refund: <span style="color:#2ea043">AVAILABLE NOW</span> (median time past reached the locktime)');
+        const refundBtn = document.getElementById('recovery-refund-btc-btn');
+        if (refundBtn) refundBtn.disabled = false;
+        // Bob must not wait: while his BTC stays locked Alice can still claim it, and once
+        // her refund opens she could keep both. Refund automatically as soon as possible.
+        if (state.activeSwap?.role === 'bob' && state.engine.getCheckpoint() !== 'btc_claimed' && !state.stepData._btcRefundAttempted) {
+          state.stepData._btcRefundAttempted = true;
+          refundBtc().catch(() => { state.stepData._btcRefundAttempted = false; });
         }
+      } else {
+        const hrs = Math.floor(remaining / 3600);
+        const mins = Math.floor((remaining % 3600) / 60);
+        lines.push(`BTC refund: ${hrs}h ${mins}m remaining (median time past)`);
       }
-    } catch {}
+    } catch (_) {
+      lines.push('BTC refund: could not read the chain tip');
+    }
   }
-
   el.innerHTML = lines.join('<br>');
 }
 
