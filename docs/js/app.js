@@ -1383,7 +1383,8 @@ async function executeClaimBob() {
     saveSwapState();
     updateStep('claim', { info: `Alice claimed BTC: ${btcClaimed.txid.slice(0, 16)}...\nExtracting secret and claiming ALPH...`, btcClaimTxid: btcClaimed.txid });
 
-    const result = await state.engine.claimAlph(btcClaimed.txid);
+    const result = await state.engine.claimAlph(btcClaimed.txid,
+      (have, need) => updateStep('claim', { info: `Alice's BTC claim ${btcClaimed.txid.slice(0, 16)}...: ${have}/${need} confirmations before claiming ALPH` }));
 
     const event = await createSwapClaim({
       sessionId, recipientPubHex: peerPubHex, claimType: 'alph_claimed',

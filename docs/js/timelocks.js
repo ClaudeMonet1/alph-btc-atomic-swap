@@ -27,6 +27,10 @@ export const LOCKTIME_THRESHOLD = 500_000_000;     // below this nLockTime means
 // makes the check mean anything and is what the signet demo uses; a mainnet
 // deployment should raise it with the amount.
 export const MIN_LOCK_CONFIRMATIONS = 1;
+// Bob claims ALPH only once Alice's BTC claim has this many confirmations: the
+// secret is readable from the mempool, but a claim that is later reorganised
+// out while Bob has already taken the ALPH would leave Alice with nothing (S10).
+export const CLAIM_CONFIRMATIONS = 1;
 export const LOCK_CONFIRMATION_POLL_MS = 15_000;
 export const LOCK_CONFIRMATION_TIMEOUT_MS = 6 * 3600 * 1000;
 
