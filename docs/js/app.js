@@ -1261,9 +1261,10 @@ async function executeSetupAlice() {
     const btcLocked = JSON.parse(btcLockedEvent.content);
 
     if (btcLocked.btcLocktime === undefined) throw new Error('Peer runs an old version without the BTC locktime: refusing to lock');
-    await state.engine.verifyBtc(btcLocked.txid, btcLocked.vout, btcLocked.btcLocktime);
+    const { confirmations } = await state.engine.verifyBtc(btcLocked.txid, btcLocked.vout, btcLocked.btcLocktime,
+      (have, need) => updateStep('setup', { info: `BTC lock ${btcLocked.txid.slice(0, 16)}...: ${have}/${need} confirmations (not locking ALPH before that)` }));
 
-    updateStep('setup', { info: `BTC locked: ${btcLocked.txid.slice(0, 16)}... verified` });
+    updateStep('setup', { info: `BTC locked: ${btcLocked.txid.slice(0, 16)}... verified with ${confirmations} confirmation(s)` });
   } catch (e) {
     updateStep('setup', { status: 'error', error: e.message });
     throw e;

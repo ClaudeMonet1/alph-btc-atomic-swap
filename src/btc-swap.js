@@ -208,37 +208,41 @@ export async function fundSwapOutput(address, amountBtc, walletName) {
 
 // ---- Verify funded swap output ----
 
-export async function verifySwapOutput(txid, expectedAddress, minAmountBtc, { allowUnconfirmed = false } = {}) {
+// Confirmations of a transaction (0 while unconfirmed or unknown).
+export async function getConfirmations(txid) {
   if (activeConfig.useRpc) {
     const rawTx = await bitcoinRpc('getrawtransaction', [txid, true]);
-    const confirmations = rawTx.confirmations || 0;
-    if (!allowUnconfirmed && confirmations < 1) throw new Error(`Swap tx ${txid} not yet confirmed (${confirmations} confs)`);
-
-    let found = false;
-    for (const out of rawTx.vout) {
-      if (out.scriptPubKey.address === expectedAddress && out.value >= minAmountBtc) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) throw new Error(`No output to ${expectedAddress} with >= ${minAmountBtc} BTC in tx ${txid}`);
-    return { confirmations };
+    return rawTx.confirmations || 0;
   }
+  const status = await esploraApi(`/tx/${txid}/status`);
+  if (!status.confirmed) return 0;
+  const tip = parseInt(await esploraApi('/blocks/tip/height'), 10);
+  return tip - status.block_height + 1;
+}
 
-  // Esplora mode
-  const tx = await esploraApi(`/tx/${txid}`);
-  const confirmed = tx.status?.confirmed || false;
-  if (!allowUnconfirmed && !confirmed) throw new Error(`Swap tx ${txid} not yet confirmed`);
-
+// Verify that `txid` pays at least `minAmountBtc` to `expectedAddress` and has
+// at least `minConfirmations` confirmations, waiting for them if necessary
+// (`onProgress(confirmations, needed)` is called on every poll). The output is
+// checked before the wait, so a wrong lock is refused at once.
+export async function verifySwapOutput(txid, expectedAddress, minAmountBtc, { minConfirmations = 1, pollMs = 15_000, timeoutMs = 6 * 3600 * 1000, onProgress = null } = {}) {
+  const minSat = Math.round(minAmountBtc * 1e8);
   let found = false;
-  for (const out of tx.vout) {
-    if (out.scriptpubkey_address === expectedAddress && out.value >= Math.round(minAmountBtc * 1e8)) {
-      found = true;
-      break;
-    }
+  if (activeConfig.useRpc) {
+    const rawTx = await bitcoinRpc('getrawtransaction', [txid, true]);
+    found = rawTx.vout.some(out => out.scriptPubKey.address === expectedAddress && Math.round(out.value * 1e8) >= minSat);
+  } else {
+    const tx = await esploraApi(`/tx/${txid}`);
+    found = tx.vout.some(out => out.scriptpubkey_address === expectedAddress && out.value >= minSat);
   }
   if (!found) throw new Error(`No output to ${expectedAddress} with >= ${minAmountBtc} BTC in tx ${txid}`);
-  return { confirmations: confirmed ? 1 : 0 };
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const confirmations = await getConfirmations(txid);
+    if (onProgress) onProgress(confirmations, minConfirmations);
+    if (confirmations >= minConfirmations) return { confirmations };
+    if (Date.now() >= deadline) throw new Error(`Swap tx ${txid} has ${confirmations} of ${minConfirmations} confirmations after ${timeoutMs / 1000}s`);
+    await new Promise(r => setTimeout(r, pollMs));
+  }
 }
 
 // ---- Build claim transaction (key path spend) ----

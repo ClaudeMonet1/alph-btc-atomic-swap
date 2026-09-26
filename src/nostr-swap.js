@@ -38,7 +38,7 @@ import {
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
 import { startRelay } from './relay.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS } from './timelocks.js';
 import {
   connectRelay, publish, waitForSwapEvent, waitForEvent,
   createPublicEvent, createSwapSetup, createSwapNonce, createSwapPresig, createSwapClaim,
@@ -157,8 +157,9 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   const pubkeys = [alicePub, bobPub];
   const { aggPubkey } = keyAgg(pubkeys);
   const { address: swapBtcAddress } = createSwapOutput(aggPubkey, bobPub, btcLocktime);
-  await verifySwapOutput(btcLocked.txid, swapBtcAddress, BTC_AMOUNT);
-  log('ALICE', 'BTC output verified');
+  const { confirmations } = await verifySwapOutput(btcLocked.txid, swapBtcAddress, BTC_AMOUNT, { minConfirmations: MIN_LOCK_CONFIRMATIONS, pollMs: 2000 });
+  checkBtcLocktime(btcLocktime, minBtcLockSeconds === undefined ? {} : { minLockSeconds: minBtcLockSeconds });
+  log('ALICE', `BTC output verified with ${confirmations} confirmation(s)`);
 
   // ── Deploy ALPH contract ──
   log('ALICE', 'Deploying ALPH contract...');
