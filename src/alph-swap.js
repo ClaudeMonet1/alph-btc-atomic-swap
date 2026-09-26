@@ -3,6 +3,9 @@
 
 import { web3, ONE_ALPH, DUST_AMOUNT, addressFromPublicKey, groupOfAddress, buildContractByteCode, buildScriptByteCode } from '@alephium/web3';
 import { PrivateKeyWallet } from '@alephium/web3-wallet';
+import { schnorr } from '@noble/curves/secp256k1.js';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
+import { verifyUnsignedTx } from './alph-verify.js';
 
 const NODE_URL = 'http://127.0.0.1:22973'; // kept for backward compat
 let alphNodeUrl = 'http://127.0.0.1:22973';
@@ -44,6 +47,17 @@ async function nodeApi(path, method = 'GET', body = null) {
   return res.json();
 }
 
+// ---- Build through the node, verify, sign, submit ----
+// The SDK's signAndSubmit* helpers sign the node's transaction id blindly; this
+// path decodes the unsigned transaction first (alph-verify.js).
+async function signAndSubmit(wallet, buildPath, buildParams, expect) {
+  const result = await nodeApi(buildPath, 'POST', { fromPublicKey: wallet.publicKey, fromPublicKeyType: wallet.keyType || 'bip340-schnorr', ...buildParams });
+  verifyUnsignedTx(result.unsignedTx, result.txId, { address: wallet.address, ...expect });
+  const sig = schnorr.sign(hexToBytes(result.txId), hexToBytes(wallet.privateKey));
+  await nodeApi('/transactions/submit', 'POST', { unsignedTx: result.unsignedTx, signature: bytesToHex(sig) });
+  return result;
+}
+
 // ---- Ralph contract source ----
 
 const SWAP_CONTRACT_SOURCE = `
@@ -75,6 +89,14 @@ TxScript RefundSwap(htlc: AtomicSwap) {
   htlc.refund()
 }
 `;
+
+// 32-byte contract id from a base58 contract address (strip the type byte).
+function contractIdFromAddress(address) {
+  const A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  let num = 0n;
+  for (const c of address) num = num * 58n + BigInt(A.indexOf(c));
+  return num.toString(16).padStart(66, '0').slice(2);
+}
 
 // ---- Compile ----
 
@@ -110,22 +132,16 @@ export async function deploySwapContract(wallet, swapKeyHex, claimAddress, refun
     structs,
   );
 
-  const params = {
-    signerAddress: wallet.address,
-    signerKeyType: 'bip340-schnorr',
-    bytecode,
-    initialAttoAlphAmount: alphAmount,
-    gasAmount: 100000,
-  };
+  const params = { bytecode, initialAttoAlphAmount: alphAmount.toString(), gasAmount: 100000 };
   if (targetGroup !== undefined) params.group = targetGroup;
 
-  const result = await wallet.signAndSubmitDeployContractTx(params);
+  const result = await signAndSubmit(wallet, '/contracts/unsigned-tx/deploy-contract', params, { kind: 'deploy', bytecode, initialAttoAlphAmount: alphAmount, gasAmount: 100000 });
 
   return {
     contractAddress: result.contractAddress,
-    contractId: result.contractId,
+    contractId: contractIdFromAddress(result.contractAddress),
     txId: result.txId,
-    groupIndex: result.groupIndex,
+    groupIndex: result.fromGroup,
   };
 }
 
@@ -144,16 +160,10 @@ export async function claimSwap(wallet, contractId, musig2SignatureHex, compiled
     structs,
   );
 
-  const params = {
-    signerAddress: wallet.address,
-    signerKeyType: wallet.keyType || 'bip340-schnorr',
-    bytecode,
-    attoAlphAmount: DUST_AMOUNT,
-    gasAmount: 100000,
-  };
+  const params = { bytecode, attoAlphAmount: DUST_AMOUNT.toString(), gasAmount: 100000 };
   if (targetGroup !== undefined) params.group = targetGroup;
 
-  const result = await wallet.signAndSubmitExecuteScriptTx(params);
+  const result = await signAndSubmit(wallet, '/contracts/unsigned-tx/execute-script', params, { kind: 'execute', bytecode, gasAmount: 100000 });
   return { txId: result.txId };
 }
 
@@ -171,13 +181,7 @@ export async function refundSwap(wallet, contractId, compiled) {
     structs,
   );
 
-  const result = await wallet.signAndSubmitExecuteScriptTx({
-    signerAddress: wallet.address,
-    signerKeyType: wallet.keyType || 'bip340-schnorr',
-    bytecode,
-    attoAlphAmount: DUST_AMOUNT,
-    gasAmount: 100000,
-  });
+  const result = await signAndSubmit(wallet, '/contracts/unsigned-tx/execute-script', { bytecode, attoAlphAmount: DUST_AMOUNT.toString(), gasAmount: 100000 }, { kind: 'execute', bytecode, gasAmount: 100000 });
 
   return { txId: result.txId };
 }
