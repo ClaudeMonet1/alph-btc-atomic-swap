@@ -1698,15 +1698,12 @@ function markOfferProcessed(offerId) {
 
 const TARGET_ALPH_GROUP = 1;
 
+// A stored key is never replaced: it may hold funds. A new key is ground into the
+// target Alephium group so that both parties of a swap can call the same contract;
+// a stored key outside that group is kept and reported (keyGroupWarning).
 function getOrCreateNsec() {
-  let hex = localStorage.getItem(STORAGE_KEY);
-  if (hex && hex.length === 64) {
-    // Verify existing key is in the target group; if not, regenerate
-    const pub = schnorr.getPublicKey(hexToBytes(hex));
-    const addr = addressFromPublicKey(bytesToHex(pub), 'bip340-schnorr');
-    if (groupOfAddress(addr) === TARGET_ALPH_GROUP) return hex;
-    // Wrong group — fall through to regenerate
-  }
+  const hex = localStorage.getItem(STORAGE_KEY);
+  if (hex && hex.length === 64) return hex;
   // Grind until we find a key in the target ALPH group
   const sec = new Uint8Array(32);
   for (;;) {
@@ -1715,9 +1712,15 @@ function getOrCreateNsec() {
     const addr = addressFromPublicKey(bytesToHex(pub), 'bip340-schnorr');
     if (groupOfAddress(addr) === TARGET_ALPH_GROUP) break;
   }
-  hex = bytesToHex(sec);
-  localStorage.setItem(STORAGE_KEY, hex);
-  return hex;
+  const fresh = bytesToHex(sec);
+  localStorage.setItem(STORAGE_KEY, fresh);
+  return fresh;
+}
+
+function keyGroupWarning(pubKeyHex) {
+  const group = groupOfAddress(addressFromPublicKey(pubKeyHex, 'bip340-schnorr'));
+  if (group === TARGET_ALPH_GROUP) return null;
+  return `Your key is in Alephium group ${group}; swaps on this page expect group ${TARGET_ALPH_GROUP}. The key was kept (it may hold funds): sweep it and reset to trade here.`;
 }
 
 function npubEncode(pubKeyHex) {
@@ -2205,6 +2208,8 @@ async function autoConnect() {
   try {
     const nsecHex = getOrCreateNsec();
     state.secBytes = hexToBytes(nsecHex);
+    const groupWarning = keyGroupWarning(bytesToHex(schnorr.getPublicKey(state.secBytes)));
+    if (groupWarning) setTimeout(() => addLogMsg('system', groupWarning, 'Warning'), 0);
 
     statusEl.textContent = 'Deriving identity...';
     const pubKey = schnorr.getPublicKey(state.secBytes);

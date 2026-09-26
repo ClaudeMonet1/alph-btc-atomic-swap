@@ -9,7 +9,7 @@ import {
   Point, G, Fn, n,
   taggedHash, pointToBytes, lift_x,
   numTo32b, bytesToNum,
-  hasEvenY, cbytes, getPlainPubkey,
+  hasEvenY, cbytes, getPlainPubkey, consumeSecNonce,
 } from './musig2.js';
 import { concatBytes } from '@noble/curves/utils';
 
@@ -42,8 +42,7 @@ function getAdaptorSessionValues(aggNonce, aggPubkey, msg, adaptorPoint) {
 
 export function adaptorSign(secretKey, secNonce, aggNonce, keyCoeffs, aggPubkey, msg, adaptorPoint, signerIndex, gacc) {
   const d_raw = bytesToNum(secretKey instanceof Uint8Array ? secretKey : numTo32b(secretKey));
-  const k1 = bytesToNum(secNonce.slice(0, 32));
-  const k2 = bytesToNum(secNonce.slice(32, 64));
+  const { k1, k2 } = consumeSecNonce(secNonce); // single use: zeroed here
 
   const { b, e, negR } = getAdaptorSessionValues(aggNonce, aggPubkey, msg, adaptorPoint);
 

@@ -413,6 +413,10 @@ export class SwapEngine {
   // ── Swap: Nonce commit ──
 
   nonceCommit() {
+    // fresh nonces: anything signed under the previous ones is void
+    this.myBtcPresig = null; this.myAlphPresig = null;
+    this.peerBtcPresig = null; this.peerAlphPresig = null;
+    this.btcAdaptorAgg = null; this.alphAdaptorAgg = null; this.btcTweakedAgg = null;
     this.btcNonce = nonceGen(this.secBytes, this.ctx.Qbytes, this.ctx.btcSighash);
     this.alphNonce = nonceGen(this.secBytes, this.ctx.aggPubkey, this.ctx.alphMsg);
 
@@ -462,6 +466,11 @@ export class SwapEngine {
   // ── Swap: Presign ──
 
   presign() {
+    // The secret nonces sign once (adaptorSign zeroes them). A retry returns the
+    // pre-signatures already made; new nonces require the nonce step again.
+    if (this.myBtcPresig && this.myAlphPresig) {
+      return { btcPresig: bytesToHex(this.myBtcPresig), alphPresig: bytesToHex(this.myAlphPresig) };
+    }
     const signerIndex = this.role === 'alice' ? 0 : 1;
     const T = this.role === 'alice' ? this.adaptorPoint : this.peerAdaptorPoint;
 
