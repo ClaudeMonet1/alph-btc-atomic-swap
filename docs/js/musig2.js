@@ -151,13 +151,25 @@ function getSessionValues(aggNonce, aggPubkey, msg) {
   return { R: finalR, b, e, negR };
 }
 
+
+// A secret nonce signs exactly once. Two partial signatures under one nonce with
+// different aggregate nonces or challenges reveal the secret key by linear
+// algebra (BIP327, "the secnonce must never be used again"), so the nonce is
+// checked and zeroed here, whatever the caller does.
+function consumeSecNonce(secNonce) {
+  if (secNonce.every(b => b === 0)) throw new Error('secret nonce already used: generate fresh nonces before signing again');
+  const k1 = bytesToNum(secNonce.slice(0, 32));
+  const k2 = bytesToNum(secNonce.slice(32, 64));
+  secNonce.fill(0);
+  return { k1, k2 };
+}
+
 // ---- PartialSign (BIP-327 §4.8) ----
 
 export function partialSign(secretKey, secNonce, aggNonce, keyCoeffs, aggPubkey, msg, signerIndex, gacc) {
   // gacc: accumulated negation factor from keyAgg (1n or n-1n)
   const d_raw = bytesToNum(secretKey instanceof Uint8Array ? secretKey : numTo32b(secretKey));
-  const k1 = bytesToNum(secNonce.slice(0, 32));
-  const k2 = bytesToNum(secNonce.slice(32, 64));
+  const { k1, k2 } = consumeSecNonce(secNonce);
 
   const { R, b, e, negR } = getSessionValues(aggNonce, aggPubkey, msg);
 
@@ -221,5 +233,5 @@ export {
   taggedHash, pointToBytes, lift_x,
   numTo32b, bytesToNum,
   hasEvenY, cbytes, getPlainPubkey,
-  getNonceCoeff, getSessionValues,
+  getNonceCoeff, getSessionValues, consumeSecNonce,
 };
