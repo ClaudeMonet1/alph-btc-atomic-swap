@@ -487,6 +487,8 @@ async function handleApi(req, res, urlPath) {
     // ── Swap: Nonce commit ──
     if (urlPath === '/api/swap/nonce-commit' && req.method === 'POST') {
       const s = getSession(body.token);
+      s.myBtcPresig = null; s.myAlphPresig = null; s.peerBtcPresig = null; s.peerAlphPresig = null;
+      s.btcAdaptorAgg = null; s.alphAdaptorAgg = null; s.btcTweakedAgg = null;
       s.btcNonce = nonceGen(s.secBytes, s.ctx.Qbytes, s.ctx.btcSighash);
       s.alphNonce = nonceGen(s.secBytes, s.ctx.aggPubkey, s.ctx.alphMsg);
 
@@ -539,6 +541,10 @@ async function handleApi(req, res, urlPath) {
     // ── Swap: Presign ──
     if (urlPath === '/api/swap/presign' && req.method === 'POST') {
       const s = getSession(body.token);
+      if (s.myBtcPresig && s.myAlphPresig) {
+        // the secret nonces were consumed by the first call; repeat the answer, never the signing
+        return json(res, { btcPresig: bytesToHex(s.myBtcPresig), alphPresig: bytesToHex(s.myAlphPresig) });
+      }
       const signerIndex = s.role === 'alice' ? 0 : 1;
       const T = s.role === 'alice' ? s.adaptorPoint : s.peerAdaptorPoint;
 
