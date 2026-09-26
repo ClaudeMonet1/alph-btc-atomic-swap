@@ -78,6 +78,7 @@ If it were the other way round (as in versions before 2026-09-27, which had ALPH
 - Bob reads the contract's `timeout` and refuses to pre-sign unless `T_btc + 6 h <= T_alph <= T_btc + 7 d`.
 - Both timeouts are absolute timestamps. Bitcoin evaluates the leaf against median time past, which lags wall-clock time by one to two hours; the 12 h margin covers that lag, confirmation times on both chains, and Bob's reaction time.
 - Alice locks her ALPH only once Bob's funding transaction has `MIN_LOCK_CONFIRMATIONS` confirmations (one on the signet demo; raise it with the amount on mainnet): an unconfirmed lock is Bob's to replace. She re-checks the locktime window after the wait.
+- Bob claims the ALPH only once Alice's BTC claim has `CLAIM_CONFIRMATIONS` confirmations (one on the demo). The secret `t` is readable from the mempool, but a claim that is reorganised out after Bob has taken the ALPH would leave Alice with neither asset; the 12 h margin leaves Bob ample time to wait.
 - Bob must refund promptly once `T_btc` has passed, or keep watching for Alice's claim until `T_alph`: Alice can claim the BTC until his refund confirms. The web app attempts the refund automatically as soon as median time past reaches the locktime.
 
 ## Fees

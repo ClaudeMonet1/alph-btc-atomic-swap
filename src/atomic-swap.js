@@ -25,7 +25,7 @@ import {
 import {
   bitcoinRpc, createSwapOutput, verifySwapOutput,
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
-  mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin, estimateFeeRate, mineMatureCoinbase,
+  mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin, estimateFeeRate, mineMatureCoinbase, getConfirmations,
 } from './btc-swap.js';
 import {
   compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
@@ -33,7 +33,7 @@ import {
   web3, ONE_ALPH, PrivateKeyWallet,
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS, claimFeeFor, checkClaimFee } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS, claimFeeFor, checkClaimFee, CLAIM_CONFIRMATIONS } from './timelocks.js';
 
 const log = (phase, msg) => console.log(`[${phase}] ${msg}`);
 
@@ -479,7 +479,8 @@ async function main() {
   log('CLAIM', `ALPH completed signature valid: ${alphSigValid}`);
   if (!alphSigValid) throw new Error('ALPH completed signature invalid!');
 
-  // Wait for cross-group contract propagation
+  // Bob claims only once Alice's claim is confirmed (mined above); then wait for contract propagation
+  while ((await getConfirmations(claimTxid)) < CLAIM_CONFIRMATIONS) await new Promise(r => setTimeout(r, 2000));
   await new Promise(r => setTimeout(r, 3000));
 
   log('CLAIM', 'Bob calls swap() on Alephium contract...');
