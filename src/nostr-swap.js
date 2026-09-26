@@ -165,6 +165,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   const compiled = await compileSwapContract();
   const bobAlphAddress = addressFromPublicKey(bobPubHex, 'bip340-schnorr');
   const bobGroup = groupOfAddress(bobAlphAddress);
+  if (bobGroup !== groupOfAddress(aliceAlphWallet.address)) throw new Error(`Bob's Alephium address is in group ${bobGroup}, Alice's in group ${groupOfAddress(aliceAlphWallet.address)}: the contract could not pay him`);
 
   const deployResult = await deploySwapContract(
     aliceAlphWallet, bytesToHex(aggPubkey), bobAlphAddress, aliceAlphWallet.address,

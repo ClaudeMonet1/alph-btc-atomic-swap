@@ -22,7 +22,7 @@ Bob funds from his nsec-derived P2TR address and locks BTC in a taproot output. 
 ;lock_btc@Bob swap_agreed -> btc_locked
 ```
 
-Alice verifies Bob's lock on Bitcoin (address, amount, and that T_btc lies within her accepted window), then locks ALPH in a Ralph contract with timeout T_alph = T_btc + 12 h. `swap(sig)` verifies a MuSig2 signature against P_swap and sends funds to Bob's address. `refund()` lets Alice reclaim after T_alph. Bob verifies the contract, including T_alph >= T_btc + 6 h, before he pre-signs: Alice's refund must open only after Bob's, otherwise she could refund and then claim the BTC.
+Alice verifies Bob's lock on Bitcoin (address, amount, and that T_btc lies within her accepted window), then locks ALPH in a Ralph contract with timeout T_alph = T_btc + 12 h. `swap(sig)` verifies a MuSig2 signature against P_swap and sends funds to Bob's address. `refund()` may be called by anyone after T_alph and pays Alice's refund address. Both addresses must be in the contract's Alephium group (see design.md); both sides refuse a peer from another group before anything is locked. Bob verifies the contract, including T_alph >= T_btc + 6 h, before he pre-signs: Alice's refund must open only after Bob's, otherwise she could refund and then claim the BTC.
 
 ```
 ;lock_alph@Alice btc_locked -> both_locked

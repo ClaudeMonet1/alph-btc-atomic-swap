@@ -66,10 +66,11 @@ Contract AtomicSwap(
     destroySelf!(claimAddress)
   }
 
-  @using(assetsInContract = true)
+  // Anyone in the contract's group may trigger the refund once the timeout has
+  // passed; the funds always go to refundAddress.
+  @using(assetsInContract = true, checkExternalCaller = false)
   pub fn refund() -> () {
     assert!(blockTimeStamp!() >= timeout, 0)
-    checkCaller!(callerAddress!() == refundAddress, 1)
     destroySelf!(refundAddress)
   }
 }
@@ -201,6 +202,12 @@ export async function verifyContractState(contractAddress, expectedSwapKey, expe
     }
   }
 
+  // A contract can only pay addresses of its own group (the node rejects the
+  // transaction with InvalidOutputGroupIndex), and only accounts of that group
+  // can call it. A claim address in another group could never be paid.
+  const contractGroup = groupOfAddress(contractAddress);
+  if (groupOfAddress(claimAddress) !== contractGroup) errors.push(`claimAddress ${claimAddress} is in group ${groupOfAddress(claimAddress)} but the contract is in group ${contractGroup}: swap() could never pay it`);
+  if (groupOfAddress(refundAddress) !== contractGroup) errors.push(`refundAddress ${refundAddress} is in group ${groupOfAddress(refundAddress)} but the contract is in group ${contractGroup}`);
   if (swapKey !== expectedSwapKey) errors.push(`swapKey mismatch: ${swapKey} != ${expectedSwapKey}`);
   if (claimAddress !== expectedClaimAddress) errors.push(`claimAddress mismatch: ${claimAddress} != ${expectedClaimAddress}`);
   if (refundAddress !== expectedRefundAddress) errors.push(`refundAddress mismatch: ${refundAddress} != ${expectedRefundAddress}`);
