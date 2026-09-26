@@ -6,6 +6,7 @@ import alphWeb3 from '@alephium/web3';
 const { web3, ONE_ALPH, DUST_AMOUNT, addressFromPublicKey, groupOfAddress, buildContractByteCode, buildScriptByteCode } = alphWeb3;
 import { schnorr } from '@noble/curves/secp256k1';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
+import { verifyUnsignedTx } from './alph-verify.js';
 
 const ALPH_NODE_URL = 'https://node.testnet.alephium.org';
 web3.setCurrentNodeProvider(ALPH_NODE_URL);
@@ -37,8 +38,11 @@ async function nodeApi(path, method = 'GET', body = null) {
 
 // ---- Sign and submit via direct API ----
 
-async function signAndSubmit(buildPath, buildParams, secBytes) {
+// Build through the node, verify what came back against what was asked
+// (alph-verify.js), and only then sign the transaction id.
+async function signAndSubmit(buildPath, buildParams, secBytes, expect) {
   const result = await nodeApi(buildPath, 'POST', buildParams);
+  verifyUnsignedTx(result.unsignedTx, result.txId, expect);
   const sig = schnorr.sign(hexToBytes(result.txId), secBytes);
   await nodeApi('/transactions/submit', 'POST', {
     unsignedTx: result.unsignedTx,
@@ -118,7 +122,7 @@ export async function deploySwapContract(pubKeyHex, secBytes, swapKeyHex, claimA
     bytecode,
     initialAttoAlphAmount: alphAmount.toString(),
     gasAmount: 100000,
-  }, secBytes);
+  }, secBytes, { kind: 'deploy', address: addressFromPublicKey(pubKeyHex, 'bip340-schnorr'), bytecode, initialAttoAlphAmount: alphAmount, gasAmount: 100000 });
 
   return {
     contractAddress: result.contractAddress,
@@ -149,7 +153,7 @@ export async function claimSwap(pubKeyHex, secBytes, contractId, musig2Signature
     bytecode,
     attoAlphAmount: DUST_AMOUNT.toString(),
     gasAmount: 100000,
-  }, secBytes);
+  }, secBytes, { kind: 'execute', address: addressFromPublicKey(pubKeyHex, 'bip340-schnorr'), bytecode, gasAmount: 100000 });
 
   return { txId: result.txId };
 }
@@ -174,7 +178,7 @@ export async function refundSwap(pubKeyHex, secBytes, contractId, compiled) {
     bytecode,
     attoAlphAmount: DUST_AMOUNT.toString(),
     gasAmount: 100000,
-  }, secBytes);
+  }, secBytes, { kind: 'execute', address: addressFromPublicKey(pubKeyHex, 'bip340-schnorr'), bytecode, gasAmount: 100000 });
 
   return { txId: result.txId };
 }
@@ -243,7 +247,7 @@ export async function transferAlph(pubKeyHex, secBytes, destAddress, attoAlphAmo
     destinations: [{ address: destAddress, attoAlphAmount: attoAlphAmount.toString() }],
     gasAmount: 20000,
     gasPrice: '100000000000',
-  }, secBytes);
+  }, secBytes, { kind: 'transfer', address: addressFromPublicKey(pubKeyHex, 'bip340-schnorr'), destinations: [{ address: destAddress, attoAlphAmount }], gasAmount: 20000 });
   return result.txId;
 }
 
