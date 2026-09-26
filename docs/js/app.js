@@ -1280,7 +1280,7 @@ async function executeLockAlice() {
 
     const event = await createSwapSetup({
       sessionId, recipientPubHex: peerPubHex, msgType: 'alph_deployed',
-      contractId: deployResult.contractId, contractAddress: deployResult.contractAddress,
+      contractId: deployResult.contractId, contractAddress: deployResult.contractAddress, claimFeeSat: deployResult.claimFeeSat,
     });
     await nostrPublish(event);
 
@@ -1365,7 +1365,8 @@ async function executeLockBob() {
       (e) => JSON.parse(e.content).type === 'alph_deployed');
     const alphDeployed = JSON.parse(alphDeployedEvent.content);
 
-    await state.engine.verifyAlph(alphDeployed.contractId, alphDeployed.contractAddress);
+    if (alphDeployed.claimFeeSat === undefined) throw new Error('Peer runs an old version without the claim fee: refusing to continue');
+    await state.engine.verifyAlph(alphDeployed.contractId, alphDeployed.contractAddress, alphDeployed.claimFeeSat);
 
     const verifiedEvent = await createSwapSetup({
       sessionId, recipientPubHex: peerPubHex, msgType: 'verified',
@@ -1945,6 +1946,7 @@ function renderRecoveryActions(checkpoint) {
   } else if (checkpoint === 'btc_claimed') {
     if (role === 'alice') {
       html += `<span style="color:#2ea043; font-size:12px">BTC claimed. Waiting for Bob to claim ALPH.</span> `;
+      html += `<button class="sm" id="recovery-bump-btn" title="Child pays for parent: spend the claim output at the current fee rate">Bump claim fee</button> `;
     } else if (alphEmpty) {
       html += `<span style="color:#2ea043; font-size:12px">ALPH already claimed. Swap complete!</span> `;
     } else {
@@ -1964,6 +1966,19 @@ function renderRecoveryActions(checkpoint) {
 
   const claimAlphBtn = document.getElementById('recovery-claim-alph-btn');
   if (claimAlphBtn) claimAlphBtn.addEventListener('click', recoveryClaimAlph);
+
+  const bumpBtn = document.getElementById('recovery-bump-btn');
+  if (bumpBtn) bumpBtn.addEventListener('click', async () => {
+    bumpBtn.disabled = true;
+    try {
+      const r = await state.engine.bumpClaimFee();
+      addLogMsg('claim', `Claim bumped: child ${r.txid.slice(0, 24)}... pays ${r.childFee} sat (${r.feeRate} sat/vB)`, 'You');
+    } catch (e) {
+      showRecoveryStatus(`Bump error: ${e.message}`, 'error');
+    } finally {
+      bumpBtn.disabled = false;
+    }
+  });
 
   const refundAlphBtn = document.getElementById('recovery-refund-alph-btn');
   if (refundAlphBtn) refundAlphBtn.addEventListener('click', refundAlph);

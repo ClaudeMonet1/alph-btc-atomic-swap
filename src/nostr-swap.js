@@ -29,7 +29,7 @@ import {
 import {
   bitcoinRpc, createSwapOutput, verifySwapOutput,
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
-  mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin,
+  mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin, estimateFeeRate, mineMatureCoinbase,
 } from './btc-swap.js';
 import {
   compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
@@ -38,7 +38,7 @@ import {
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
 import { startRelay } from './relay.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS, claimFeeFor, checkClaimFee, REFUND_VBYTES } from './timelocks.js';
 import {
   connectRelay, publish, waitForSwapEvent, waitForEvent,
   createPublicEvent, createSwapSetup, createSwapNonce, createSwapPresig, createSwapClaim,
@@ -83,7 +83,7 @@ function generateSameGroupKeys() {
 
 // Both sides compute identical context from public inputs.
 // Called after both locks are in place and verified.
-function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, btcLocktime }) {
+function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, btcLocktime, claimFeeSat }) {
   const pubkeys = [alicePub, bobPub];
   const { aggPubkey, keyCoeffs, gacc } = keyAgg(pubkeys);
 
@@ -99,7 +99,7 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
   const tacc = tweakNeg ? Fn.neg(tweakScalar) : tweakScalar;
 
   const { sighash: btcSighash } = buildClaimTx(
-    btcLockTxid, btcLockVout, btcSat, aliceBtcAddress, internalPubkey, scriptTree,
+    btcLockTxid, btcLockVout, btcSat, aliceBtcAddress, internalPubkey, scriptTree, claimFeeSat,
   );
   const alphMsg = hexToBytes(contractId);
 
@@ -107,7 +107,7 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
     aggPubkey, keyCoeffs, gacc, gaccTweaked, tacc,
     Qbytes, btcSighash, alphMsg,
     swapBtcAddress, internalPubkey, scriptTree, p2tr,
-    aliceBtcAddress,
+    aliceBtcAddress, claimFeeSat,
   };
 }
 
@@ -174,11 +174,13 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   await waitForTx(deployResult.txId);
   log('ALICE', `ALPH contract deployed: ${deployResult.contractAddress}`);
 
-  // ── SETUP: Send contract info ──
+  // ── SETUP: Send contract info and the claim fee (fixed now: the claim is pre-signed) ──
+  const claimFeeSat = claimFeeFor(await estimateFeeRate(), BTC_SAT);
   await publish(ws, createSwapSetup(aliceSec, {
     sessionId, recipientPubHex: bobPubHex, msgType: 'alph_deployed',
     contractId: deployResult.contractId,
     contractAddress: deployResult.contractAddress,
+    claimFeeSat,
   }));
 
   // ── SETUP: Wait for Bob's verification ──
@@ -191,7 +193,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   const ctx = computeSharedContext({
     alicePub, bobPub,
     btcLockTxid: btcLocked.txid, btcLockVout: btcLocked.vout,
-    btcSat: BTC_SAT, contractId: deployResult.contractId, btcLocktime,
+    btcSat: BTC_SAT, contractId: deployResult.contractId, btcLocktime, claimFeeSat,
   });
 
   // ── NONCE: Commit ──
@@ -288,7 +290,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   if (!schnorr.verify(btcFinalSig, ctx.btcSighash, ctx.Qbytes))
     throw new Error('BTC completed signature invalid');
 
-  const { psbt } = buildClaimTx(btcLocked.txid, btcLocked.vout, BTC_SAT, aliceBtcAddress, ctx.internalPubkey, ctx.scriptTree);
+  const { psbt } = buildClaimTx(btcLocked.txid, btcLocked.vout, BTC_SAT, aliceBtcAddress, ctx.internalPubkey, ctx.scriptTree, claimFeeSat);
   const signedTxHex = finalizeKeyPathSpend(psbt, btcFinalSig);
   const claimTxid = await broadcastTx(signedTxHex);
   await mineBlocks(1, aliceBtcAddress);
@@ -373,7 +375,8 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
   const alphDeployedEvent = await waitForSwapEvent(ws, SWAP_SETUP_KIND, sessionId, alicePubHex,
     (e) => JSON.parse(e.content).type === 'alph_deployed', DM_TIMEOUT);
   const alphDeployed = JSON.parse(alphDeployedEvent.content);
-  log('BOB', `ALPH contract: ${alphDeployed.contractAddress}`);
+  log('BOB', `ALPH contract: ${alphDeployed.contractAddress}, proposed claim fee ${alphDeployed.claimFeeSat} sat`);
+  checkClaimFee(alphDeployed.claimFeeSat, BTC_SAT);
 
   // ── Verify ALPH contract ──
   const compiled = await compileSwapContract();
@@ -394,7 +397,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
   const ctx = computeSharedContext({
     alicePub, bobPub,
     btcLockTxid: fundTxid, btcLockVout: fundVout,
-    btcSat: BTC_SAT, contractId: alphDeployed.contractId, btcLocktime,
+    btcSat: BTC_SAT, contractId: alphDeployed.contractId, btcLocktime, claimFeeSat: alphDeployed.claimFeeSat,
   });
 
   // ── NONCE: Wait for Alice's commit, then send ours ──
@@ -554,11 +557,10 @@ async function setupTest() {
   await waitForTx((await fundFromGenesis(bobAlphWallet.address, ONE_ALPH * 5n)).txId);
 
   log('SETUP', 'Mining 101 blocks to Bob\'s BTC address...');
-  const blockHashes = await bitcoinRpc('generatetoaddress', [101, bobBtcAddress]);
-  const block = await bitcoinRpc('getblock', [blockHashes[0], 2]);
-  const coinbaseTx = block.tx[0];
-  const coinbaseVout = coinbaseTx.vout.findIndex(o => o.scriptPubKey.address === bobBtcAddress);
-  const coinbaseAmountSat = Math.round(coinbaseTx.vout[coinbaseVout].value * 1e8);
+  const coinbase = await mineMatureCoinbase(bobBtcAddress, BTC_SAT + 100_000);
+  const coinbaseTx = { txid: coinbase.txid, vout: [] };
+  const coinbaseVout = coinbase.vout;
+  const coinbaseAmountSat = coinbase.amountSat;
 
   return {
     aliceSec, alicePub, bobSec, bobPub,
@@ -692,6 +694,7 @@ async function testBothRefund() {
   const { psbt: refundPsbt } = buildRefundTx(
     aliceResult.fundTxid, aliceResult.fundVout, BTC_SAT,
     bobBtcAddress, aliceResult.internalPubkey, aliceResult.scriptTree, aliceResult.btcLocktime,
+    Math.max(Math.ceil((await estimateFeeRate()) * REFUND_VBYTES), 300),
   );
 
   refundPsbt.signInput(0, {

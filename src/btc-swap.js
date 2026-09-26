@@ -71,10 +71,14 @@ export async function bitcoinRpc(method, params = [], wallet = null) {
 // ---- New utility functions ----
 
 export async function estimateFee(vBytes = 150) {
-  if (activeConfig.useRpc) return 300; // flat fee for regtest
+  return Math.max(Math.ceil((await estimateFeeRate()) * vBytes), 300);
+}
+
+// Current fee rate in sat/vB (regtest: 2; otherwise Esplora's half-hour estimate).
+export async function estimateFeeRate() {
+  if (activeConfig.useRpc) return 2;
   const fees = await esploraApi('/v1/fees/recommended');
-  const feeRate = fees.halfHourFee || 2; // sat/vB
-  return Math.max(feeRate * vBytes, 300);
+  return Math.max(1, fees.halfHourFee || 1);
 }
 
 export async function getUtxos(address) {
@@ -328,6 +332,25 @@ export function buildP2TRKeyPathSpend(fundingTxid, vout, inputAmountSat, destAdd
   return { psbt, sighash: new Uint8Array(sighash), fee };
 }
 
+// ---- Child-pays-for-parent: spend an unconfirmed P2TR output we own to bump its parent ----
+// `parentVbytes` and `parentFee` describe the stuck transaction; the child pays
+// enough so that parent plus child reach `feeRate` sat/vB. Returns the child's
+// PSBT and sighash for the owner to sign with the tweaked key.
+export function buildCpfpChild(parentTxid, vout, outputSat, ownerPubkey, feeRate, parentVbytes, parentFee) {
+  const CHILD_VBYTES = 111;
+  const wanted = Math.ceil(feeRate * (parentVbytes + CHILD_VBYTES));
+  const childFee = Math.max(wanted - parentFee, MIN_CHILD_FEE);
+  if (outputSat - childFee < 330) throw new Error(`output too small to bump: ${outputSat} sat, child fee ${childFee} sat`);
+  const p2tr = bitcoin.payments.p2tr({ internalPubkey: Buffer.from(ownerPubkey), network: activeConfig.network });
+  const psbt = new bitcoin.Psbt({ network: activeConfig.network });
+  psbt.addInput({ hash: parentTxid, index: vout, witnessUtxo: { script: p2tr.output, value: BigInt(outputSat) }, tapInternalKey: Buffer.from(ownerPubkey) });
+  psbt.addOutput({ address: p2tr.address, value: BigInt(outputSat - childFee) });
+  const tx = psbt.__CACHE.__TX;
+  const sighash = tx.hashForWitnessV1(0, [p2tr.output], [BigInt(outputSat)], bitcoin.Transaction.SIGHASH_DEFAULT);
+  return { psbt, sighash: new Uint8Array(sighash), childFee };
+}
+const MIN_CHILD_FEE = 111;
+
 // ---- Finalize and broadcast key-path spend ----
 
 export function finalizeKeyPathSpend(psbt, signature) {
@@ -418,6 +441,22 @@ export async function getMedianTimePast() {
   const older = await esploraApi(`/blocks/${tip[tip.length - 1].height - 1}`);
   const times = [...tip, ...older].map(b => b.timestamp).sort((a, b) => b - a).slice(0, 11).sort((a, b) => a - b);
   return times[Math.floor(times.length / 2)];
+}
+
+// ---- Regtest: mine 101 blocks to `address` and return a mature coinbase worth at least `minSat` ----
+// The regtest subsidy halves every 150 blocks, so a long-lived chain eventually
+// pays less than a test needs; the error says so instead of failing later.
+export async function mineMatureCoinbase(address, minSat) {
+  const hashes = await bitcoinRpc('generatetoaddress', [101, address]);
+  for (const hash of hashes.slice(0, hashes.length - 100)) {
+    const block = await bitcoinRpc('getblock', [hash, 2]);
+    const tx = block.tx[0];
+    const vout = tx.vout.findIndex(o => o.scriptPubKey.address === address);
+    const sat = Math.round(tx.vout[vout].value * 1e8);
+    if (sat >= minSat) return { txid: tx.txid, vout, amountSat: sat };
+  }
+  const first = await bitcoinRpc('getblock', [hashes[0], 2]);
+  throw new Error(`regtest coinbase is ${first.tx[0].vout[0].value} BTC, below the ${minSat / 1e8} BTC the test needs: reset the regtest chain`);
 }
 
 // ---- Mine blocks helper ----
