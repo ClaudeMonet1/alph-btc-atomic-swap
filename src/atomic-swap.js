@@ -33,6 +33,7 @@ import {
   web3, ONE_ALPH, PrivateKeyWallet,
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds } from './timelocks.js';
 
 const log = (phase, msg) => console.log(`[${phase}] ${msg}`);
 
@@ -70,7 +71,7 @@ export async function recoverSwap(bobSecHex) {
     case 'locked':
       log('RECOVER', 'Swap interrupted after locking funds but before pre-signing.');
       log('RECOVER', 'No adaptor pre-signatures were exchanged — cannot claim.');
-      log('RECOVER', `BTC: wait for CSV timeout (${state.csvTimeout} blocks), then refund via script-path spend.`);
+      log('RECOVER', `BTC: refund via the script path once median time past reaches ${new Date(state.btcLocktime * 1000).toISOString()}.`);
       log('RECOVER', `ALPH: wait until ${new Date(state.alphTimeoutMs).toISOString()}, then call refund().`);
       log('RECOVER', 'Manual intervention required. State file preserved.');
       return true;
@@ -246,17 +247,14 @@ async function main() {
   // ============================================================
   // Phase 3: Lock funds on both chains
   // ============================================================
-  // Timeout ordering: T_btc > T_alph + safety margin.
-  // The first lock (BTC) must have a longer timeout so Bob can always
-  // refund BTC after Alice's ALPH refund window has closed. This prevents
-  // Alice from claiming BTC at the last moment before T_alph, leaving
-  // Bob no time to extract t and claim ALPH.
-  const CSV_TIMEOUT = 144; // ~1 day on mainnet; instant on regtest
+  // Timeout ordering (src/timelocks.js): Alice's BTC claim reveals t, so Bob's
+  // BTC refund must open FIRST and Alice's ALPH refund only later, with a margin.
+  const btcLocktime = btcLocktimeNow();
   const BTC_AMOUNT = 0.5;
   const BTC_SAT = Math.round(BTC_AMOUNT * 1e8);
 
-  log('LOCK', `Creating Bitcoin taproot output (key: P_swap, refund: Bob after ${CSV_TIMEOUT} blocks)...`);
-  const { address: swapBtcAddress, internalPubkey, scriptTree, p2tr } = createSwapOutput(aggPubkey, bobPub, CSV_TIMEOUT);
+  log('LOCK', `Creating Bitcoin taproot output (key: P_swap, refund: Bob after ${new Date(btcLocktime * 1000).toISOString()})...`);
+  const { address: swapBtcAddress, internalPubkey, scriptTree, p2tr } = createSwapOutput(aggPubkey, bobPub, btcLocktime);
   log('LOCK', `BTC swap address: ${swapBtcAddress}`);
 
   // Bob funds swap from his nsec-derived P2TR (signed with his nsec)
@@ -279,7 +277,8 @@ async function main() {
   log('LOCK', 'Compiling and deploying Alephium AtomicSwap contract...');
   const compiled = await compileSwapContract();
   const ALPH_AMOUNT = ONE_ALPH * 10n;
-  const ALPH_TIMEOUT_MS = Date.now() + 6 * 60 * 60 * 1000; // 6 hours < BTC's ~1 day
+  checkBtcLocktime(btcLocktime); // Alice: Bob's lock must expire within the accepted window
+  const ALPH_TIMEOUT_MS = alphTimeoutFor(btcLocktime); // Alice's refund opens 12 h after Bob's
 
   // Deploy contract to Bob's group so Bob can claim from same group
   const deployResult = await deploySwapContract(
@@ -299,18 +298,21 @@ async function main() {
   await verifySwapOutput(fundTxid, swapBtcAddress, BTC_AMOUNT);
   log('VERIFY-LOCK', 'BTC output verified: correct address, amount, confirmed');
 
-  // Bob verifies Alice's ALPH lock: correct swapKey, claimAddress, refundAddress, amount
+  // Bob verifies Alice's ALPH lock: correct swapKey, claimAddress, refundAddress, amount,
+  // and a timeout that opens only after his own BTC refund plus the margin
   log('VERIFY-LOCK', 'Bob verifies Alephium contract state...');
+  const bounds = alphTimeoutBounds(btcLocktime);
   await verifyContractState(
     deployResult.contractAddress,
     bytesToHex(aggPubkey),     // expected swapKey
     bobAlphWallet.address,     // expected claimAddress (Bob)
     aliceAlphWallet.address,   // expected refundAddress (Alice)
     ALPH_AMOUNT,               // minimum ALPH deposited
-    undefined,                 // maxTimeout
+    bounds.maxTimeout,
     compiled,                  // verify bytecode matches expected contract
+    bounds.minTimeout,
   );
-  log('VERIFY-LOCK', 'ALPH contract verified: correct keys, addresses, balance');
+  log('VERIFY-LOCK', 'ALPH contract verified: correct keys, addresses, balance, timeout after the BTC refund');
 
   // Checkpoint: locked — both chains funded and verified
   saveSwapState({
@@ -326,7 +328,7 @@ async function main() {
     fundTxid,
     fundVout,
     btcSat: BTC_SAT,
-    csvTimeout: CSV_TIMEOUT,
+    btcLocktime,
     aliceBtcAddress,
     bobBtcAddress,
     aliceAlphAddress: aliceAlphWallet.address,
@@ -581,12 +583,12 @@ async function testBtcRefund() {
   // MuSig2 key aggregation
   const { aggPubkey } = keyAgg([alicePub, bobPub]);
 
-  // Create taproot swap output
-  const CSV_TIMEOUT = 10; // short timeout for test (10 blocks)
+  // Create taproot swap output with a locktime already in the past (median time past has passed it)
+  const pastLocktime = nowSeconds() - 3 * 3600;
   const BTC_AMOUNT = 0.5;
   const BTC_SAT = Math.round(BTC_AMOUNT * 1e8);
 
-  const { address: swapAddr, internalPubkey, scriptTree } = createSwapOutput(aggPubkey, bobPub, CSV_TIMEOUT);
+  const { address: swapAddr, internalPubkey, scriptTree } = createSwapOutput(aggPubkey, bobPub, pastLocktime);
   log('REFUND-BTC', `Swap address: ${swapAddr}`);
 
   // Mine to Bob's P2TR and fund the swap
@@ -612,13 +614,9 @@ async function testBtcRefund() {
   const fundVout = fundRawTx.vout.findIndex(o => o.scriptPubKey.address === swapAddr);
   log('REFUND-BTC', `Swap funded: txid=${fundTxid.slice(0, 16)}... vout=${fundVout}`);
 
-  // Mine past CSV timeout
-  log('REFUND-BTC', `Mining ${CSV_TIMEOUT} blocks for CSV timeout...`);
-  await mineBlocks(CSV_TIMEOUT, bobBtcAddr);
-
-  // Build refund tx (script-path spend)
+  // Build refund tx (script-path spend with nLockTime = the leaf's locktime)
   log('REFUND-BTC', 'Bob builds refund tx (script-path spend)...');
-  const { psbt: refundPsbt } = buildRefundTx(fundTxid, fundVout, BTC_SAT, bobBtcAddr, internalPubkey, scriptTree, CSV_TIMEOUT);
+  const { psbt: refundPsbt } = buildRefundTx(fundTxid, fundVout, BTC_SAT, bobBtcAddr, internalPubkey, scriptTree, pastLocktime);
 
   // Sign with Bob's nsec (for OP_CHECKSIG in the refund script)
   // publicKey must be 33-byte compressed; signInput strips to x-only for matching

@@ -38,6 +38,7 @@ import {
 } from './alph-swap.js';
 import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
 import { startRelay } from './relay.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds } from './timelocks.js';
 import {
   connectRelay, publish, waitForSwapEvent, waitForEvent,
   createPublicEvent, createSwapSetup, createSwapNonce, createSwapPresig, createSwapClaim,
@@ -58,7 +59,6 @@ const DM_TIMEOUT = 30000;
 const BTC_AMOUNT = 0.5;
 const BTC_SAT = Math.round(BTC_AMOUNT * 1e8);
 const ALPH_AMOUNT = ONE_ALPH * 10n;
-const CSV_TIMEOUT = 144;
 
 // ============================================================
 // Key Generation
@@ -83,12 +83,12 @@ function generateSameGroupKeys() {
 
 // Both sides compute identical context from public inputs.
 // Called after both locks are in place and verified.
-function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, csvTimeout }) {
+function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, btcLocktime }) {
   const pubkeys = [alicePub, bobPub];
   const { aggPubkey, keyCoeffs, gacc } = keyAgg(pubkeys);
 
   const { address: swapBtcAddress, internalPubkey, scriptTree, p2tr } =
-    createSwapOutput(aggPubkey, bobPub, csvTimeout);  // Bob = refund path
+    createSwapOutput(aggPubkey, bobPub, btcLocktime);  // Bob = refund path
 
   const aliceBtcAddress = bitcoin.payments.p2tr({
     internalPubkey: Buffer.from(alicePub), network: REGTEST,
@@ -116,8 +116,7 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
 // ============================================================
 
 async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
-  csvTimeout = CSV_TIMEOUT,
-  alphTimeoutMs = Date.now() + 6 * 60 * 60 * 1000,
+  minBtcLockSeconds = undefined, // tests only: accept a BTC lock that is already refundable
   skipClaim = false,
 } = {}) {
   const alicePub = schnorr.getPublicKey(aliceSec);
@@ -149,12 +148,15 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   const btcLockedEvent = await waitForSwapEvent(ws, SWAP_SETUP_KIND, sessionId, bobPubHex,
     (e) => JSON.parse(e.content).type === 'btc_locked', DM_TIMEOUT);
   const btcLocked = JSON.parse(btcLockedEvent.content);
-  log('ALICE', `Bob locked BTC: txid=${btcLocked.txid.slice(0, 16)}... vout=${btcLocked.vout}`);
+  log('ALICE', `Bob locked BTC: txid=${btcLocked.txid.slice(0, 16)}... vout=${btcLocked.vout} refund at ${btcLocked.btcLocktime}`);
 
-  // ── Verify BTC output ──
+  // ── Verify BTC output: Bob's locktime within bounds, then the output itself ──
+  const btcLocktime = btcLocked.btcLocktime;
+  checkBtcLocktime(btcLocktime, minBtcLockSeconds === undefined ? {} : { minLockSeconds: minBtcLockSeconds });
+  const alphTimeoutMs = alphTimeoutFor(btcLocktime);
   const pubkeys = [alicePub, bobPub];
   const { aggPubkey } = keyAgg(pubkeys);
-  const { address: swapBtcAddress } = createSwapOutput(aggPubkey, bobPub, csvTimeout);
+  const { address: swapBtcAddress } = createSwapOutput(aggPubkey, bobPub, btcLocktime);
   await verifySwapOutput(btcLocked.txid, swapBtcAddress, BTC_AMOUNT);
   log('ALICE', 'BTC output verified');
 
@@ -188,7 +190,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   const ctx = computeSharedContext({
     alicePub, bobPub,
     btcLockTxid: btcLocked.txid, btcLockVout: btcLocked.vout,
-    btcSat: BTC_SAT, contractId: deployResult.contractId, csvTimeout,
+    btcSat: BTC_SAT, contractId: deployResult.contractId, btcLocktime,
   });
 
   // ── NONCE: Commit ──
@@ -272,7 +274,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
     return {
       tBytes, t, T, compiled,
       btcTweakedAgg, btcAdaptorAgg, alphAdaptorAgg,
-      fundTxid: btcLocked.txid, fundVout: btcLocked.vout,
+      fundTxid: btcLocked.txid, fundVout: btcLocked.vout, btcLocktime,
       internalPubkey: ctx.internalPubkey, scriptTree: ctx.scriptTree, p2tr: ctx.p2tr,
       deployResult, aliceAlphWallet, aliceBtcAddress,
     };
@@ -319,7 +321,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
 // ============================================================
 
 async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
-  csvTimeout = CSV_TIMEOUT,
+  btcLocktime = btcLocktimeNow(),
   coinbaseTxid, coinbaseVout, coinbaseAmountSat,
   stopAfterPresign = false,
 } = {}) {
@@ -343,7 +345,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
   // ── SETUP: Lock BTC ──
   log('BOB', 'Creating Bitcoin taproot output...');
   const { address: swapBtcAddress, internalPubkey, scriptTree, p2tr } =
-    createSwapOutput(aggPubkey, bobPub, csvTimeout);
+    createSwapOutput(aggPubkey, bobPub, btcLocktime);
 
   log('BOB', 'Funding swap from P2TR...');
   const { psbt: fundPsbt, sighash: fundSighash } = buildP2TRKeyPathSpend(
@@ -362,7 +364,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
 
   await publish(ws, createSwapSetup(bobSec, {
     sessionId, recipientPubHex: alicePubHex, msgType: 'btc_locked',
-    txid: fundTxid, vout: fundVout, amountSat: BTC_SAT,
+    txid: fundTxid, vout: fundVout, amountSat: BTC_SAT, btcLocktime,
   }));
 
   // ── SETUP: Wait for Alice's ALPH contract ──
@@ -375,12 +377,13 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
   // ── Verify ALPH contract ──
   const compiled = await compileSwapContract();
   const aliceAlphAddress = addressFromPublicKey(alicePubHex, 'bip340-schnorr');
+  const bounds = alphTimeoutBounds(btcLocktime);
   await verifyContractState(
     alphDeployed.contractAddress, bytesToHex(aggPubkey),
     bobAlphWallet.address, aliceAlphAddress,
-    ALPH_AMOUNT, undefined, compiled,
+    ALPH_AMOUNT, bounds.maxTimeout, compiled, bounds.minTimeout,
   );
-  log('BOB', 'ALPH contract verified');
+  log('BOB', 'ALPH contract verified (timeout opens after the BTC refund plus margin)');
 
   await publish(ws, createSwapSetup(bobSec, {
     sessionId, recipientPubHex: alicePubHex, msgType: 'verified',
@@ -390,7 +393,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
   const ctx = computeSharedContext({
     alicePub, bobPub,
     btcLockTxid: fundTxid, btcLockVout: fundVout,
-    btcSat: BTC_SAT, contractId: alphDeployed.contractId, csvTimeout,
+    btcSat: BTC_SAT, contractId: alphDeployed.contractId, btcLocktime,
   });
 
   // ── NONCE: Wait for Alice's commit, then send ours ──
@@ -640,7 +643,8 @@ async function testBothRefund() {
   const aliceWs = await connectRelay(RELAY_URL);
   const bobWs = await connectRelay(RELAY_URL);
 
-  const REFUND_CSV_TIMEOUT = 10;
+  // Locktimes already in the past, ordering preserved: BTC refund 20 h ago, ALPH refund 8 h ago
+  const pastBtcLocktime = nowSeconds() - 20 * 3600;
 
   // Session setup
   const offerEvent = createPublicEvent(aliceSec,
@@ -654,12 +658,11 @@ async function testBothRefund() {
   // Run with skipClaim=true and expired ALPH timeout
   const [aliceResult] = await Promise.all([
     aliceSideSwap(aliceWs, aliceSec, bobPubHex, sessionId, {
-      csvTimeout: REFUND_CSV_TIMEOUT,
-      alphTimeoutMs: Date.now() - 60000, // already expired
+      minBtcLockSeconds: -48 * 3600, // test: accept the past locktime
       skipClaim: true,
     }),
     bobSideSwap(bobWs, bobSec, alicePubHex, sessionId, {
-      csvTimeout: REFUND_CSV_TIMEOUT,
+      btcLocktime: pastBtcLocktime,
       coinbaseTxid, coinbaseVout, coinbaseAmountSat,
     }).catch(e => {
       if (e.message.includes('timeout')) {
@@ -683,14 +686,11 @@ async function testBothRefund() {
   log('REFUND', `Alice recovered ~${recovered.toFixed(2)} ALPH`);
   if (recovered < 9) throw new Error('ALPH refund recovery too low');
 
-  // Bob refunds BTC
-  log('REFUND', `Mining ${REFUND_CSV_TIMEOUT} blocks for CSV timeout...`);
-  await mineBlocks(REFUND_CSV_TIMEOUT, bobBtcAddress);
-
+  // Bob refunds BTC (the leaf's locktime has passed)
   log('REFUND', 'Bob builds BTC refund tx (script-path spend)...');
   const { psbt: refundPsbt } = buildRefundTx(
     aliceResult.fundTxid, aliceResult.fundVout, BTC_SAT,
-    bobBtcAddress, aliceResult.internalPubkey, aliceResult.scriptTree, REFUND_CSV_TIMEOUT,
+    bobBtcAddress, aliceResult.internalPubkey, aliceResult.scriptTree, aliceResult.btcLocktime,
   );
 
   refundPsbt.signInput(0, {
