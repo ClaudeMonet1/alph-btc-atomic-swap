@@ -184,7 +184,17 @@ export class SwapEngine {
 
   // ── Swap: Init ──
 
+  // Both parties need an Alephium address in the contract's group: only accounts
+  // of that group can call swap()/refund(), and destroySelf! can only pay that
+  // group (the node rejects anything else with InvalidOutputGroupIndex).
+  checkPeerGroup(peerPubHex) {
+    const peerGroup = groupOfAddress(addressFromPublicKey(peerPubHex, 'bip340-schnorr'));
+    if (peerGroup !== this.group)
+      throw new Error(`Counterparty's Alephium address is in group ${peerGroup}, yours is in group ${this.group}: the swap contract could not be claimed or refunded across groups. Refusing the swap.`);
+  }
+
   initSwap(role, peerPubHex, btcAmount, alphAmount, sessionId) {
+    this.checkPeerGroup(peerPubHex);
     this.role = role;
     this.peerPubHex = peerPubHex;
     if (btcAmount !== undefined) { this.btcAmount = btcAmount; this.btcSat = Math.round(btcAmount * 1e8); }
@@ -346,6 +356,7 @@ export class SwapEngine {
     const { aggPubkey } = keyAgg(pubkeys);
 
     const bobAlphAddress = addressFromPublicKey(this.peerPubHex, 'bip340-schnorr');
+    this.checkPeerGroup(this.peerPubHex);
 
     const deployResult = await deploySwapContract(
       this.pubKeyHex, this.secBytes, bytesToHex(aggPubkey), bobAlphAddress, this.alphAddress,

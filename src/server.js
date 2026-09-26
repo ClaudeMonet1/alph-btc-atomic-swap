@@ -416,6 +416,7 @@ async function handleApi(req, res, urlPath) {
 
       const bobAlphAddress = addressFromPublicKey(s.peerPubHex, 'bip340-schnorr');
       const bobGroup = groupOfAddress(bobAlphAddress);
+      if (bobGroup !== groupOfAddress(wallet.address)) throw new Error(`Bob's Alephium address is in group ${bobGroup}, Alice's in group ${groupOfAddress(wallet.address)}: the contract could not pay him`);
 
       const deployResult = await deploySwapContract(
         wallet, bytesToHex(aggPubkey), bobAlphAddress, wallet.address,
