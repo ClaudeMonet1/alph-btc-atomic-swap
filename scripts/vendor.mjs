@@ -25,6 +25,9 @@ const BUNDLES = [
   { spec: '@noble/curves/utils', entry: 'noble-curves-1/abstract/utils', file: 'noble-curves-utils.js' },
   { spec: '@noble/hashes/sha256', entry: 'noble-hashes-1/sha256', file: 'noble-hashes-sha256.js' },
   { spec: '@noble/hashes/utils', entry: 'noble-hashes-1/utils', file: 'noble-hashes-utils.js' },
+  { spec: '@noble/hashes/hkdf', entry: 'noble-hashes-1/hkdf', file: 'noble-hashes-hkdf.js' },
+  { spec: '@noble/hashes/hmac', entry: 'noble-hashes-1/hmac', file: 'noble-hashes-hmac.js' },
+  { spec: '@noble/ciphers/chacha', entry: '@noble/ciphers/chacha.js', file: 'noble-ciphers-chacha.js' },
   { spec: 'buffer', entry: 'buffer', file: 'buffer.js', cjs: true },
   { spec: 'bitcoinjs-lib', entry: 'bitcoinjs-lib', file: 'bitcoinjs-lib.js', cjs: true },
   { spec: 'tiny-secp256k1', entry: '@bitcoinerlab/secp256k1', file: 'tiny-secp256k1.js', cjs: true },
@@ -65,7 +68,8 @@ const banner = '// Bundled by scripts/vendor.mjs from the pinned package in node
 const integrity = {};
 const sums = [];
 for (const b of BUNDLES) {
-  const version = JSON.parse(readFileSync(resolve(root, 'node_modules', b.entry.split('/').slice(0, b.entry.startsWith('@') ? 2 : 1).join('/'), 'package.json'), 'utf8')).version;
+  const pkgDir = b.entry.split('/').slice(0, b.entry.startsWith('@') ? 2 : 1).join('/');
+  const version = JSON.parse(readFileSync(resolve(root, 'node_modules', pkgDir, 'package.json'), 'utf8')).version;
   await build({
     ...(b.cjs ? { stdin: { contents: cjsWrapper(b.entry), resolveDir: root, loader: 'js' } } : { entryPoints: [b.entry] }),
     bundle: true,

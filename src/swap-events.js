@@ -14,6 +14,7 @@
 
 import { getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import WebSocket from 'ws';
+import { encryptTo, decryptFrom } from './nip44.js';
 
 // ---- Event Kinds (parameterized replaceable, 30000-39999) ----
 
@@ -30,6 +31,7 @@ function signEvent(template, secKeyBytes) {
 }
 
 // ---- Event Builders ----
+// Swap messages are NIP-44 encrypted to the recipient (plaintext before 2026-09-27).
 
 // Generic kind-1 event (for public offers)
 export function createPublicEvent(secKeyBytes, content, tags = []) {
@@ -52,7 +54,7 @@ export function createSwapSetup(secKeyBytes, { sessionId, recipientPubHex, msgTy
       ['p', recipientPubHex],
       ['d', `${sessionId}:${msgType}`],
     ],
-    content: JSON.stringify({ type: msgType, ...data }),
+    content: encryptTo(secKeyBytes, recipientPubHex, JSON.stringify({ type: msgType, ...data })),
   }, secKeyBytes);
 }
 
@@ -67,7 +69,7 @@ export function createSwapNonce(secKeyBytes, { sessionId, recipientPubHex, phase
       ['p', recipientPubHex],
       ['d', `${sessionId}:${phase}`],
     ],
-    content: JSON.stringify({ phase, ...data }),
+    content: encryptTo(secKeyBytes, recipientPubHex, JSON.stringify({ phase, ...data })),
   }, secKeyBytes);
 }
 
@@ -81,7 +83,7 @@ export function createSwapPresig(secKeyBytes, { sessionId, recipientPubHex, ...d
       ['p', recipientPubHex],
       ['d', sessionId],
     ],
-    content: JSON.stringify(data),
+    content: encryptTo(secKeyBytes, recipientPubHex, JSON.stringify(data)),
   }, secKeyBytes);
 }
 
@@ -95,7 +97,7 @@ export function createSwapClaim(secKeyBytes, { sessionId, recipientPubHex, claim
       ['p', recipientPubHex],
       ['d', `${sessionId}:${claimType}`],
     ],
-    content: JSON.stringify({ type: claimType, ...data }),
+    content: encryptTo(secKeyBytes, recipientPubHex, JSON.stringify({ type: claimType, ...data })),
   }, secKeyBytes);
 }
 
@@ -140,9 +142,10 @@ export function publish(ws, event) {
   });
 }
 
-// Wait for a swap event from a specific party, with optional content predicate.
-// Filters by kind + #e session tag + author pubkey.
-export function waitForSwapEvent(ws, kind, sessionId, fromPubHex, predicate = null, timeoutMs = 60000) {
+// Wait for a swap event from a specific party, decrypt it with our secret key
+// (events that do not decrypt are ignored), then apply the optional predicate
+// to the decrypted event. Filters by kind + #e session tag + author pubkey.
+export function waitForSwapEvent(ws, kind, sessionId, fromPubHex, predicate = null, timeoutMs = 60000, secKeyBytes = null) {
   return new Promise((resolve, reject) => {
     const subId = 'sw_' + Math.random().toString(36).slice(2, 10);
     const timeout = setTimeout(() => {
@@ -152,10 +155,14 @@ export function waitForSwapEvent(ws, kind, sessionId, fromPubHex, predicate = nu
     const unsub = subscribe(ws, subId,
       [{ kinds: [kind], '#e': [sessionId], authors: [fromPubHex] }],
       (event) => {
-        if (predicate && !predicate(event)) return;
+        let decrypted = event;
+        if (secKeyBytes) {
+          try { decrypted = { ...event, content: decryptFrom(secKeyBytes, fromPubHex, event.content) }; } catch { return; }
+        }
+        if (predicate && !predicate(decrypted)) return;
         unsub();
         clearTimeout(timeout);
-        resolve(event);
+        resolve(decrypted);
       });
   });
 }

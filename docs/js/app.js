@@ -7,6 +7,7 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { bech32 } from 'bech32';
 import qrcode from 'qrcode-generator';
 import { SwapEngine } from './swap-engine.js';
+import { encryptTo as nip44EncryptTo, decryptFrom as nip44DecryptFrom } from './nip44.js';
 import { getMedianTimePast } from './btc.js';
 import { groupOfAddress, addressFromPublicKey } from './alph.js';
 import { getP2TRAddress } from './btc.js';
@@ -214,28 +215,15 @@ const SWAP_PRESIG_KIND = 38392;
 const SWAP_CLAIM_KIND = 38393;
 
 // ============================================================
-// NIP-04 Encryption (secp256k1 ECDH + AES-256-CBC)
+// NIP-44 v2 encryption of every swap message (nip44.js; NIP-04 until 2026-09-27)
 // ============================================================
 
 async function nip04Encrypt(plaintext, peerPubHex) {
-  const sharedPoint = secp256k1.getSharedSecret(state.secBytes, '02' + peerPubHex);
-  const sharedX = sharedPoint.slice(1, 33);
-  const key = await crypto.subtle.importKey('raw', sharedX, { name: 'AES-CBC' }, false, ['encrypt']);
-  const iv = crypto.getRandomValues(new Uint8Array(16));
-  const encoded = new TextEncoder().encode(plaintext);
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, key, encoded);
-  return btoa(String.fromCharCode(...new Uint8Array(ciphertext))) + '?iv=' + btoa(String.fromCharCode(...iv));
+  return nip44EncryptTo(state.secBytes, peerPubHex, plaintext);
 }
 
 async function nip04Decrypt(ciphertext, peerPubHex) {
-  const sharedPoint = secp256k1.getSharedSecret(state.secBytes, '02' + peerPubHex);
-  const sharedX = sharedPoint.slice(1, 33);
-  const key = await crypto.subtle.importKey('raw', sharedX, { name: 'AES-CBC' }, false, ['decrypt']);
-  const [ctB64, ivB64] = ciphertext.split('?iv=');
-  const ct = Uint8Array.from(atob(ctB64), c => c.charCodeAt(0));
-  const iv = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
-  const plainBuf = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, ct);
-  return new TextDecoder().decode(plainBuf);
+  return nip44DecryptFrom(state.secBytes, peerPubHex, ciphertext);
 }
 
 function generateUUID() {
@@ -1091,12 +1079,13 @@ function subscribeToSwap(sessionId, peerPubHex) {
     const isMine = event.pubkey === state.pubKeyHex;
     const authorLabel = isMine ? 'You' : event.pubkey.slice(0, 8) + '...';
 
-    // Decrypt NIP-04 encrypted content
-    let decryptedContent = event.content;
+    // Decrypt the NIP-44 content; anything else from the peer is ignored (no plaintext fallback)
+    let decryptedContent;
     try {
       decryptedContent = await nip04Decrypt(event.content, peerPubHex);
     } catch {
-      // Fallback: treat as plain JSON (backward compat with unencrypted events)
+      addLogMsg('system', `Ignoring a swap message that is not NIP-44 encrypted to us (kind ${event.kind})`, 'System');
+      return;
     }
 
     // Detect abort from peer
