@@ -7,17 +7,28 @@
 <script type="importmap">
 {
   "imports": {
-    "@noble/curves/secp256k1": "https://esm.sh/@noble/curves@1.8.1/secp256k1",
-    "@noble/curves/utils": "https://esm.sh/@noble/curves@1.8.1/abstract/utils",
-    "@noble/hashes/sha256": "https://esm.sh/@noble/hashes@1.7.1/sha256",
-    "@noble/hashes/utils": "https://esm.sh/@noble/hashes@1.7.1/utils",
-    "buffer": "https://esm.sh/buffer@6.0.3",
-    "bitcoinjs-lib": "https://esm.sh/bitcoinjs-lib@7.0.1",
-    "tiny-secp256k1": "https://esm.sh/@bitcoinerlab/secp256k1@1.2.0",
-    "@alephium/web3": "https://esm.sh/@alephium/web3@2.0.8",
-    "@alephium/web3-wallet": "https://esm.sh/@alephium/web3-wallet@2.0.8?external=@alephium/web3",
-    "bech32": "https://esm.sh/bech32@2.0.0",
-    "qrcode-generator": "https://esm.sh/qrcode-generator@1.4.4"
+    "@noble/curves/secp256k1": "./vendor/noble-curves-secp256k1.js",
+    "@noble/curves/utils": "./vendor/noble-curves-utils.js",
+    "@noble/hashes/sha256": "./vendor/noble-hashes-sha256.js",
+    "@noble/hashes/utils": "./vendor/noble-hashes-utils.js",
+    "buffer": "./vendor/buffer.js",
+    "bitcoinjs-lib": "./vendor/bitcoinjs-lib.js",
+    "tiny-secp256k1": "./vendor/tiny-secp256k1.js",
+    "@alephium/web3": "./vendor/alephium-web3.js",
+    "bech32": "./vendor/bech32.js",
+    "qrcode-generator": "./vendor/qrcode-generator.js"
+  },
+  "integrity": {
+    "./vendor/noble-curves-secp256k1.js": "sha384-Vlr0KrR8D0/qMg9XZCOTnn83Zt9u1vKRZAng2/VIQMXa2wS9fEPzMHepxT0DIUVN",
+    "./vendor/noble-curves-utils.js": "sha384-YdPwvB0LPHYYK7X/X9tBE1DVTIP4KvquGE3sJhWNe31LoDS3Mx14m1yL2FWBOmoi",
+    "./vendor/noble-hashes-sha256.js": "sha384-rHiml6zr+6O1Mp3HGYmzazwAy4Mp3ZQennRPBZPJYROQ6vGR0QgRyMTWZhfi/h4p",
+    "./vendor/noble-hashes-utils.js": "sha384-JNgE06TpE+zwveGfyq6JJ74Nge/1Vf5Smq7UwfJAcn3D61q7GUdAqsCuGAW9Oux/",
+    "./vendor/buffer.js": "sha384-d0HYEhs6t4WS+STXDB05dRQUnzWmrctKtBFtCE3CtXbwTeCH8hDQywi4vtPNb8l/",
+    "./vendor/bitcoinjs-lib.js": "sha384-xEraACS/1V4Pw5Z1CnolAHrtu6ZUhCHraek1IglkZ9cg9ZkL56f+5ekKU2/UTKHW",
+    "./vendor/tiny-secp256k1.js": "sha384-+ruffMNb1RO5IqHurvo2Q1RfOz2AqaBLOKDvxgYeKdxkLZUTQLJAMP7yTo3fSNuH",
+    "./vendor/alephium-web3.js": "sha384-3SUzOjrkmAejJ1xOR9aSEXk+vH8+YWpnVmga3i+R1f9z2ntfUVuZ2eH0qqo3I5d4",
+    "./vendor/bech32.js": "sha384-+2LZ9pUgU5XhYETXtj1SiGuM8Z5VZbd8g9+fHyeCUsli7Z+wW6470sCwpkPa+g/E",
+    "./vendor/qrcode-generator.js": "sha384-iioIpgL6RpZLKaCbfja/AcIeL0YcInhXyA7SMb/2BBcYYHngbdul2Ls07H4y0NWE"
   }
 }
 </script>

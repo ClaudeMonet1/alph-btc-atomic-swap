@@ -112,7 +112,7 @@ No protocol changes, no new opcodes, no forks required.
 
 ## Static Browser Deployment
 
-The `docs/` directory contains a fully static version of the swap app that runs entirely in the browser. No server, no build step, no bundler — just ES modules loaded via import maps from esm.sh CDN.
+The `docs/` directory contains a fully static version of the swap app that runs entirely in the browser. No server; ES modules resolved through an import map to bundles vendored in `docs/vendor/` (see below).
 
 ### Why Static
 
@@ -128,9 +128,11 @@ The crypto modules (`musig2.js`, `adaptor.js`, `taproot-utils.js`) use `@noble/c
 - **`tiny-secp256k1`** uses WASM which fails to initialize in the browser via esm.sh. Replaced with `@bitcoinerlab/secp256k1` which wraps `@noble/curves` in the interface that `bitcoinjs-lib` expects.
 - **`@alephium/web3`** exports only a default export on esm.sh. Imported as `import alphWeb3 from '@alephium/web3'` then destructured.
 
-### Import Map + Buffer Polyfill
+### Dependencies are vendored, not fetched from a CDN
 
-The app uses an HTML import map to resolve bare specifiers (`'@noble/curves/secp256k1'` etc.) to esm.sh CDN URLs. A Buffer polyfill is loaded before any modules via top-level `await` in the bootstrap script, since `bitcoinjs-lib` uses `Buffer.from()` internally.
+Until 2026-09-27 the import map pointed every bare specifier at esm.sh, so the code that handled the user's key was whatever the CDN served at load time (audit W3). `npm run vendor` (`scripts/vendor.mjs`) now bundles each dependency from the pinned package in `node_modules` into `docs/vendor/*.js` with esbuild, writes `docs/vendor/SHA256SUMS`, and rewrites the import map with local paths and an `integrity` block (subresource integrity for import maps, enforced by browsers that support it). The browser code targets `@noble/curves` 1.8 and `@noble/hashes` 1.7, installed under the aliases `noble-curves-1` and `noble-hashes-1` because the Node code uses the 2.x API. CommonJS packages get a generated wrapper so that named imports work. `npm run vendor:check` verifies the bundles against the checksums; `npm run smoke:web` loads the page in headless Chromium (serve `docs/` locally first) and reports page errors, failed requests, relay status and the derived identity. What runs in the browser is now what the repository holds; the remaining trust is in GitHub Pages serving the repository and in the browser itself.
+
+A Buffer polyfill is still loaded before any module via top-level `await` in the bootstrap script, since `bitcoinjs-lib` uses `Buffer.from()` internally.
 
 ### CORS
 
