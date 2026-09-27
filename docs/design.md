@@ -19,15 +19,14 @@ Adaptor signatures eliminate all three problems. The completed signature itself 
 
 ## MuSig2 Implementation
 
-The MuSig2 implementation in `src/musig2.js` follows BIP-327:
+`src/musig2.js` implements BIP327 as specified and is checked against the BIP's test vectors (`docs/spec/bip327/*.json`: key aggregation, nonce generation, nonce aggregation, signing and verification, tweaking, signature aggregation and deterministic signing, including the error cases). The vectors run in Node (`npm run test:bip327`) and in the browser build (`npm run smoke:web` runs them in headless Chromium). Until 2026-09-27 the module was a self-consistent variant that hashed x-only keys, derived nonces its own way and kept the taproot tweak outside the signing context (CRYPTO_REVIEW F1 to F7); it produced valid signatures but could not be validated against anything.
 
-- **Key aggregation** (section 4.3): Second-key optimization for efficient 2-of-2. The aggregated key Q is normalized to even-Y, tracked via `gacc`.
-- **Nonce generation** (section 4.5): Two nonce pairs per signer, tagged hash derivation from secret key + aggregate pubkey + message.
-- **Partial signing** (section 4.8): Each signer produces a partial signature using the nonce coefficient `b` and challenge `e`. Private key negation is handled correctly for x-only pubkeys and aggregate key parity.
-- **Partial verification** (section 4.9): Verifies `s*G == R_eff + e*a*gacc*P` for each partial signature.
-- **Aggregation** (section 4.10): Sums partial signatures, verifies the result with `schnorr.verify`.
+- **Keys**: KeyAgg works on 33-byte plain keys. The parties' x-only keys are lifted to `02||x`, and a signer whose secret gives an odd-Y point negates it (`signerKey`), so the BIP340 identity key is also the MuSig2 key.
+- **Tweaks**: the taproot output key is an x-only tweak of the key aggregation context (`tapTweak` = `ApplyTweak(ctx, H_TapTweak(P || merkle_root), true)`); `gacc` and `tacc` are carried in the context and the tweak's contribution `e·g·tacc` is added on aggregation, as in BIP327.
+- **Nonces**: `NonceGen` with the secret key, the signer's public key, the aggregate key and the message as inputs; the 97-byte secret nonce carries the public key, is range-checked and zeroed on use, and signing refuses a nonce made for another key.
+- **Curve shim**: `curve.js` exposes one small interface over `@noble/curves` 2.x (Node) or 1.x (browser, vendored), so that `musig2.js`, `adaptor.js`, `taproot-utils.js` and `bip327-selftest.js` are byte-identical in `src/` and `docs/js/`.
 
-The adaptor extension in `src/adaptor.js` modifies the challenge computation: `e = H((R_agg + T) || P || m)` instead of `e = H(R_agg || P || m)`. The partial signature formula is identical; only the effective R point differs.
+The adaptor extension in `src/adaptor.js` keeps BIP327's partial signature and changes only the challenge: `e = H((R + T) || Q || m)` with `R + T` normalised to even Y, which negates the nonces and the adaptor secret alike. `adaptorAggregate` includes the tweak term, so completing the aggregate pre-signature with `t` gives a BIP340 signature for the tweaked key directly, and `t` is extracted as the difference of the two `s` values. `bip327-selftest.js` also exercises the round trip on random keys, with and without a tweak, and checks that tampered pre-signatures, a wrong adaptor point, a consumed nonce and another signer's nonce are refused.
 
 ## Bitcoin Side: Taproot
 
@@ -121,13 +120,7 @@ The server (`src/server.js`) is an unnecessary trust boundary. It holds the user
 
 ### Browser Compatibility
 
-The crypto modules (`musig2.js`, `adaptor.js`, `taproot-utils.js`) use `@noble/curves` which is designed for both Node.js and browsers. The main porting challenge was API surface differences in the esm.sh build:
-
-- **`schnorr.Point`** does not exist in the browser build. Replaced with `secp256k1.ProjectivePoint` and manual scalar field arithmetic (`Fn` object).
-- **`schnorr.Point.fromBytes()`** replaced with `ProjectivePoint.fromHex()` (accepts both hex strings and Uint8Array).
-- **`point.toBytes(true)`** replaced with `point.toRawBytes(true)` (33-byte compressed) and `.slice(1)` for 32-byte x-only.
-- **`tiny-secp256k1`** uses WASM which fails to initialize in the browser via esm.sh. Replaced with `@bitcoinerlab/secp256k1` which wraps `@noble/curves` in the interface that `bitcoinjs-lib` expects.
-- **`@alephium/web3`** exports only a default export on esm.sh. Imported as `import alphWeb3 from '@alephium/web3'` then destructured.
+The browser build uses the vendored `@noble/curves` 1.8 while the Node build uses 2.x. The two point APIs differ (`ProjectivePoint.fromHex`/`toRawBytes` versus `Point.fromBytes`/`toBytes`, no `Point.Fn` in 1.x), so `docs/js/curve.js` and `src/curve.js` each wrap their library behind the same small interface and the crypto modules import only that. Other porting points: `tiny-secp256k1` uses WASM that does not initialise in the browser build and is replaced with `@bitcoinerlab/secp256k1`, which wraps `@noble/curves` in the interface `bitcoinjs-lib` expects; `@alephium/web3` is bundled as a CommonJS module and imported as a default export, then destructured.
 
 ### Dependencies are vendored, not fetched from a CDN
 
