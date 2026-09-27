@@ -29,6 +29,7 @@ const state = {
   alphAddress: null,
   nsecBech32: null,
   network: 'testnet',
+  startedAt: Math.floor(Date.now() / 1000), // page load; older accepts are history, not a swap to start
   // Relays
   relays: [],
   seenEvents: new Set(),
@@ -110,7 +111,8 @@ function resubscribeRelay(relay) {
           const event = msg[2];
           if (state.seenEvents.has(event.id)) return;
           state.seenEvents.add(event.id);
-          onEvent(event);
+          try { onEvent(event); }
+          catch (err) { console.error('event handler failed', subId, event.kind, err); addLogMsg('error', `Handling a kind ${event.kind} event failed: ${err.message}`, 'Error'); }
         }
       } catch {}
     };
@@ -355,8 +357,25 @@ async function createSwapClaim({ sessionId, recipientPubHex, claimType, ...data 
 // Logging (no-op — protocol log removed)
 // ============================================================
 
-function addLogMsg() {}
-function addProtocolMsg() {}
+// Visible log (last 80 lines) under the swap panel, mirrored to the console.
+const LOG_MAX = 80;
+function addLogMsg(kind, text, who = '') {
+  const line = `${new Date().toLocaleTimeString()} ${who ? who + ': ' : ''}${text}`;
+  console.log(`[${kind}] ${line}`);
+  const el = document.getElementById('app-log');
+  if (!el) return;
+  const div = document.createElement('div');
+  div.textContent = line;
+  if (who === 'Error' || kind === 'error') div.style.color = '#f85149';
+  el.appendChild(div);
+  while (el.children.length > LOG_MAX) el.removeChild(el.firstChild);
+  el.scrollTop = el.scrollHeight;
+}
+function addProtocolMsg(kind, content, who) {
+  let summary = '';
+  try { const c = JSON.parse(content); summary = c.type || c.phase || (c.btcPresig ? 'presig' : ''); } catch { summary = '(unreadable)'; }
+  addLogMsg('protocol', `kind ${kind} ${summary}`.trim(), who);
+}
 
 function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -546,9 +565,21 @@ function handleAcceptEvent(event, content) {
 
   const myCounterAccepted = content.counterparty && content.counterparty === state.pubKeyHex;
   const involvesUs = offer.isMine || isMine || myCounterAccepted;
-  if (involvesUs && !state.activeSwap && !getProcessedOffers().has(offer.id)) {
-    startSwapFromAccept(offer, event, content);
+  if (!involvesUs) return;
+  // Relays replay the last two days of events on every page load. An accept made
+  // before this page was opened belongs to an earlier attempt: starting a swap
+  // from it would put this side in a session the peer is no longer in (both then
+  // wait for each other forever). Only a live accept starts a swap; an earlier
+  // one is recovered through the saved swap state, or is over.
+  const ageSeconds = state.startedAt - event.created_at;
+  if (ageSeconds > 120) {
+    addLogMsg('system', `Not starting a swap from the ${Math.round(ageSeconds / 60)} min old accept of offer ${offer.id.slice(0, 8)}... (earlier attempt). Publish or accept a fresh offer.`, 'System');
+    markOfferProcessed(offer.id);
+    return;
   }
+  if (state.activeSwap) { addLogMsg('system', `Accept of ${offer.id.slice(0, 8)}... ignored: a swap is already active (session ${state.activeSwap.sessionId.slice(0, 8)}...)`, 'System'); return; }
+  if (getProcessedOffers().has(offer.id)) { addLogMsg('system', `Accept of ${offer.id.slice(0, 8)}... ignored: offer already processed`, 'System'); return; }
+  startSwapFromAccept(offer, event, content);
 }
 
 function handleCancelEvent(event, content) {
@@ -1056,6 +1087,7 @@ function startSwapFromAccept(offer, acceptEvent, acceptContent) {
   };
 
   state.stepData = {};
+  addLogMsg('system', `Swap started: you are ${role === 'alice' ? 'Alice (ALPH side)' : 'Bob (BTC side)'}, session ${sessionId.slice(0, 12)}..., peer ${peerPubHex.slice(0, 12)}.... Both pages must show this same session.`, 'System');
 
   document.getElementById('swap-placeholder').classList.add('hidden');
   document.getElementById('swap-active').classList.remove('hidden');
@@ -1285,7 +1317,8 @@ async function executeLockAlice() {
   const { sessionId, peerPubHex } = state.activeSwap;
 
   try {
-    const deployResult = await state.engine.deployAlph();
+    updateStep('lock', { info: 'Deploying the ALPH contract...' });
+    const deployResult = await state.engine.deployAlph((m) => updateStep('lock', { info: m }));
     saveSwapState(); // the contract is on chain: remember it before anything else can go wrong
     updateStep('lock', { info: `ALPH deployed: ${deployResult.contractAddress.slice(0, 16)}...\nSending to peer...` });
 
@@ -1362,7 +1395,8 @@ async function executeLockBob() {
 
   try {
     const utxo = state.selectedUtxo || null;
-    const lockResult = await state.engine.lockBtc(utxo);
+    updateStep('lock', { info: 'Locking BTC...' });
+    const lockResult = await state.engine.lockBtc(utxo, (m) => updateStep('lock', { info: m }));
     saveSwapState(); // the lock is on chain: remember it before anything else can go wrong
     updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}... vout=${lockResult.vout}\nPublishing...` });
 

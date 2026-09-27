@@ -29,7 +29,12 @@ async function nodeApi(path, method = 'GET', body = null) {
     headers: { 'Content-Type': 'application/json' },
   };
   if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(`${ALPH_NODE_URL}${path}`, opts);
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 30_000);
+  let res;
+  try { res = await fetch(`${ALPH_NODE_URL}${path}`, { ...opts, signal: ctl.signal }); }
+  catch (e) { throw new Error(`Alephium API ${method} ${path}: ${e.name === 'AbortError' ? 'no answer after 30 s' : e.message}`); }
+  finally { clearTimeout(timer); }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Alephium API ${method} ${path}: ${res.status} ${text}`);
