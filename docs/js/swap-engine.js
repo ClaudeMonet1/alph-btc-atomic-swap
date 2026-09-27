@@ -21,6 +21,7 @@ import {
   web3, ONE_ALPH, addressFromPublicKey, groupOfAddress,
 } from './alph.js';
 import { computeTweakedPrivateKey } from './taproot-utils.js';
+import { deriveKeys, legacyKeys } from './keys.js';
 import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, btcConfirmationsFor, alphConfirmationsFor, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, CLAIM_VBYTES, REFUND_VBYTES } from './timelocks.js';
 
 // ============================================================
@@ -71,17 +72,27 @@ async function findVoutWithRetry(txid, address, maxRetries = 15) {
 // ============================================================
 
 export class SwapEngine {
-  constructor(secBytes, pubKey) {
-    this.secBytes = secBytes;
-    this.pubKey = pubKey;
-    this.pubKeyHex = bytesToHex(pubKey);
-    this.btcAddress = getP2TRAddress(pubKey);
-    this.alphAddress = addressFromPublicKey(this.pubKeyHex, 'bip340-schnorr');
+  // keys: { nostr, btc, alph } from keys.js (deriveKeys); a bare secret means the
+  // legacy single key for all three roles (used to sweep old funds).
+  constructor(keys, legacyPubKey) {
+    if (keys instanceof Uint8Array) keys = legacyKeys(keys);
+    this.keys = keys;
+    // Nostr identity
+    this.secBytes = keys.nostr.sec;
+    this.pubKey = keys.nostr.pub;
+    this.pubKeyHex = keys.nostr.pubHex;
+    // Bitcoin: MuSig2 party key, own P2TR address, refund leaf key
+    this.btcKey = keys.btc;
+    this.btcAddress = getP2TRAddress(keys.btc.pub);
+    // Alephium: account that deploys/claims/refunds the contract
+    this.alphKey = keys.alph;
+    this.alphAddress = addressFromPublicKey(keys.alph.pubHex, 'bip340-schnorr');
     this.group = groupOfAddress(this.alphAddress);
 
     // Swap state
     this.role = null;
-    this.peerPubHex = null;
+    this.peerPubHex = null; // peer's Nostr key (messaging)
+    this.peer = null;       // { nostrPubHex, btcPubHex, alphPubHex, alphAddress }
     this.btcAmount = 0.00005;
     this.btcSat = 5000;
     this.alphAmount = ONE_ALPH;
@@ -130,8 +141,20 @@ export class SwapEngine {
       btcAddress: this.btcAddress,
       alphAddress: this.alphAddress,
       group: this.group,
+      btcPubHex: this.btcKey.pubHex,
+      alphPubHex: this.alphKey.pubHex,
     };
   }
+
+  // The keys the peer announces in its offer/accept: { btc, alph } x-only hex.
+  // A bare Nostr key means a legacy single-key peer (all three roles).
+  static normalizePeer(peer) {
+    if (typeof peer === 'string') return { nostrPubHex: peer, btcPubHex: peer, alphPubHex: peer, alphAddress: addressFromPublicKey(peer, 'bip340-schnorr') };
+    if (!peer || !/^[0-9a-f]{64}$/i.test(peer.nostrPubHex || '') || !/^[0-9a-f]{64}$/i.test(peer.btcPubHex || '') || !/^[0-9a-f]{64}$/i.test(peer.alphPubHex || ''))
+      throw new Error('peer keys missing or malformed (the peer may run an old build)');
+    return { ...peer, alphAddress: addressFromPublicKey(peer.alphPubHex, 'bip340-schnorr') };
+  }
+  get peerBtcPub() { return hexToBytes(this.peer.btcPubHex); }
 
   // ── Balance / UTXOs ──
 
@@ -178,20 +201,23 @@ export class SwapEngine {
   // Both parties need an Alephium address in the contract's group: only accounts
   // of that group can call swap()/refund(), and destroySelf! can only pay that
   // group (the node rejects anything else with InvalidOutputGroupIndex).
-  checkPeerGroup(peerPubHex) {
-    const peerGroup = groupOfAddress(addressFromPublicKey(peerPubHex, 'bip340-schnorr'));
+  checkPeerGroup(peer) {
+    peer = SwapEngine.normalizePeer(peer);
+    const peerGroup = groupOfAddress(peer.alphAddress);
     if (peerGroup !== this.group)
       throw new Error(`Counterparty's Alephium address is in group ${peerGroup}, yours is in group ${this.group}: the swap contract could not be claimed or refunded across groups. Refusing the swap.`);
   }
 
-  initSwap(role, peerPubHex, btcAmount, alphAmount, sessionId) {
-    this.checkPeerGroup(peerPubHex);
+  initSwap(role, peer, btcAmount, alphAmount, sessionId) {
+    peer = SwapEngine.normalizePeer(peer);
+    this.checkPeerGroup(peer);
     // A retried setup for the same session keeps the adaptor secret: the peer may already hold T.
-    if (sessionId !== undefined && this.sessionId === sessionId && this.role === role && this.peerPubHex === peerPubHex && (role !== 'alice' || this.adaptorPoint)) {
+    if (sessionId !== undefined && this.sessionId === sessionId && this.role === role && this.peerPubHex === peer.nostrPubHex && (role !== 'alice' || this.adaptorPoint)) {
       return role === 'alice' ? { role, adaptorPoint: bytesToHex(pointToBytes(this.adaptorPoint)), reused: true } : { role, reused: true };
     }
     this.role = role;
-    this.peerPubHex = peerPubHex;
+    this.peer = peer;
+    this.peerPubHex = peer.nostrPubHex;
     if (btcAmount !== undefined) { this.btcAmount = btcAmount; this.btcSat = Math.round(btcAmount * 1e8); }
     if (alphAmount !== undefined) this.alphAmount = BigInt(alphAmount);
     if (sessionId !== undefined) this.sessionId = sessionId;
@@ -228,14 +254,13 @@ export class SwapEngine {
     // Never lock twice for one session: a retried lock step reuses the existing lock.
     if (this.btcLockTxid) return { txid: this.btcLockTxid, vout: this.btcLockVout, amountSat: this.btcSat, btcLocktime: this.btcLocktime, reused: true };
     const DUST_LIMIT = 546;
-    const peerPub = hexToBytes(this.peerPubHex);
-    const pubkeys = [peerPub, this.pubKey]; // [alice, bob]
+    const pubkeys = [this.peerBtcPub, this.btcKey.pub]; // [alice, bob]
     const { aggPubkey } = xonlyKeyAgg(pubkeys);
 
     this.btcLocktime = btcLocktimeNow();
-    const { address: swapBtcAddress } = createSwapOutput(aggPubkey, this.pubKey, this.btcLocktime);
+    const { address: swapBtcAddress } = createSwapOutput(aggPubkey, this.btcKey.pub, this.btcLocktime);
 
-    const p2tr = bitcoin.payments.p2tr({ internalPubkey: Buffer.from(this.pubKey), network: NETWORK });
+    const p2tr = bitcoin.payments.p2tr({ internalPubkey: Buffer.from(this.btcKey.pub), network: NETWORK });
 
     // Select UTXOs — single if specified, otherwise auto-select (possibly multiple)
     let inputs;
@@ -284,7 +309,7 @@ export class SwapEngine {
         hash: inp.txid,
         index: inp.vout,
         witnessUtxo: { script: p2tr.output, value: BigInt(inp.value) },
-        tapInternalKey: Buffer.from(this.pubKey),
+        tapInternalKey: Buffer.from(this.btcKey.pub),
       });
     }
     psbt.addOutput({ address: swapBtcAddress, value: BigInt(this.btcSat) });
@@ -297,7 +322,7 @@ export class SwapEngine {
     }
 
     // Sign each input
-    const bobTweakedKey = computeTweakedPrivateKey(this.secBytes, this.pubKey);
+    const bobTweakedKey = computeTweakedPrivateKey(this.btcKey.sec, this.btcKey.pub);
     const tx = psbt.__CACHE.__TX;
     const allScripts = inputs.map(() => p2tr.output);
     const allValues = inputs.map(u => BigInt(u.value));
@@ -334,8 +359,8 @@ export class SwapEngine {
     this.btcLockTxid = txid;
     this.btcLockVout = vout;
 
-    const peerPub = hexToBytes(this.peerPubHex);
-    const pubkeys = [this.pubKey, peerPub]; // [alice, bob]
+    const peerPub = this.peerBtcPub;
+    const pubkeys = [this.btcKey.pub, peerPub]; // [alice, bob]
     const { aggPubkey } = xonlyKeyAgg(pubkeys);
     const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, btcLocktime);
     const { confirmations } = await verifySwapOutput(txid, swapBtcAddress, this.btcAmount, {
@@ -363,16 +388,15 @@ export class SwapEngine {
     this.claimFeeSat = claimFeeFor(await estimateFeeRate(), this.btcSat);
     checkClaimFee(this.claimFeeSat, this.btcSat);
 
-    const peerPub = hexToBytes(this.peerPubHex);
-    const pubkeys = [this.pubKey, peerPub];
+    const pubkeys = [this.btcKey.pub, this.peerBtcPub];
     const { aggPubkey } = xonlyKeyAgg(pubkeys);
 
-    const bobAlphAddress = addressFromPublicKey(this.peerPubHex, 'bip340-schnorr');
-    this.checkPeerGroup(this.peerPubHex);
+    const bobAlphAddress = this.peer.alphAddress;
+    this.checkPeerGroup(this.peer);
 
     progress('Deploying the contract (building, verifying and signing the transaction)...');
     const deployResult = await deploySwapContract(
-      this.pubKeyHex, this.secBytes, bytesToHex(aggPubkey), bobAlphAddress, this.alphAddress,
+      this.alphKey.pubHex, this.alphKey.sec, bytesToHex(aggPubkey), bobAlphAddress, this.alphAddress,
       this.alphTimeoutMs, this.alphAmount, compiled,
     );
     progress(`Deployed in ${deployResult.txId.slice(0, 16)}...; waiting for the node to confirm it...`);
@@ -405,11 +429,10 @@ export class SwapEngine {
     const compiled = await compileSwapContract();
     this.compiled = compiled;
 
-    const peerPub = hexToBytes(this.peerPubHex);
-    const pubkeys = [peerPub, this.pubKey];
+    const pubkeys = [this.peerBtcPub, this.btcKey.pub];
     const { aggPubkey } = xonlyKeyAgg(pubkeys);
 
-    const aliceAlphAddress = addressFromPublicKey(this.peerPubHex, 'bip340-schnorr');
+    const aliceAlphAddress = this.peer.alphAddress;
 
     // The contract's timeout must open after Bob's own BTC refund plus the margin,
     // otherwise Alice could refund her ALPH and then claim the BTC.
@@ -426,9 +449,9 @@ export class SwapEngine {
   // ── Swap: Compute context ──
 
   computeContext() {
-    const peerPub = hexToBytes(this.peerPubHex);
-    const alicePub = this.role === 'alice' ? this.pubKey : peerPub;
-    const bobPub = this.role === 'bob' ? this.pubKey : peerPub;
+    const peerPub = this.peerBtcPub;
+    const alicePub = this.role === 'alice' ? this.btcKey.pub : peerPub;
+    const bobPub = this.role === 'bob' ? this.btcKey.pub : peerPub;
 
     this.ctx = computeSharedContext({
       alicePub, bobPub,
@@ -446,8 +469,8 @@ export class SwapEngine {
     this.myBtcPresig = null; this.myAlphPresig = null;
     this.peerBtcPresig = null; this.peerAlphPresig = null;
     this.btcAdaptorAgg = null; this.alphAdaptorAgg = null; this.btcTweakedAgg = null;
-    this.btcNonce = swapNonceGen(this.secBytes, this.ctx.Qbytes, this.ctx.btcSighash);
-    this.alphNonce = swapNonceGen(this.secBytes, this.ctx.aggPubkey, this.ctx.alphMsg);
+    this.btcNonce = swapNonceGen(this.btcKey.sec, this.ctx.Qbytes, this.ctx.btcSighash);
+    this.alphNonce = swapNonceGen(this.btcKey.sec, this.ctx.aggPubkey, this.ctx.alphMsg);
 
     const btcNonceHash = bytesToHex(sha256(this.btcNonce.pubNonce));
     const alphNonceHash = bytesToHex(sha256(this.alphNonce.pubNonce));
@@ -503,8 +526,8 @@ export class SwapEngine {
     const signerIndex = this.role === 'alice' ? 0 : 1;
     const T = this.role === 'alice' ? this.adaptorPoint : this.peerAdaptorPoint;
 
-    const btcPresig = adaptorSign(this.secBytes, this.btcNonce.secNonce, this.btcAggNonce, this.ctx.btcKeyCtx, this.ctx.btcSighash, T);
-    const alphPresig = adaptorSign(this.secBytes, this.alphNonce.secNonce, this.alphAggNonce, this.ctx.keyCtx, this.ctx.alphMsg, T);
+    const btcPresig = adaptorSign(this.btcKey.sec, this.btcNonce.secNonce, this.btcAggNonce, this.ctx.btcKeyCtx, this.ctx.btcSighash, T);
+    const alphPresig = adaptorSign(this.btcKey.sec, this.alphNonce.secNonce, this.alphAggNonce, this.ctx.keyCtx, this.ctx.alphMsg, T);
 
     this.myBtcPresig = btcPresig;
     this.myAlphPresig = alphPresig;
@@ -518,7 +541,7 @@ export class SwapEngine {
   // ── Swap: Verify presig ──
 
   verifyPresig(peerBtcPresig, peerAlphPresig) {
-    const peerPub = hexToBytes(this.peerPubHex);
+    const peerPub = this.peerBtcPub;
     const peerIndex = this.role === 'alice' ? 1 : 0;
     const T = this.role === 'alice' ? this.adaptorPoint : this.peerAdaptorPoint;
 
@@ -583,8 +606,8 @@ export class SwapEngine {
     if (await getConfirmations(this.btcClaimTxid) > 0) throw new Error('claim already confirmed');
     const feeRate = Math.ceil((await estimateFeeRate()) * 1.5);
     const outputSat = this.btcSat - this.claimFeeSat;
-    const { psbt, sighash, childFee } = buildCpfpChild(this.btcClaimTxid, 0, outputSat, this.pubKey, feeRate, CLAIM_VBYTES, this.claimFeeSat);
-    const sig = schnorr.sign(sighash, computeTweakedPrivateKey(this.secBytes, this.pubKey));
+    const { psbt, sighash, childFee } = buildCpfpChild(this.btcClaimTxid, 0, outputSat, this.btcKey.pub, feeRate, CLAIM_VBYTES, this.claimFeeSat);
+    const sig = schnorr.sign(sighash, computeTweakedPrivateKey(this.btcKey.sec, this.btcKey.pub));
     const txid = await broadcastTx(finalizeKeyPathSpend(psbt, sig));
     return { txid, childFee, feeRate };
   }
@@ -624,7 +647,7 @@ export class SwapEngine {
       await new Promise(r => setTimeout(r, LOCK_CONFIRMATION_POLL_MS));
     }
 
-    const alphClaimResult = await claimSwap(this.pubKeyHex, this.secBytes, this.contractId, bytesToHex(alphFinalSig), this.compiled);
+    const alphClaimResult = await claimSwap(this.alphKey.pubHex, this.alphKey.sec, this.contractId, bytesToHex(alphFinalSig), this.compiled);
     await waitForTx(alphClaimResult.txId);
 
     return { txid: alphClaimResult.txId };
@@ -633,7 +656,7 @@ export class SwapEngine {
   // ── Swap: Refund ALPH (Alice) ──
 
   async refundAlph() {
-    const result = await refundSwap(this.pubKeyHex, this.secBytes, this.contractId, this.compiled);
+    const result = await refundSwap(this.alphKey.pubHex, this.alphKey.sec, this.contractId, this.compiled);
     await waitForTx(result.txId);
     return { txid: result.txId };
   }
@@ -641,8 +664,8 @@ export class SwapEngine {
   // ── Sweep: Send all BTC ──
 
   async sweepBtc(destAddress) {
-    const tweakedKey = computeTweakedPrivateKey(this.secBytes, this.pubKey);
-    const txid = await sweepBtcTx(this.btcAddress, destAddress, this.pubKey, (sighash) => {
+    const tweakedKey = computeTweakedPrivateKey(this.btcKey.sec, this.btcKey.pub);
+    const txid = await sweepBtcTx(this.btcAddress, destAddress, this.btcKey.pub, (sighash) => {
       return schnorr.sign(sighash, tweakedKey);
     });
     return txid;
@@ -657,7 +680,7 @@ export class SwapEngine {
     const gasReserve = ONE_ALPH / 500n;
     const sendAmount = available - gasReserve;
     if (sendAmount <= 0n) throw new Error('Insufficient ALPH balance to cover gas');
-    const txId = await transferAlph(this.pubKeyHex, this.secBytes, destAddress, sendAmount);
+    const txId = await transferAlph(this.alphKey.pubHex, this.alphKey.sec, destAddress, sendAmount);
     return txId;
   }
 
@@ -676,10 +699,9 @@ export class SwapEngine {
   // ── Swap: Refund BTC (Bob) ──
 
   async refundBtc() {
-    const peerPub = hexToBytes(this.peerPubHex);
-    const pubkeys = [peerPub, this.pubKey]; // [alice, bob]
+    const pubkeys = [this.peerBtcPub, this.btcKey.pub]; // [alice, bob]
     const { aggPubkey } = xonlyKeyAgg(pubkeys);
-    const { internalPubkey, scriptTree } = createSwapOutput(aggPubkey, this.pubKey, this.btcLocktime);
+    const { internalPubkey, scriptTree } = createSwapOutput(aggPubkey, this.btcKey.pub, this.btcLocktime);
 
     const refundFee = Math.max(Math.ceil((await estimateFeeRate()) * REFUND_VBYTES), 300);
     const { psbt: refundPsbt } = buildRefundTx(
@@ -688,8 +710,8 @@ export class SwapEngine {
     );
 
     refundPsbt.signInput(0, {
-      publicKey: Buffer.concat([Buffer.from([0x02]), Buffer.from(this.pubKey)]),
-      signSchnorr: (hash) => Buffer.from(schnorr.sign(hash, this.secBytes)),
+      publicKey: Buffer.concat([Buffer.from([0x02]), Buffer.from(this.btcKey.pub)]),
+      signSchnorr: (hash) => Buffer.from(schnorr.sign(hash, this.btcKey.sec)),
     });
     refundPsbt.finalizeAllInputs();
     const refundTxHex = refundPsbt.extractTransaction().toHex();
@@ -738,9 +760,10 @@ export class SwapEngine {
     }
 
     return {
-      version: 4,
+      version: 5,
       role: this.role,
       peerPubHex: this.peerPubHex,
+      peer: this.peer,
       btcAmount: this.btcAmount,
       btcSat: this.btcSat,
       alphAmount: String(this.alphAmount),
@@ -775,7 +798,7 @@ export class SwapEngine {
   }
 
   restoreFromJSON(data) {
-    if (data.version !== 4) throw new Error(`Swap state version ${data.version} predates the BIP327 rewrite (or the timelock and fee fixes) and cannot be resumed; recover manually`);
+    if (data.version !== 5) throw new Error(`Swap state version ${data.version} predates the per-domain keys (or earlier fixes) and cannot be resumed; recover manually`);
 
     const bytes = (h) => h ? hexToBytes(h) : null;
     const point = (h) => h ? lift_x(bytesToNum(hexToBytes(h))) : null;
@@ -784,6 +807,7 @@ export class SwapEngine {
 
     this.role = data.role;
     this.peerPubHex = data.peerPubHex;
+    this.peer = data.peer ? SwapEngine.normalizePeer(data.peer) : (data.peerPubHex ? SwapEngine.normalizePeer(data.peerPubHex) : null);
     this.btcAmount = data.btcAmount;
     this.btcSat = data.btcSat;
     this.alphAmount = BigInt(data.alphAmount);

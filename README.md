@@ -2,7 +2,7 @@
 
 Trustless cross-chain swaps between Bitcoin and Alephium using MuSig2 adaptor signatures. No hash preimages, no bridge, no intermediary.
 
-Each participant uses a **single Nostr nsec** as their identity across all three networks. The same secp256k1 private key derives their Nostr npub, Bitcoin P2TR address, and Alephium P2SH address.
+Each participant backs up a **single Nostr nsec**. It is the Nostr identity, and the Bitcoin and Alephium keys are derived from it with domain-separated tagged hashes (`keys.js`): one secret to keep, three keys to use, no signature valid on more than one chain. The Alephium key is derived into group 1 so that any imported nsec can trade.
 
 ```
 nsec (secp256k1 scalar)
@@ -46,7 +46,7 @@ python3 -m http.server -d docs
 ### How the Web UI Works
 
 1. The app generates a fresh Nostr nsec on load (or you paste your own)
-2. It derives your npub, Bitcoin P2TR address (signet), and Alephium address (testnet) from that single key
+2. It derives your npub from that key, and your Bitcoin P2TR address (signet) and Alephium address (testnet) from keys derived from it
 3. You publish swap offers (e.g., "Sell 2 ALPH for 50000 sat") to public Nostr relays
 4. Other users see your offer and can accept it
 5. On accept, both sides auto-execute the 5-step adaptor signature protocol

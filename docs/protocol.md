@@ -10,7 +10,7 @@ Alice has ALPH, wants BTC. Bob has BTC, wants ALPH.
 ;start () -> ready
 ```
 
-Both parties agree on swap parameters. Each uses a single Nostr nsec — the same key derives their npub, Bitcoin P2TR address, and Alephium P2SH address. Alice generates adaptor secret t, shares T = t*G. MuSig2 key aggregation produces P_swap.
+Both parties agree on swap parameters. Each announces its Bitcoin and Alephium public keys in its offer, counter-offer or accept (`keys: { btc, alph }`); both are derived from the party's Nostr secret with domain separation (`keys.js`), so the Nostr identity, the MuSig2 party key and the Alephium account are three different keys backed by one secret. Alice generates adaptor secret t, shares T = t*G. MuSig2 key aggregation produces P_swap.
 
 ```
 ;negotiate ready -> swap_agreed

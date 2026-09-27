@@ -44,6 +44,13 @@ const A = await open('A'); const B = await open('B');
 console.log('A', A.ident, '\nB', B.ident);
 await sleep(8000); // relays
 console.log('A balances:', await balances(A.page)); console.log('B balances:', await balances(B.page));
+// Funds left on the pre-2026-09-27 single-key addresses: move them to the derived addresses first
+for (const P of [A, B]) {
+  const moved = await P.page.evaluate(async () => { const b = document.getElementById('legacy-sweep-btn'); if (!b) return false; b.click(); await new Promise((r) => setTimeout(r, 12000)); return document.getElementById('app-log')?.textContent.match(/Legacy [A-Z]+ swept in [0-9a-f]+/g) || ['clicked, no sweep line yet']; });
+  if (moved) console.log(P.name, 'legacy funds:', moved);
+}
+await sleep(3000);
+console.log('A balances after sweep:', await balances(A.page)); console.log('B balances after sweep:', await balances(B.page));
 
 // A publishes an offer
 await A.page.evaluate(({ dir, alph, sat }) => { document.querySelector(`#direction-toggle button[data-dir="${dir}"]`).click(); document.getElementById('offer-alph').value = alph; document.getElementById('offer-btc-sat').value = sat; }, { dir, alph: process.env.E2E_ALPH || '0.5', sat: process.env.E2E_SAT || '5000' });
