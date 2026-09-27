@@ -26,7 +26,12 @@ async function esploraApi(path, method = 'GET', body = null) {
       opts.body = JSON.stringify(body);
     }
   }
-  const res = await fetch(`${ESPLORA_URL}${path}`, opts);
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 30_000);
+  let res;
+  try { res = await fetch(`${ESPLORA_URL}${path}`, { ...opts, signal: ctl.signal }); }
+  catch (e) { throw new Error(`Esplora ${method} ${path}: ${e.name === 'AbortError' ? 'no answer after 30 s' : e.message}`); }
+  finally { clearTimeout(timer); }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Esplora ${method} ${path}: ${res.status} ${text}`);

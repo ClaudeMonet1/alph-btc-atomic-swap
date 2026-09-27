@@ -223,7 +223,8 @@ export class SwapEngine {
 
   // ── Swap: Lock BTC (Bob) ──
 
-  async lockBtc(utxo) {
+  async lockBtc(utxo, onProgress = null) {
+    const progress = (m) => { if (onProgress) onProgress(m); };
     // Never lock twice for one session: a retried lock step reuses the existing lock.
     if (this.btcLockTxid) return { txid: this.btcLockTxid, vout: this.btcLockVout, amountSat: this.btcSat, btcLocktime: this.btcLocktime, reused: true };
     const DUST_LIMIT = 546;
@@ -241,8 +242,10 @@ export class SwapEngine {
     if (utxo) {
       inputs = [utxo];
     } else {
+      progress('Fetching your UTXOs from Esplora...');
       const utxos = await getUtxos(this.btcAddress);
       utxos.sort((a, b) => b.value - a.value); // largest first
+      progress(`${utxos.length} UTXO(s) found, estimating the fee...`);
       // Try single UTXO first
       const estFee1 = await estimateFee(154); // 1-in 2-out ~154 vB
       const single = utxos.find(u => {
@@ -270,6 +273,7 @@ export class SwapEngine {
 
     const totalInput = inputs.reduce((sum, u) => sum + u.value, 0);
     const fee = await estimateFee(43 + inputs.length * 58 + (inputs.length === 1 ? 43 : 43 * 2));
+    progress(`Signing the lock: ${inputs.length} input(s), ${this.btcSat} sat to the swap output, fee ${fee} sat...`);
 
     // Build PSBT
     const psbt = new bitcoin.Psbt({ network: NETWORK });
@@ -302,7 +306,9 @@ export class SwapEngine {
     }
     psbt.finalizeAllInputs();
     const fundTxHex = psbt.extractTransaction().toHex();
+    progress('Broadcasting the lock transaction...');
     const fundTxid = await broadcastTx(fundTxHex);
+    progress(`Broadcast ${fundTxid.slice(0, 16)}...; waiting for Esplora to index it...`);
 
     const fundVout = await findVoutWithRetry(fundTxid, swapBtcAddress);
 
@@ -342,13 +348,16 @@ export class SwapEngine {
   // Alice also fixes the claim fee here (twice the current estimate, bounded), since
   // the pre-signed claim cannot change it later; Bob checks it against the same bounds.
 
-  async deployAlph() {
+  async deployAlph(onProgress = null) {
+    const progress = (m) => { if (onProgress) onProgress(m); };
     // Never deploy twice for one session: a retried lock step reuses the existing contract.
     if (this.contractId && this.deployResult) {
       return { contractId: this.contractId, contractAddress: this.contractAddress, txId: this.deployResult.txId, claimFeeSat: this.claimFeeSat, reused: true };
     }
+    progress('Compiling the swap contract on the Alephium node...');
     const compiled = await compileSwapContract();
     this.compiled = compiled;
+    progress('Estimating the Bitcoin claim fee...');
     this.claimFeeSat = claimFeeFor(await estimateFeeRate(), this.btcSat);
     checkClaimFee(this.claimFeeSat, this.btcSat);
 
@@ -359,10 +368,12 @@ export class SwapEngine {
     const bobAlphAddress = addressFromPublicKey(this.peerPubHex, 'bip340-schnorr');
     this.checkPeerGroup(this.peerPubHex);
 
+    progress('Deploying the contract (building, verifying and signing the transaction)...');
     const deployResult = await deploySwapContract(
       this.pubKeyHex, this.secBytes, bytesToHex(aggPubkey), bobAlphAddress, this.alphAddress,
       this.alphTimeoutMs, this.alphAmount, compiled,
     );
+    progress(`Deployed in ${deployResult.txId.slice(0, 16)}...; waiting for the node to confirm it...`);
     await waitForTx(deployResult.txId);
 
     this.contractId = deployResult.contractId;
