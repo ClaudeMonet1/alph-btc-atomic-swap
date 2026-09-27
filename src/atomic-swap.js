@@ -34,9 +34,17 @@ const log = (phase, msg) => console.log(`[${phase}] ${msg}`);
 
 const SWAP_STATE_FILE = path.join(process.cwd(), '.swap-state.json');
 
+// Recovery state (audit S9): owner-readable only, and the adaptor secret is
+// dropped once Alice's BTC claim is out (from then on t is public on chain and
+// Bob's recovery extracts it from the witness). This single-process demo plays
+// both parties, so one file holds both sides' material; a real deployment keeps
+// one file per party.
 function saveSwapState(data) {
-  fs.writeFileSync(SWAP_STATE_FILE, JSON.stringify(data, null, 2));
-  log('STATE', `Saved swap state (phase: ${data.phase})`);
+  const state = { ...data };
+  if (state.phase === 'btc_claimed' || state.phase === 'alph_claimed') delete state.adaptorSecret;
+  fs.writeFileSync(SWAP_STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 });
+  try { fs.chmodSync(SWAP_STATE_FILE, 0o600); } catch {}
+  log('STATE', `Saved swap state (phase: ${state.phase})`);
 }
 
 function loadSwapState() {
