@@ -39,8 +39,12 @@ export const MIN_LOCK_CONFIRMATIONS = 1;
 export const BTC_CONFIRMATION_LADDER = [[100_000, 1], [1_000_000, 2], [10_000_000, 3], [Infinity, 6]];
 export const ALPH_CONFIRMATION_LADDER = [[100_000, 2], [1_000_000, 4], [10_000_000, 8], [Infinity, 16]];
 function rung(ladder, btcSat) { for (const [below, depth] of ladder) if (btcSat < below) return depth; return ladder[ladder.length - 1][1]; }
-export function btcConfirmationsFor(btcSat) { return Math.max(MIN_LOCK_CONFIRMATIONS, rung(BTC_CONFIRMATION_LADDER, btcSat)); }
-export function alphConfirmationsFor(btcSat, network = 'mainnet') { return network === 'devnet' ? 1 : rung(ALPH_CONFIRMATION_LADDER, btcSat); }
+// On signet and the Alephium testnet the coins have no value and blocks can be
+// 10 to 20 minutes apart, so the demo waits for one block only; the ladder
+// applies on mainnet (and on regtest, where the tests mine to it).
+const TEST_NETWORKS = new Set(['signet', 'testnet']);
+export function btcConfirmationsFor(btcSat, network = 'mainnet') { return TEST_NETWORKS.has(network) ? MIN_LOCK_CONFIRMATIONS : Math.max(MIN_LOCK_CONFIRMATIONS, rung(BTC_CONFIRMATION_LADDER, btcSat)); }
+export function alphConfirmationsFor(btcSat, network = 'mainnet') { return network === 'devnet' || TEST_NETWORKS.has(network) ? 1 : rung(ALPH_CONFIRMATION_LADDER, btcSat); }
 // Bob claims ALPH only once Alice's BTC claim has btcConfirmationsFor(amount)
 // confirmations: the secret is readable from the mempool, but a claim that is
 // later reorganised out while Bob has already taken the ALPH would leave Alice

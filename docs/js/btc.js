@@ -11,6 +11,7 @@ bitcoin.initEccLib(ecc);
 
 const NETWORK = bitcoin.networks.testnet;
 const ESPLORA_URL = 'https://mempool.space/signet/api';
+export const BTC_NETWORK_NAME = 'signet';
 
 // ---- Esplora API client ----
 

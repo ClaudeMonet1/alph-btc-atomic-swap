@@ -12,7 +12,7 @@ import {
   extractSignatureFromTx, buildRefundTx, bitcoin, NETWORK,
   getP2TRAddress, getUtxos, selectUtxo,
   getBtcBalance, estimateFee, estimateFeeRate, findVout, waitForConfirmation,
-  buildCpfpChild, getConfirmations,
+  buildCpfpChild, getConfirmations, BTC_NETWORK_NAME,
   sweepBtc as sweepBtcTx,
 } from './btc.js';
 import {
@@ -186,6 +186,10 @@ export class SwapEngine {
 
   initSwap(role, peerPubHex, btcAmount, alphAmount, sessionId) {
     this.checkPeerGroup(peerPubHex);
+    // A retried setup for the same session keeps the adaptor secret: the peer may already hold T.
+    if (sessionId !== undefined && this.sessionId === sessionId && this.role === role && this.peerPubHex === peerPubHex && (role !== 'alice' || this.adaptorPoint)) {
+      return role === 'alice' ? { role, adaptorPoint: bytesToHex(pointToBytes(this.adaptorPoint)), reused: true } : { role, reused: true };
+    }
     this.role = role;
     this.peerPubHex = peerPubHex;
     if (btcAmount !== undefined) { this.btcAmount = btcAmount; this.btcSat = Math.round(btcAmount * 1e8); }
@@ -220,6 +224,8 @@ export class SwapEngine {
   // ── Swap: Lock BTC (Bob) ──
 
   async lockBtc(utxo) {
+    // Never lock twice for one session: a retried lock step reuses the existing lock.
+    if (this.btcLockTxid) return { txid: this.btcLockTxid, vout: this.btcLockVout, amountSat: this.btcSat, btcLocktime: this.btcLocktime, reused: true };
     const DUST_LIMIT = 546;
     const peerPub = hexToBytes(this.peerPubHex);
     const pubkeys = [peerPub, this.pubKey]; // [alice, bob]
@@ -325,7 +331,7 @@ export class SwapEngine {
     const { aggPubkey } = xonlyKeyAgg(pubkeys);
     const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, btcLocktime);
     const { confirmations } = await verifySwapOutput(txid, swapBtcAddress, this.btcAmount, {
-      minConfirmations: btcConfirmationsFor(this.btcSat), pollMs: LOCK_CONFIRMATION_POLL_MS, timeoutMs: LOCK_CONFIRMATION_TIMEOUT_MS, onProgress,
+      minConfirmations: btcConfirmationsFor(this.btcSat, BTC_NETWORK_NAME), pollMs: LOCK_CONFIRMATION_POLL_MS, timeoutMs: LOCK_CONFIRMATION_TIMEOUT_MS, onProgress,
     });
     checkBtcLocktime(btcLocktime);
 
@@ -337,6 +343,10 @@ export class SwapEngine {
   // the pre-signed claim cannot change it later; Bob checks it against the same bounds.
 
   async deployAlph() {
+    // Never deploy twice for one session: a retried lock step reuses the existing contract.
+    if (this.contractId && this.deployResult) {
+      return { contractId: this.contractId, contractAddress: this.contractAddress, txId: this.deployResult.txId, claimFeeSat: this.claimFeeSat, reused: true };
+    }
     const compiled = await compileSwapContract();
     this.compiled = compiled;
     this.claimFeeSat = claimFeeFor(await estimateFeeRate(), this.btcSat);
@@ -591,7 +601,7 @@ export class SwapEngine {
 
     // Alice's claim must be confirmed before Bob spends the ALPH (a reorganised claim
     // would otherwise leave Alice with nothing); the 12 h margin leaves ample time.
-    const claimDepth = btcConfirmationsFor(this.btcSat);
+    const claimDepth = btcConfirmationsFor(this.btcSat, BTC_NETWORK_NAME);
     for (;;) {
       const c = await getConfirmations(btcClaimTxid);
       if (onProgress) onProgress(c, claimDepth);
@@ -679,6 +689,7 @@ export class SwapEngine {
     if (this.btcClaimTxid) return 'btc_claimed';
     if (this.btcAdaptorAgg && this.alphAdaptorAgg) return 'presigned';
     if (this.btcLockTxid && this.contractId) return 'locked';
+    if (this.btcLockTxid) return 'btc_locked'; // Bob has locked, Alice has not deployed yet
     return null;
   }
 
