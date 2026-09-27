@@ -60,7 +60,7 @@ async function signAndSubmit(wallet, buildPath, buildParams, expect) {
 
 // ---- Ralph contract source ----
 
-const SWAP_CONTRACT_SOURCE = `
+export const SWAP_CONTRACT_SOURCE = `
 Contract AtomicSwap(
   swapKey: ByteVec,
   claimAddress: Address,

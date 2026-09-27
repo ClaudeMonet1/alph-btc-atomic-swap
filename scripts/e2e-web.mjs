@@ -10,8 +10,11 @@ const url = process.argv[2] || 'https://claudemonet1.github.io/alph-btc-atomic-s
 const seconds = Number(process.argv[3] || 90);
 const dir = process.argv[4] || 'buy_alph';
 const profileDir = process.env.E2E_PROFILE_DIR || '/tmp/e2e-profiles';
-import { rmSync } from 'node:fs';
-if (!process.env.E2E_KEEP) rmSync(profileDir, { recursive: true, force: true }); // fresh keys unless asked to keep funded ones
+import { rmSync, readFileSync } from 'node:fs';
+// E2E_KEYS=<json file with {A:{nsecHex},B:{nsecHex}}> seeds the pages with known keys (funded test keys
+// live outside the browser profiles); otherwise fresh profiles and fresh keys every run.
+const seededKeys = process.env.E2E_KEYS ? JSON.parse(readFileSync(process.env.E2E_KEYS, 'utf8')) : null;
+if (!seededKeys && !process.env.E2E_KEEP) rmSync(profileDir, { recursive: true, force: true });
 const executablePath = process.env.CHROMIUM || '/run/current-system/sw/bin/chromium';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -19,6 +22,7 @@ async function open(name) {
   mkdirSync(`${profileDir}/${name}`, { recursive: true });
   const browser = await puppeteer.launch({ executablePath, headless: true, userDataDir: `${profileDir}/${name}`, args: ['--no-sandbox', '--disable-gpu'] });
   const page = await browser.newPage();
+  if (seededKeys?.[name]?.nsecHex) await page.evaluateOnNewDocument((hex) => { try { if (!localStorage.getItem('btc-alph-swap-nsec')) localStorage.setItem('btc-alph-swap-nsec', hex); } catch {} }, seededKeys[name].nsecHex);
   const logs = [];
   page.on('console', (m) => logs.push(`${m.type()}: ${m.text()}`));
   page.on('pageerror', (e) => logs.push(`PAGEERROR: ${e.message}`));
@@ -41,7 +45,7 @@ await sleep(8000); // relays
 console.log('A balances:', await balances(A.page)); console.log('B balances:', await balances(B.page));
 
 // A publishes an offer
-await A.page.evaluate((dir) => { document.querySelector(`#direction-toggle button[data-dir="${dir}"]`).click(); document.getElementById('offer-alph').value = '0.5'; document.getElementById('offer-btc-sat').value = '5000'; }, dir);
+await A.page.evaluate(({ dir, alph, sat }) => { document.querySelector(`#direction-toggle button[data-dir="${dir}"]`).click(); document.getElementById('offer-alph').value = alph; document.getElementById('offer-btc-sat').value = sat; }, { dir, alph: process.env.E2E_ALPH || '0.5', sat: process.env.E2E_SAT || '5000' });
 await A.page.click('#publish-offer-btn');
 console.log('A published a', dir, 'offer');
 await sleep(4000);
@@ -65,9 +69,17 @@ const accepted = await B.page.evaluate(async (id) => {
 }, offerId);
 console.log('B accepted offer', accepted);
 
+// Poll both sides; stop early when both have claimed or either side shows an error.
+let lastA = '', lastB = '';
 for (let t = 15; t <= seconds; t += 15) {
   await sleep(15000);
-  console.log(`\n===== t=${t}s\n--- A (${dir === 'buy_alph' ? 'Bob' : 'Alice'}) steps:\n${await steps(A.page)}\n--- B (${dir === 'buy_alph' ? 'Alice' : 'Bob'}) steps:\n${await steps(B.page)}`);
+  const a = await steps(A.page), b = await steps(B.page);
+  if (a !== lastA || b !== lastB) {
+    console.log(`\n===== t=${t}s (${new Date().toISOString()})\n--- A (${dir === 'buy_alph' ? 'Bob' : 'Alice'}) steps:\n${a.replace(/\n\s*\n/g, '\n')}\n--- B (${dir === 'buy_alph' ? 'Alice' : 'Bob'}) steps:\n${b.replace(/\n\s*\n/g, '\n')}`);
+    lastA = a; lastB = b;
+  }
+  const done = (x) => /5\. Claim\s*✓ Done/.test(x);
+  if ((done(a) && done(b)) || /✗ Error/.test(a + b)) { console.log('\n===== stop:', done(a) && done(b) ? 'both sides complete' : 'a side reported an error'); break; }
 }
 const pageLog = (page) => page.evaluate(() => document.getElementById('app-log')?.textContent || '(no log panel)');
 console.log('\n--- A page log:\n' + (await pageLog(A.page)));

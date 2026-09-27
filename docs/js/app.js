@@ -1286,6 +1286,7 @@ async function executeSetupAlice() {
 
   try {
     const initResult = state.engine.initSwap('alice', peerPubHex, btcAmount, String(alphAmount), sessionId);
+    saveSwapState(); // the adaptor secret and the session survive a reload from here on
 
     state.stepData.setup = { ...state.stepData.setup, adaptorPoint: initResult.adaptorPoint };
     updateStep('setup', { info: `adaptorPoint: ${initResult.adaptorPoint?.slice(0, 24)}...\nSending to peer...` });
@@ -1382,6 +1383,7 @@ async function executeSetupBob() {
 
     state.engine.initSwap('bob', peerPubHex, btcAmount, String(alphAmount), sessionId);
     state.engine.setAdaptorPoint(confirm.adaptorPoint);
+    saveSwapState();
 
     updateStep('setup', { info: `adaptorPoint: ${confirm.adaptorPoint.slice(0, 24)}...` });
   } catch (e) {
@@ -1972,7 +1974,10 @@ function renderRecoveryActions(checkpoint) {
   const alphEmpty = state.stepData._alphContractEmpty;
   let html = `<div id="timeout-display" style="width:100%; font-size:11px; color:#8b949e; margin-bottom:8px;"></div>`;
 
-  if (checkpoint === 'btc_locked') {
+  if (checkpoint === 'started') {
+    html += `<button class="sm primary" id="recovery-resume-btn">Resume Swap</button> `;
+    html += `<span style="color:#8b949e; font-size:12px">Swap interrupted before anything was locked. Resume continues from the first unfinished step (peer must be online).</span> `;
+  } else if (checkpoint === 'btc_locked') {
     html += `<button class="sm primary" id="recovery-resume-btn">Resume Swap</button> `;
     html += `<span style="color:#8b949e; font-size:12px">BTC locked; Alice had not deployed yet. Resume waits for her contract (peer must be online).</span> `;
     html += `<button class="sm danger" id="recovery-refund-btc-btn" disabled>Refund BTC</button> `;
@@ -2169,8 +2174,8 @@ async function resumeSwapFromLocked() {
     // waiting for Bob's verification): re-run it. lockBtc/deployAlph reuse what
     // is already on chain, and retryStep continues with the following steps.
     if (state.stepData.lock?.status !== 'done') {
-      if (state.stepData.setup?.status !== 'done') updateStep('setup', { status: 'done' });
-      await retryStep('lock');
+      // setup and lock steps are idempotent (same adaptor point, same lock, same contract)
+      await retryStep(state.stepData.setup?.status !== 'done' ? 'setup' : 'lock');
       return;
     }
     // Context should already be computed from rehydrate, but ensure it
