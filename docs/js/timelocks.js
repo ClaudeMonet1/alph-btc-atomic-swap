@@ -27,9 +27,24 @@ export const LOCKTIME_THRESHOLD = 500_000_000;     // below this nLockTime means
 // makes the check mean anything and is what the signet demo uses; a mainnet
 // deployment should raise it with the amount.
 export const MIN_LOCK_CONFIRMATIONS = 1;
-// Bob claims ALPH only once Alice's BTC claim has this many confirmations: the
-// secret is readable from the mempool, but a claim that is later reorganised
-// out while Bob has already taken the ALPH would leave Alice with nothing (S10).
+
+// Confirmation depth scales with the amount at stake (audit S4, S10): a
+// reorganisation that replaces Bob's lock after Alice has locked her ALPH, or
+// Alice's claim after Bob has taken the ALPH, must cost more than it wins. Both
+// parties derive the same depth from the agreed amount; the 24 h lock and the
+// 12 h margin leave room for the deepest rung on both sides.
+//   Bitcoin (10 min blocks):   < 0.001 BTC 1, < 0.01 BTC 2, < 0.1 BTC 3, else 6
+//   Alephium (16 s per chain): < 0.001 BTC 2, < 0.01 BTC 4, < 0.1 BTC 8, else 16
+// Devnet mines one block per transaction, so its depth stays at 1.
+export const BTC_CONFIRMATION_LADDER = [[100_000, 1], [1_000_000, 2], [10_000_000, 3], [Infinity, 6]];
+export const ALPH_CONFIRMATION_LADDER = [[100_000, 2], [1_000_000, 4], [10_000_000, 8], [Infinity, 16]];
+function rung(ladder, btcSat) { for (const [below, depth] of ladder) if (btcSat < below) return depth; return ladder[ladder.length - 1][1]; }
+export function btcConfirmationsFor(btcSat) { return Math.max(MIN_LOCK_CONFIRMATIONS, rung(BTC_CONFIRMATION_LADDER, btcSat)); }
+export function alphConfirmationsFor(btcSat, network = 'mainnet') { return network === 'devnet' ? 1 : rung(ALPH_CONFIRMATION_LADDER, btcSat); }
+// Bob claims ALPH only once Alice's BTC claim has btcConfirmationsFor(amount)
+// confirmations: the secret is readable from the mempool, but a claim that is
+// later reorganised out while Bob has already taken the ALPH would leave Alice
+// with nothing (S10). Kept as the floor of that depth.
 export const CLAIM_CONFIRMATIONS = 1;
 export const LOCK_CONFIRMATION_POLL_MS = 15_000;
 export const LOCK_CONFIRMATION_TIMEOUT_MS = 6 * 3600 * 1000;

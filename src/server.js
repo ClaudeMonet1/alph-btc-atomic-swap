@@ -16,18 +16,18 @@ import { xonlyKeyAgg, tapTweak, swapNonceGen, nonceAgg, adaptorSign, adaptorVeri
 import {
   bitcoinRpc, createSwapOutput, verifySwapOutput,
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
-  mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin,
+  mineBlocks, extractSignatureFromTx, getConfirmations, buildRefundTx, REGTEST, bitcoin,
   setBtcNetwork, getBtcNetwork, getP2TRAddress, getUtxos, selectUtxo,
   getBtcBalance, estimateFee, estimateFeeRate, findVout, waitForConfirmation,
 } from './btc-swap.js';
 import {
-  compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
+  compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState, verifyDeployment, getAlphNetwork,
   fundFromGenesis, getBalance, waitForTx,
   web3, ONE_ALPH, PrivateKeyWallet, addressFromPublicKey, groupOfAddress,
   setAlphNetwork,
 } from './alph-swap.js';
 import { computeTweakedPrivateKey } from './taproot-utils.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, MIN_LOCK_CONFIRMATIONS, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, REFUND_VBYTES } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, btcConfirmationsFor, alphConfirmationsFor, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, REFUND_VBYTES } from './timelocks.js';
 
 // ============================================================
 // Network Mode Detection
@@ -383,8 +383,8 @@ async function handleApi(req, res, urlPath) {
       const pubkeys = [s.pubKey, peerPub]; // [alice, bob]
       const { aggPubkey } = xonlyKeyAgg(pubkeys);
       const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, s.btcLocktime);
-      // the lock must be confirmed before Alice locks anything; on signet this waits for a block
-      await verifySwapOutput(body.txid, swapBtcAddress, s.btcAmount, { minConfirmations: MIN_LOCK_CONFIRMATIONS, pollMs: LOCK_CONFIRMATION_POLL_MS, timeoutMs: LOCK_CONFIRMATION_TIMEOUT_MS });
+      // the lock must be confirmed to the depth the amount calls for before Alice locks anything
+      await verifySwapOutput(body.txid, swapBtcAddress, s.btcAmount, { minConfirmations: btcConfirmationsFor(s.btcSat), pollMs: LOCK_CONFIRMATION_POLL_MS, timeoutMs: LOCK_CONFIRMATION_TIMEOUT_MS });
       checkBtcLocktime(s.btcLocktime);
 
       return json(res, { valid: true });
@@ -432,6 +432,8 @@ async function handleApi(req, res, urlPath) {
       s.contractAddress = body.contractAddress;
       checkClaimFee(body.claimFeeSat, s.btcSat);
       s.claimFeeSat = body.claimFeeSat;
+
+      await verifyDeployment(body.deployTxId, body.contractAddress, alphConfirmationsFor(s.btcSat, getAlphNetwork().name));
 
       const compiled = await compileSwapContract();
       s.compiled = compiled;
@@ -602,7 +604,7 @@ async function handleApi(req, res, urlPath) {
       const claimTxid = await broadcastTx(signedTxHex);
 
       if (!isTestnet) {
-        await mineBlocks(1, s.btcAddress);
+        await mineBlocks(btcConfirmationsFor(s.btcSat), s.btcAddress);
       }
 
       return json(res, { txid: claimTxid });
@@ -611,6 +613,10 @@ async function handleApi(req, res, urlPath) {
     // ── Swap: Claim ALPH (Bob) ──
     if (urlPath === '/api/swap/claim-alph' && req.method === 'POST') {
       const s = getSession(body.token);
+
+      // Alice's claim must be deep enough before the ALPH is spent (a reorganised
+      // claim would otherwise leave her with nothing)
+      while ((await getConfirmations(body.btcClaimTxid)) < btcConfirmationsFor(s.btcSat)) await new Promise(r => setTimeout(r, LOCK_CONFIRMATION_POLL_MS));
 
       // Extract t from on-chain BTC claim tx
       const onChainSig = await extractSignatureFromTx(body.btcClaimTxid);

@@ -1285,7 +1285,7 @@ async function executeLockAlice() {
 
     const event = await createSwapSetup({
       sessionId, recipientPubHex: peerPubHex, msgType: 'alph_deployed',
-      contractId: deployResult.contractId, contractAddress: deployResult.contractAddress, claimFeeSat: deployResult.claimFeeSat,
+      contractId: deployResult.contractId, contractAddress: deployResult.contractAddress, claimFeeSat: deployResult.claimFeeSat, deployTxId: deployResult.txId,
     });
     await nostrPublish(event);
 
@@ -1370,8 +1370,9 @@ async function executeLockBob() {
       (e) => JSON.parse(e.content).type === 'alph_deployed');
     const alphDeployed = JSON.parse(alphDeployedEvent.content);
 
-    if (alphDeployed.claimFeeSat === undefined) throw new Error('Peer runs an old version without the claim fee: refusing to continue');
-    await state.engine.verifyAlph(alphDeployed.contractId, alphDeployed.contractAddress, alphDeployed.claimFeeSat);
+    if (alphDeployed.claimFeeSat === undefined || !alphDeployed.deployTxId) throw new Error('Peer runs an old version without the claim fee or the deployment txid: refusing to continue');
+    await state.engine.verifyAlph(alphDeployed.contractId, alphDeployed.contractAddress, alphDeployed.claimFeeSat, alphDeployed.deployTxId,
+      (have, need) => updateStep('lock', { info: `ALPH contract ${alphDeployed.contractAddress.slice(0, 16)}...: deployment ${have}/${need} confirmations` }));
 
     const verifiedEvent = await createSwapSetup({
       sessionId, recipientPubHex: peerPubHex, msgType: 'verified',
