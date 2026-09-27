@@ -10,6 +10,7 @@ const seconds = Number(process.argv[3] || 25);
 const executablePath = process.env.CHROMIUM || '/run/current-system/sw/bin/chromium';
 const browser = await puppeteer.launch({ executablePath, headless: true, args: ['--no-sandbox', '--disable-gpu'] });
 const page = await browser.newPage();
+await page.setCacheEnabled(false);
 const console_ = [], errors = [], failed = [];
 page.on('console', m => console_.push(`${m.type()}: ${m.text()}`));
 page.on('pageerror', e => errors.push(String(e.message || e)));
