@@ -13,6 +13,25 @@ import { groupOfAddress, addressFromPublicKey } from './alph.js';
 import { btcConfirmationsFor } from './timelocks.js';
 import { BTC_NETWORK_NAME } from './btc.js';
 import { getP2TRAddress } from './btc.js';
+import { BUILD } from './build.js';
+
+// GitHub Pages caches every file for ten minutes: a tab opened before a deploy
+// runs the old modules. Compare the module build id with version.json fetched
+// uncached and say so; two peers on different builds cannot swap.
+async function checkBuild() {
+  try {
+    const res = await fetch(new URL('../version.json', import.meta.url), { cache: 'no-store' });
+    const { build } = await res.json();
+    addLogMsg('system', `Build ${BUILD}${build === BUILD ? '' : ` (a newer build ${build} is published: reload with Ctrl+Shift+R before swapping)`}`, 'System');
+    if (build !== BUILD) {
+      const el = document.getElementById('connect-status') || document.body;
+      const div = document.createElement('div');
+      div.style.cssText = 'background:#d29922;color:#000;padding:8px;font-size:13px;text-align:center';
+      div.textContent = `This tab runs build ${BUILD}; the published build is ${build}. Reload with Ctrl+Shift+R (or clear the cache) before swapping: peers on different builds cannot swap.`;
+      document.body.prepend(div);
+    }
+  } catch (e) { addLogMsg('system', `Build ${BUILD} (version check failed: ${e.message})`, 'System'); }
+}
 import { PetriNetViewer } from './petri-viewer.js';
 
 // ============================================================
@@ -2314,6 +2333,7 @@ async function autoConnect() {
     const relayNames = connected.map(r => r.url.replace('wss://', '')).join(', ');
     updateRelayStatus();
     addLogMsg('system', `Connected via ${connected.length} relays: ${relayNames}`, 'System');
+    checkBuild();
 
     // Check for saved swap state to recover
     const savedSwap = loadSwapState();
