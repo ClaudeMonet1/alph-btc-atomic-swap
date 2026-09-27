@@ -48,9 +48,14 @@ export async function estimateFee(vBytes = 150) {
 }
 
 // Current fee rate in sat/vB from Esplora's half-hour estimate.
+// Esplora's recommended fees lag the mempool on signet (a live run saw
+// halfHourFee 1 while blocks cleared at 3 to 6 sat/vB), so take the larger of
+// the fastest recommendation and the median of the next projected block.
 export async function estimateFeeRate() {
   const fees = await esploraApi('/v1/fees/recommended');
-  return Math.max(1, fees.halfHourFee || 1);
+  let nextBlockMedian = 0;
+  try { const blocks = await esploraApi('/v1/fees/mempool-blocks'); nextBlockMedian = blocks?.[0]?.medianFee || 0; } catch {}
+  return Math.max(1, Math.ceil(Math.max(fees.fastestFee || 0, fees.halfHourFee || 0, nextBlockMedian)));
 }
 
 export async function getUtxos(address) {
