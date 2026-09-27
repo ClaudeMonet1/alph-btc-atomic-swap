@@ -701,6 +701,7 @@ export class SwapEngine {
     if (this.btcAdaptorAgg && this.alphAdaptorAgg) return 'presigned';
     if (this.btcLockTxid && this.contractId) return 'locked';
     if (this.btcLockTxid) return 'btc_locked'; // Bob has locked, Alice has not deployed yet
+    if (this.sessionId && this.peerPubHex && this.role) return 'started'; // nothing on chain yet, but the session and Alice's adaptor secret must survive a reload
     return null;
   }
 
