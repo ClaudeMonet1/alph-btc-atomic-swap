@@ -244,8 +244,10 @@ export class SwapEngine {
     } else {
       progress('Fetching your UTXOs from Esplora...');
       const utxos = await getUtxos(this.btcAddress);
-      utxos.sort((a, b) => b.value - a.value); // largest first
-      progress(`${utxos.length} UTXO(s) found, estimating the fee...`);
+      // Confirmed coins first (an unconfirmed coin at the end of a long chain is
+      // refused by the network: "too many unconfirmed ancestors"), then largest first.
+      utxos.sort((a, b) => (b.status?.confirmed === true) - (a.status?.confirmed === true) || b.value - a.value);
+      progress(`${utxos.length} UTXO(s) found (${utxos.filter((u) => u.status?.confirmed).length} confirmed), estimating the fee...`);
       // Try single UTXO first
       const estFee1 = await estimateFee(154); // 1-in 2-out ~154 vB
       const single = utxos.find(u => {
