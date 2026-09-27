@@ -90,7 +90,7 @@ The cancel path is reachable from two places: `t2_timeout` at `presigs_ready` (A
 
 **Safety**: The net is 2-bounded. All places are 1-bounded except `recovery_done`, which holds 2 tokens on the cancel path (one per refund). The `both_recovered` join consumes both. Conflicts at `both_locked` and `presigs_ready` ensure mutual exclusion between the swap and cancel paths.
 
-**Atomicity**: If `alice_claims_btc` fires, `t_revealed` is produced, guaranteeing `bob_claims_alph` fires. The ordering T_alph = T_btc + 12 h ensures Bob always has time to extract t and claim ALPH, and that Alice cannot refund ALPH while the BTC is still claimable. Neither party can get both assets.
+**Atomicity**: If `alice_claims_btc` fires, `t_revealed` is produced, guaranteeing `bob_claims_alph` fires. The ordering T_alph = T_btc + 12 h ensures Bob always has time to extract t and claim ALPH, and that Alice cannot refund ALPH while the BTC is still claimable. Neither party can get both assets. The net does not model the timelock values themselves: with T_alph < T_btc the same net admits a run where Alice refunds ALPH and then claims BTC (the defect found by the 2026-09-27 audit). Atomicity therefore holds only for parameterisations with T_alph ≥ T_btc + margin, which is why Bob's verification of the deployed contract (`alphTimeoutBounds`) is part of the protocol and not an optional check, and why Bob waits for Alice's claim to confirm before spending the ALPH.
 
 **Liveness**: Under clock fairness, if either party is unresponsive, a timeout eventually fires. `exchange_timeout` covers the presig exchange phase, `t2_timeout` covers the claim phase. The `both_recovered` join ensures the cancel path completes only after both parties have reclaimed their assets.
 
