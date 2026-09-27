@@ -676,8 +676,10 @@ export class SwapEngine {
   async sweepAlph(destAddress) {
     const bal = await getBalance(this.alphAddress);
     const available = bal.balance - bal.lockedBalance;
-    // Reserve gas: 0.002 ALPH (20000 gas * 100 gwei)
-    const gasReserve = ONE_ALPH / 500n;
+    // Reserve 0.01 ALPH: the transfer pays 0.002 ALPH of gas (20000 gas * 100 gwei) and
+    // the node wants a little more than the exact amount (a sweep that left exactly the
+    // gas was refused with "Not enough balance: expected +0.001 ALPH").
+    const gasReserve = ONE_ALPH / 100n;
     const sendAmount = available - gasReserve;
     if (sendAmount <= 0n) throw new Error('Insufficient ALPH balance to cover gas');
     const txId = await transferAlph(this.alphKey.pubHex, this.alphKey.sec, destAddress, sendAmount);
