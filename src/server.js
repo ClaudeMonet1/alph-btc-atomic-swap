@@ -109,7 +109,6 @@ function readBody(req) {
 function json(res, data, status = 200) {
   res.writeHead(status, {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
   });
   res.end(JSON.stringify(data));
 }
@@ -138,13 +137,10 @@ async function findVoutWithRetry(txid, address, maxRetries = 5) {
 // ============================================================
 
 async function handleApi(req, res, urlPath) {
-  // CORS preflight
+  // No CORS headers: the API answers only the page this server serves (same
+  // origin). A page from any other origin gets no access to the session keys.
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    });
+    res.writeHead(204);
     return res.end();
   }
 
@@ -714,7 +710,14 @@ const server = http.createServer(async (req, res) => {
 // Start
 // ============================================================
 
-server.listen(PORT, () => {
-  console.log(`BTC-ALPH Swap UI: http://localhost:${PORT}`);
+// Local development harness only (audit S8): it receives the user's nsec over
+// HTTP and keeps the key in memory for the session, so it binds the loopback
+// interface and nothing else. The static build in docs/ keeps keys in the browser.
+const HOST = process.env.SWAP_SERVER_HOST || '127.0.0.1';
+if (HOST !== '127.0.0.1' && HOST !== 'localhost' && HOST !== '::1') {
+  console.warn(`WARNING: binding ${HOST}: this server holds private keys in memory and speaks plain HTTP; only do this on a network you trust entirely.`);
+}
+server.listen(PORT, HOST, () => {
+  console.log(`BTC-ALPH Swap UI: http://${HOST}:${PORT}  (local development server: keys live in this process; prefer the static build in docs/)`);
   console.log(`Network mode:     ${NETWORK_MODE}${isTestnet ? ' (BTC signet + ALPH testnet)' : ' (BTC regtest + ALPH devnet)'}`);
 });

@@ -178,7 +178,7 @@ Two deployment modes share the same crypto core:
 
 **Static web app** (`docs/`) — runs entirely in the browser via ES modules + import maps. No server, no build step. Testnet only (Bitcoin signet + ALPH testnet).
 
-**Node.js server** (`src/server.js` + `index.html`) — HTTP backend for the web UI. Supports both devnet (local regtest/devnet chains) and testnet.
+**Node.js server** (`src/server.js` + `index.html`) — HTTP backend for the web UI, for local development only: it receives the nsec over HTTP and keeps the key in memory, so it binds 127.0.0.1 and sends no CORS headers (set `SWAP_SERVER_HOST` to bind elsewhere, at your own risk). The static build in `docs/` is the one to use with real keys. Supports both devnet (local regtest/devnet chains) and testnet.
 
 ### Crypto Core
 
