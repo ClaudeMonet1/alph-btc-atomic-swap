@@ -12,14 +12,7 @@ import { sha256 } from '@noble/hashes/sha256.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { nip19 } from 'nostr-tools';
 
-import {
-  keyAgg, nonceGen, nonceAgg,
-  lift_x, hasEvenY, bytesToNum, numTo32b,
-} from './musig2.js';
-import {
-  adaptorSign, adaptorVerify, adaptorAggregate, completeAdaptorSig, adaptorExtract,
-  G, Fn, n, pointToBytes,
-} from './adaptor.js';
+import { xonlyKeyAgg, tapTweak, swapNonceGen, nonceAgg, adaptorSign, adaptorVerify, adaptorAggregate, completeAdaptorSig, adaptorExtract, adaptorSecretFromBytes, G, Fn, n, lift_x, hasEvenY, bytesToNum, numTo32b, pointToBytes, Point } from './adaptor.js';
 import {
   bitcoinRpc, createSwapOutput, verifySwapOutput,
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
@@ -33,7 +26,7 @@ import {
   web3, ONE_ALPH, PrivateKeyWallet, addressFromPublicKey, groupOfAddress,
   setAlphNetwork,
 } from './alph-swap.js';
-import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
+import { computeTweakedPrivateKey } from './taproot-utils.js';
 import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, MIN_LOCK_CONFIRMATIONS, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, REFUND_VBYTES } from './timelocks.js';
 
 // ============================================================
@@ -75,16 +68,14 @@ function getSession(token) {
 
 function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, btcLocktime, claimFeeSat }) {
   const pubkeys = [alicePub, bobPub];
-  const { aggPubkey, keyCoeffs, gacc } = keyAgg(pubkeys);
+  const { aggPubkey, keyCtx } = xonlyKeyAgg(pubkeys);
 
   const { address: swapBtcAddress, internalPubkey, scriptTree, p2tr } =
     createSwapOutput(aggPubkey, bobPub, btcLocktime);
 
   const aliceBtcAddress = getP2TRAddress(alicePub);
 
-  const { Qbytes, tweakScalar, negated: tweakNeg } = computeTweakedKey(aggPubkey, p2tr.hash);
-  const gaccTweaked = tweakNeg ? Fn.create(n - gacc) : gacc;
-  const tacc = tweakNeg ? Fn.neg(tweakScalar) : tweakScalar;
+  const { Qbytes, keyCtx: btcKeyCtx } = tapTweak(keyCtx, p2tr.hash);
 
   const { sighash: btcSighash } = buildClaimTx(
     btcLockTxid, btcLockVout, btcSat, aliceBtcAddress, internalPubkey, scriptTree, claimFeeSat,
@@ -92,7 +83,7 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
   const alphMsg = hexToBytes(contractId);
 
   return {
-    aggPubkey, keyCoeffs, gacc, gaccTweaked, tacc,
+    aggPubkey, keyCtx, btcKeyCtx,
     Qbytes, btcSighash, alphMsg,
     swapBtcAddress, internalPubkey, scriptTree, p2tr,
     aliceBtcAddress, claimFeeSat,
@@ -334,7 +325,7 @@ async function handleApi(req, res, urlPath) {
       const s = getSession(body.token);
       const peerPub = hexToBytes(s.peerPubHex);
       const pubkeys = [peerPub, s.pubKey]; // [alice, bob]
-      const { aggPubkey } = keyAgg(pubkeys);
+      const { aggPubkey } = xonlyKeyAgg(pubkeys);
 
       s.btcLocktime = btcLocktimeNow();
       const { address: swapBtcAddress } = createSwapOutput(aggPubkey, s.pubKey, s.btcLocktime);
@@ -394,7 +385,7 @@ async function handleApi(req, res, urlPath) {
 
       const peerPub = hexToBytes(s.peerPubHex);
       const pubkeys = [s.pubKey, peerPub]; // [alice, bob]
-      const { aggPubkey } = keyAgg(pubkeys);
+      const { aggPubkey } = xonlyKeyAgg(pubkeys);
       const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, s.btcLocktime);
       // the lock must be confirmed before Alice locks anything; on signet this waits for a block
       await verifySwapOutput(body.txid, swapBtcAddress, s.btcAmount, { minConfirmations: MIN_LOCK_CONFIRMATIONS, pollMs: LOCK_CONFIRMATION_POLL_MS, timeoutMs: LOCK_CONFIRMATION_TIMEOUT_MS });
@@ -412,7 +403,7 @@ async function handleApi(req, res, urlPath) {
 
       const peerPub = hexToBytes(s.peerPubHex);
       const pubkeys = [s.pubKey, peerPub];
-      const { aggPubkey } = keyAgg(pubkeys);
+      const { aggPubkey } = xonlyKeyAgg(pubkeys);
 
       const bobAlphAddress = addressFromPublicKey(s.peerPubHex, 'bip340-schnorr');
       const bobGroup = groupOfAddress(bobAlphAddress);
@@ -451,7 +442,7 @@ async function handleApi(req, res, urlPath) {
 
       const peerPub = hexToBytes(s.peerPubHex);
       const pubkeys = [peerPub, s.pubKey];
-      const { aggPubkey } = keyAgg(pubkeys);
+      const { aggPubkey } = xonlyKeyAgg(pubkeys);
 
       const wallet = new PrivateKeyWallet({ privateKey: bytesToHex(s.secBytes), keyType: 'bip340-schnorr' });
       const aliceAlphAddress = addressFromPublicKey(s.peerPubHex, 'bip340-schnorr');
@@ -489,8 +480,8 @@ async function handleApi(req, res, urlPath) {
       const s = getSession(body.token);
       s.myBtcPresig = null; s.myAlphPresig = null; s.peerBtcPresig = null; s.peerAlphPresig = null;
       s.btcAdaptorAgg = null; s.alphAdaptorAgg = null; s.btcTweakedAgg = null;
-      s.btcNonce = nonceGen(s.secBytes, s.ctx.Qbytes, s.ctx.btcSighash);
-      s.alphNonce = nonceGen(s.secBytes, s.ctx.aggPubkey, s.ctx.alphMsg);
+      s.btcNonce = swapNonceGen(s.secBytes, s.ctx.Qbytes, s.ctx.btcSighash);
+      s.alphNonce = swapNonceGen(s.secBytes, s.ctx.aggPubkey, s.ctx.alphMsg);
 
       const btcNonceHash = bytesToHex(sha256(s.btcNonce.pubNonce));
       const alphNonceHash = bytesToHex(sha256(s.alphNonce.pubNonce));
@@ -548,10 +539,8 @@ async function handleApi(req, res, urlPath) {
       const signerIndex = s.role === 'alice' ? 0 : 1;
       const T = s.role === 'alice' ? s.adaptorPoint : s.peerAdaptorPoint;
 
-      const btcPresig = adaptorSign(s.secBytes, s.btcNonce.secNonce, s.btcAggNonce,
-        s.ctx.keyCoeffs, s.ctx.Qbytes, s.ctx.btcSighash, T, signerIndex, s.ctx.gaccTweaked);
-      const alphPresig = adaptorSign(s.secBytes, s.alphNonce.secNonce, s.alphAggNonce,
-        s.ctx.keyCoeffs, s.ctx.aggPubkey, s.ctx.alphMsg, T, signerIndex, s.ctx.gacc);
+      const btcPresig = adaptorSign(s.secBytes, s.btcNonce.secNonce, s.btcAggNonce, s.ctx.btcKeyCtx, s.ctx.btcSighash, T);
+      const alphPresig = adaptorSign(s.secBytes, s.alphNonce.secNonce, s.alphAggNonce, s.ctx.keyCtx, s.ctx.alphMsg, T);
 
       s.myBtcPresig = btcPresig;
       s.myAlphPresig = alphPresig;
@@ -577,11 +566,9 @@ async function handleApi(req, res, urlPath) {
       const peerBtcNonce = s.peerBtcPubNonce;
       const peerAlphNonce = s.peerAlphPubNonce;
 
-      if (!adaptorVerify(peerBtcPresig, peerBtcNonce, peerPub, s.btcAggNonce,
-        s.ctx.keyCoeffs, s.ctx.Qbytes, s.ctx.btcSighash, T, peerIndex, s.ctx.gaccTweaked))
+      if (!adaptorVerify(peerBtcPresig, peerBtcNonce, peerPub, s.btcAggNonce, s.ctx.btcKeyCtx, s.ctx.btcSighash, T))
         throw new Error('Peer BTC adaptor verification failed');
-      if (!adaptorVerify(peerAlphPresig, peerAlphNonce, peerPub, s.alphAggNonce,
-        s.ctx.keyCoeffs, s.ctx.aggPubkey, s.ctx.alphMsg, T, peerIndex, s.ctx.gacc))
+      if (!adaptorVerify(peerAlphPresig, peerAlphNonce, peerPub, s.alphAggNonce, s.ctx.keyCtx, s.ctx.alphMsg, T))
         throw new Error('Peer ALPH adaptor verification failed');
 
       // Aggregate — order: [alice, bob]
@@ -592,13 +579,11 @@ async function handleApi(req, res, urlPath) {
         ? [s.myAlphPresig, peerAlphPresig]
         : [peerAlphPresig, s.myAlphPresig];
 
-      s.btcAdaptorAgg = adaptorAggregate(presigs, s.btcAggNonce, s.ctx.Qbytes, s.ctx.btcSighash, T);
-      s.alphAdaptorAgg = adaptorAggregate(alphPresigs, s.alphAggNonce, s.ctx.aggPubkey, s.ctx.alphMsg, T);
+      s.btcAdaptorAgg = adaptorAggregate(presigs, s.btcAggNonce, s.ctx.btcKeyCtx, s.ctx.btcSighash, T);
+      s.alphAdaptorAgg = adaptorAggregate(alphPresigs, s.alphAggNonce, s.ctx.keyCtx, s.ctx.alphMsg, T);
 
       // Taproot tweak
-      const btcE = computeAdaptorChallenge(s.btcAggNonce, s.ctx.Qbytes, s.ctx.btcSighash, T);
-      const sTweaked = Fn.create(bytesToNum(s.btcAdaptorAgg.s) + Fn.create(s.ctx.tacc * btcE));
-      s.btcTweakedAgg = { R: s.btcAdaptorAgg.R, s: numTo32b(sTweaked), negR: s.btcAdaptorAgg.negR };
+      s.btcTweakedAgg = s.btcAdaptorAgg; // the taproot tweak is part of the BIP327 key context
 
       return json(res, { valid: true });
     }
@@ -667,7 +652,7 @@ async function handleApi(req, res, urlPath) {
       const s = getSession(body.token);
       const peerPub = hexToBytes(s.peerPubHex);
       const pubkeys = [peerPub, s.pubKey]; // [alice, bob]
-      const { aggPubkey } = keyAgg(pubkeys);
+      const { aggPubkey } = xonlyKeyAgg(pubkeys);
       const { internalPubkey, scriptTree } = createSwapOutput(aggPubkey, s.pubKey, s.btcLocktime);
 
       const { psbt: refundPsbt } = buildRefundTx(

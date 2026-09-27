@@ -1,237 +1,253 @@
-// BIP-327 MuSig2 implementation using @noble/curves/secp256k1
+// MuSig2 as specified by BIP327, checked against the BIP's test vectors
+// (docs/spec/bip327/*.json, run by bip327-selftest.js in Node and in the browser).
 // Reference: https://github.com/bitcoin/bips/blob/master/bip-0327.mediawiki
 //
-// Browser-compatible: uses secp256k1.ProjectivePoint (not schnorr.Point)
+// Key aggregation works on 33-byte plain public keys; nonces carry the signer's
+// public key; tweaks (plain or x-only) live in the key aggregation context and
+// their contribution is added by PartialSigAgg. The swap-specific adaptor
+// layer is in adaptor.js.
 
-import { schnorr, secp256k1 } from '@noble/curves/secp256k1';
-import { bytesToNumberBE, concatBytes, numberToBytesBE } from '@noble/curves/utils';
+import {
+  G, ZERO, n, Fn, taggedHash, pointFromBytes, cbytes, xbytes, hasEvenY, isInfinity, mul,
+  randomBytes, bytesToNum, numTo32b, concatBytes,
+} from './curve.js';
 
-const Point = secp256k1.ProjectivePoint;
-const G = Point.BASE;
-const n = secp256k1.CURVE.n;
-
-// Scalar field modular arithmetic (replaces schnorr.Point.Fn)
-const Fn = {
-  ORDER: n,
-  create: (v) => { const r = v % n; return r < 0n ? r + n : r; },
-  neg: (v) => { const r = v % n; return r === 0n ? 0n : n - (r < 0n ? r + n : r); },
-  toBytes: (v) => numberToBytesBE(v < 0n ? ((v % n) + n) % n : v % n, 32),
-};
-
-const taggedHash = schnorr.utils.taggedHash;
-const lift_x = schnorr.utils.lift_x;
-
-// 32-byte x-only serialization (like schnorr.utils.pointToBytes)
-function pointToBytes(point) {
-  const raw = point.toRawBytes(true); // 33-byte compressed
-  return raw.slice(1); // drop prefix byte → 32-byte x-only
-}
-
-function numTo32b(num) { return Fn.toBytes(num); }
-function bytesToNum(b) { return bytesToNumberBE(b); }
-
-function cmpBytes(a, b) {
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] < b[i]) return -1;
-    if (a[i] > b[i]) return 1;
+export class InvalidContributionError extends Error {
+  constructor(signer, contrib) {
+    super(`invalid ${contrib}${signer === null ? '' : ` from signer ${signer}`}`);
+    this.name = 'InvalidContributionError';
+    this.signer = signer;
+    this.contrib = contrib;
   }
-  return 0;
 }
 
-function hasEvenY(point) {
-  return point.toAffine().y % 2n === 0n;
+const eq = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+const allZero = (b) => b.every((v) => v === 0);
+function u32be(v) { const b = new Uint8Array(4); new DataView(b.buffer).setUint32(0, v); return b; }
+function u64be(v) { const b = new Uint8Array(8); new DataView(b.buffer).setBigUint64(0, BigInt(v)); return b; }
+function xor(a, b) { const out = new Uint8Array(a.length); for (let i = 0; i < a.length; i++) out[i] = a[i] ^ b[i]; return out; }
+
+// cpoint: a 33-byte compressed point; anything else is an invalid contribution.
+function cpoint(b, signer, contrib) {
+  if (b.length !== 33 || (b[0] !== 2 && b[0] !== 3)) throw new InvalidContributionError(signer, contrib);
+  try { return pointFromBytes(b); } catch { throw new InvalidContributionError(signer, contrib); }
+}
+// cpoint_ext: as cpoint, with the all-zero encoding standing for the point at infinity.
+function cpointExt(b, signer, contrib) {
+  if (b.length === 33 && allZero(b)) return ZERO;
+  return cpoint(b, signer, contrib);
+}
+function cbytesExt(P) { return isInfinity(P) ? new Uint8Array(33) : cbytes(P); }
+
+// ---- Key aggregation (BIP327 KeyAgg, ApplyTweak) ----
+
+function hashKeys(pubkeys) { return taggedHash('KeyAgg list', concatBytes(...pubkeys)); }
+
+function getSecondKey(pubkeys) {
+  for (let j = 1; j < pubkeys.length; j++) if (!eq(pubkeys[j], pubkeys[0])) return pubkeys[j];
+  return new Uint8Array(33);
 }
 
-// 33-byte compressed serialization
-function cbytes(point) {
-  return point.toRawBytes(true);
+function keyAggCoeffInternal(pubkeys, pk, pk2) {
+  if (eq(pk, pk2)) return 1n;
+  return Fn.create(bytesToNum(taggedHash('KeyAgg coefficient', hashKeys(pubkeys), pk)));
 }
 
-function getPlainPubkey(point) {
-  return pointToBytes(point); // 32-byte x-only
-}
+export function keyAggCoeff(pubkeys, pk) { return keyAggCoeffInternal(pubkeys, pk, getSecondKey(pubkeys)); }
 
-// Deserialize 33-byte compressed point
-function pointFromBytes(bytes) {
-  return Point.fromHex(bytes);
-}
-
-// ---- KeyAgg (BIP-327 §4.3) ----
-
-function keyAggCoeff(pubkeys, pk, secondKeyIdx) {
-  if (secondKeyIdx !== -1 && cmpBytes(pk, pubkeys[secondKeyIdx]) === 0) {
-    return 1n;
-  }
-  const L = concatBytes(...pubkeys);
-  const h = taggedHash('KeyAgg coefficient', L, pk);
-  return Fn.create(bytesToNum(h));
-}
-
+// pubkeys: array of 33-byte plain public keys. Returns the KeyAgg context.
 export function keyAgg(pubkeys) {
-  // pubkeys: array of 32-byte x-only Uint8Arrays
-  let secondKeyIdx = -1;
-  for (let i = 1; i < pubkeys.length; i++) {
-    if (cmpBytes(pubkeys[i], pubkeys[0]) !== 0) {
-      secondKeyIdx = i;
-      break;
-    }
-  }
-
-  const keyCoeffs = [];
-  let Q = Point.ZERO;
+  const pk2 = getSecondKey(pubkeys);
+  let Q = ZERO;
   for (let i = 0; i < pubkeys.length; i++) {
-    const Pi = lift_x(bytesToNum(pubkeys[i]));
-    const ai = keyAggCoeff(pubkeys, pubkeys[i], secondKeyIdx);
-    keyCoeffs.push(ai);
-    Q = Q.add(Pi.multiply(ai));
+    const P = cpoint(pubkeys[i], i, 'pubkey');
+    Q = Q.add(mul(P, keyAggCoeffInternal(pubkeys, pubkeys[i], pk2)));
   }
-
-  // If Q has odd y, negate and track via gacc
-  const gacc = hasEvenY(Q) ? 1n : Fn.create(n - 1n);
-  if (!hasEvenY(Q)) Q = Q.negate();
-
-  const aggPubkey = getPlainPubkey(Q);
-  return { aggPoint: Q, aggPubkey, keyCoeffs, secondKeyIdx, gacc };
+  if (isInfinity(Q)) throw new Error('The aggregate public key cannot be infinity.');
+  return { Q, gacc: 1n, tacc: 0n, pubkeys };
 }
 
-// ---- NonceGen (BIP-327 §4.5) ----
+export function getXonlyPk(ctx) { return xbytes(ctx.Q); }
+export function getPlainPk(ctx) { return cbytes(ctx.Q); }
 
-export function nonceGen(secretKey, aggPubkey, msg) {
-  const sk = secretKey instanceof Uint8Array ? secretKey : numTo32b(secretKey);
-  const rand = crypto.getRandomValues(new Uint8Array(32));
+export function applyTweak(ctx, tweak, isXonly) {
+  if (tweak.length !== 32) throw new Error('The tweak must be a 32-byte array.');
+  const t = bytesToNum(tweak);
+  if (t >= n) throw new Error('The tweak must be less than n.');
+  const g = (isXonly && !hasEvenY(ctx.Q)) ? n - 1n : 1n;
+  const Q = mul(ctx.Q, g).add(mul(G, t));
+  if (isInfinity(Q)) throw new Error('The result of tweaking cannot be infinity.');
+  return { Q, gacc: Fn.create(g * ctx.gacc), tacc: Fn.create(t + g * ctx.tacc), pubkeys: ctx.pubkeys };
+}
 
-  const k1bytes = taggedHash('MuSig/nonce', rand, sk, aggPubkey, msg, new Uint8Array([0]));
-  const k2bytes = taggedHash('MuSig/nonce', rand, sk, aggPubkey, msg, new Uint8Array([1]));
+export function keyAggAndTweak(pubkeys, tweaks = [], isXonly = []) {
+  if (tweaks.length !== isXonly.length) throw new Error('tweaks and isXonly must have the same length');
+  let ctx = keyAgg(pubkeys);
+  for (let i = 0; i < tweaks.length; i++) ctx = applyTweak(ctx, tweaks[i], isXonly[i]);
+  return ctx;
+}
 
-  let k1 = Fn.create(bytesToNum(k1bytes));
-  let k2 = Fn.create(bytesToNum(k2bytes));
-  if (k1 === 0n) k1 = 1n;
-  if (k2 === 0n) k2 = 1n;
+// ---- Nonce generation (BIP327 NonceGen) ----
 
-  const R1 = G.multiply(k1);
-  const R2 = G.multiply(k2);
+function nonceHash(rand, pk, aggpk, i, msgPrefixed, extraIn) {
+  return taggedHash('MuSig/nonce', rand, new Uint8Array([pk.length]), pk, new Uint8Array([aggpk.length]), aggpk,
+    msgPrefixed, u32be(extraIn.length), extraIn, new Uint8Array([i]));
+}
 
-  const pubNonce = concatBytes(cbytes(R1), cbytes(R2)); // 66 bytes
-  const secNonce = concatBytes(numTo32b(k1), numTo32b(k2)); // 64 bytes
+// Deterministic given `rand`; nonceGen() below draws it. pk is the signer's
+// 33-byte plain key, aggpk the optional 32-byte x-only aggregate key, msg the
+// optional message (null = absent, which differs from an empty message).
+export function nonceGenInternal({ rand, sk = null, pk, aggpk = null, msg = null, extraIn = null }) {
+  if (rand.length !== 32) throw new Error('rand must be 32 bytes');
+  if (pk.length !== 33) throw new Error('pk must be a 33-byte plain public key');
+  if (sk !== null) {
+    if (sk.length !== 32) throw new Error('sk must be 32 bytes');
+    rand = xor(sk, taggedHash('MuSig/aux', rand));
+  }
+  aggpk = aggpk ?? new Uint8Array(0);
+  extraIn = extraIn ?? new Uint8Array(0);
+  const msgPrefixed = msg === null ? new Uint8Array([0]) : concatBytes(new Uint8Array([1]), u64be(msg.length), msg);
+  const k1 = Fn.create(bytesToNum(nonceHash(rand, pk, aggpk, 0, msgPrefixed, extraIn)));
+  const k2 = Fn.create(bytesToNum(nonceHash(rand, pk, aggpk, 1, msgPrefixed, extraIn)));
+  if (k1 === 0n || k2 === 0n) throw new Error('nonce derivation produced zero; retry with fresh randomness');
+  const pubNonce = concatBytes(cbytes(mul(G, k1)), cbytes(mul(G, k2)));
+  const secNonce = concatBytes(numTo32b(k1), numTo32b(k2), pk);
   return { secNonce, pubNonce };
 }
 
-// ---- NonceAgg (BIP-327 §4.6) ----
+export function nonceGen(opts) { return nonceGenInternal({ ...opts, rand: randomBytes(32) }); }
+
+// ---- Nonce aggregation (BIP327 NonceAgg) ----
 
 export function nonceAgg(pubNonces) {
-  const aggR = [];
+  const halves = [];
   for (let j = 0; j < 2; j++) {
-    let Rj = Point.ZERO;
+    let R = ZERO;
     for (let i = 0; i < pubNonces.length; i++) {
-      Rj = Rj.add(pointFromBytes(pubNonces[i].slice(j * 33, j * 33 + 33)));
+      if (pubNonces[i].length !== 66) throw new InvalidContributionError(i, 'pubnonce');
+      R = R.add(cpoint(pubNonces[i].slice(33 * j, 33 * j + 33), i, 'pubnonce'));
     }
-    aggR.push(Rj);
+    halves.push(cbytesExt(R));
   }
-  return concatBytes(cbytes(aggR[0]), cbytes(aggR[1]));
+  return concatBytes(...halves);
 }
 
-// ---- Session context helpers ----
+// ---- Session context (BIP327 SessionContext, GetSessionValues) ----
 
-function getNonceCoeff(aggNonce, aggPubkey, msg) {
-  const R1 = pointFromBytes(aggNonce.slice(0, 33));
-  const R2 = pointFromBytes(aggNonce.slice(33, 66));
-  const bHash = taggedHash('MuSig/noncecoef', aggNonce, aggPubkey, msg);
-  const b = Fn.create(bytesToNum(bHash));
-  const R = R1.add(R2.multiply(b));
-  return { R, b };
+// A session is { aggNonce, keyCtx, msg }: the aggregate nonce, the (tweaked)
+// key aggregation context and the message.
+export function sessionCtx(aggNonce, pubkeys, tweaks, isXonly, msg) {
+  return { aggNonce, keyCtx: keyAggAndTweak(pubkeys, tweaks, isXonly), msg };
 }
 
-function getSessionValues(aggNonce, aggPubkey, msg) {
-  const { R, b } = getNonceCoeff(aggNonce, aggPubkey, msg);
-  const negR = !hasEvenY(R);
-  const finalR = negR ? R.negate() : R;
-  const e = Fn.create(bytesToNum(
-    taggedHash('BIP0340/challenge', getPlainPubkey(finalR), aggPubkey, msg)
-  ));
-  return { R: finalR, b, e, negR };
+export function getSessionValues(session) {
+  const { Q, gacc, tacc } = session.keyCtx;
+  const aggNonce = session.aggNonce;
+  if (aggNonce.length !== 66) throw new InvalidContributionError(null, 'aggnonce');
+  const R1 = cpointExt(aggNonce.slice(0, 33), null, 'aggnonce');
+  const R2 = cpointExt(aggNonce.slice(33, 66), null, 'aggnonce');
+  const b = Fn.create(bytesToNum(taggedHash('MuSig/noncecoef', aggNonce, xbytes(Q), session.msg)));
+  let R = R1.add(mul(R2, b));
+  if (isInfinity(R)) R = G;
+  const e = Fn.create(bytesToNum(taggedHash('BIP0340/challenge', xbytes(R), xbytes(Q), session.msg)));
+  return { Q, gacc, tacc, b, R, e };
 }
 
+export function getSessionKeyAggCoeff(session, P) {
+  const pk = cbytes(P);
+  const { pubkeys } = session.keyCtx;
+  if (!pubkeys.some((k) => eq(k, pk))) throw new Error("The signer's pubkey must be included in the list of pubkeys.");
+  return keyAggCoeff(pubkeys, pk);
+}
 
-// A secret nonce signs exactly once. Two partial signatures under one nonce with
-// different aggregate nonces or challenges reveal the secret key by linear
-// algebra (BIP327, "the secnonce must never be used again"), so the nonce is
-// checked and zeroed here, whatever the caller does.
-function consumeSecNonce(secNonce) {
-  if (secNonce.every(b => b === 0)) throw new Error('secret nonce already used: generate fresh nonces before signing again');
+// ---- Signing (BIP327 Sign, PartialSigVerify, PartialSigAgg) ----
+
+// Reads and range-checks the secret nonce. With consume (the default) the nonce
+// is zeroed: a secret nonce signs exactly once, two partial signatures under
+// one nonce reveal the secret key.
+export function readSecNonce(secNonce, { consume = true } = {}) {
+  if (secNonce.length !== 97) throw new Error('secnonce must be 97 bytes');
+  // A consumed (zeroed) nonce fails the range check below.
   const k1 = bytesToNum(secNonce.slice(0, 32));
   const k2 = bytesToNum(secNonce.slice(32, 64));
-  secNonce.fill(0);
-  return { k1, k2 };
+  if (!(0n < k1 && k1 < n)) throw new Error('first secnonce value is out of range.');
+  if (!(0n < k2 && k2 < n)) throw new Error('second secnonce value is out of range.');
+  const pk = secNonce.slice(64, 97);
+  if (consume) secNonce.fill(0);
+  return { k1, k2, pk };
 }
 
-// ---- PartialSign (BIP-327 §4.8) ----
-
-export function partialSign(secretKey, secNonce, aggNonce, keyCoeffs, aggPubkey, msg, signerIndex, gacc) {
-  // gacc: accumulated negation factor from keyAgg (1n or n-1n)
-  const d_raw = bytesToNum(secretKey instanceof Uint8Array ? secretKey : numTo32b(secretKey));
-  const { k1, k2 } = consumeSecNonce(secNonce);
-
-  const { R, b, e, negR } = getSessionValues(aggNonce, aggPubkey, msg);
-
-  // Negate nonces if aggregated R had odd y
-  const k1_ = negR ? Fn.neg(k1) : k1;
-  const k2_ = negR ? Fn.neg(k2) : k2;
-
-  const a = keyCoeffs[signerIndex];
-
-  const P = G.multiply(d_raw);
-  const d_eff = hasEvenY(P) ? d_raw : Fn.neg(d_raw);
-  const d = Fn.create(gacc * d_eff);
-
-  // s = k1 + b*k2 + e*a*d (mod n)
-  const s = Fn.create(k1_ + Fn.create(b * k2_) + Fn.create(Fn.create(e * a) * d));
-  return numTo32b(s);
+export function sign(secNonce, sk, session, opts = {}) {
+  const { k1: k1_, k2: k2_, pk } = readSecNonce(secNonce, opts);
+  const { Q, gacc, b, R, e } = getSessionValues(session);
+  const k1 = hasEvenY(R) ? k1_ : n - k1_;
+  const k2 = hasEvenY(R) ? k2_ : n - k2_;
+  const d_ = bytesToNum(sk);
+  if (!(0n < d_ && d_ < n)) throw new Error('The secret key must be an integer in the range 1..n-1.');
+  const P = mul(G, d_);
+  if (!eq(cbytes(P), pk)) throw new Error("The signer's pubkey does not match the one in secnonce.");
+  const a = getSessionKeyAggCoeff(session, P);
+  const g = hasEvenY(Q) ? 1n : n - 1n;
+  const d = Fn.create(g * gacc * d_);
+  const s = Fn.create(k1 + b * k2 + e * a * d);
+  const psig = numTo32b(s);
+  const pubNonce = concatBytes(cbytes(mul(G, k1_)), cbytes(mul(G, k2_)));
+  if (!partialSigVerifyInternal(psig, pubNonce, cbytes(P), session)) throw new Error('partial signature self-check failed');
+  return psig;
 }
 
-// ---- PartialSigVerify (BIP-327 §4.9) ----
-
-export function partialSigVerify(partialSig, pubNonce, pubkey, aggNonce, keyCoeffs, aggPubkey, msg, signerIndex, gacc) {
-  const s = bytesToNum(partialSig);
-  const { R, b, e, negR } = getSessionValues(aggNonce, aggPubkey, msg);
-  const a = keyCoeffs[signerIndex];
-
-  const R1 = pointFromBytes(pubNonce.slice(0, 33));
-  const R2 = pointFromBytes(pubNonce.slice(33, 66));
-
-  let Re = R1.add(R2.multiply(b));
-  if (negR) Re = Re.negate();
-
-  const P = lift_x(bytesToNum(pubkey));
-
-  // Verify: s*G == Re + e * a * gacc * P
-  const lhs = G.multiply(s);
-  const eag = Fn.create(Fn.create(e * a) * gacc);
-  const rhs = Re.add(P.multiply(eag));
-
-  return lhs.equals(rhs);
+export function partialSigVerifyInternal(psig, pubNonce, pk, session) {
+  const s = bytesToNum(psig);
+  if (s >= n) return false;
+  const { Q, gacc, b, R, e } = getSessionValues(session);
+  const R1 = cpoint(pubNonce.slice(0, 33), null, 'pubnonce');
+  const R2 = cpoint(pubNonce.slice(33, 66), null, 'pubnonce');
+  let Re = R1.add(mul(R2, b));
+  if (!hasEvenY(R)) Re = Re.negate();
+  const P = cpoint(pk, null, 'pubkey');
+  const a = getSessionKeyAggCoeff(session, P);
+  const g = hasEvenY(Q) ? 1n : n - 1n;
+  return mul(G, s).equals(Re.add(mul(P, Fn.create(e * a * g * gacc))));
 }
 
-// ---- PartialSigAgg (BIP-327 §4.10) ----
+// BIP327 PartialSigVerify: validates every contribution, then checks signer i.
+export function partialSigVerify(psig, pubNonces, pubkeys, tweaks, isXonly, msg, i) {
+  if (pubNonces.length !== pubkeys.length) throw new Error('pubnonces and pubkeys must have the same length');
+  const aggNonce = nonceAgg(pubNonces);
+  const session = sessionCtx(aggNonce, pubkeys, tweaks, isXonly, msg);
+  return partialSigVerifyInternal(psig, pubNonces[i], pubkeys[i], session);
+}
 
-export function partialSigAgg(partialSigs, aggNonce, aggPubkey, msg) {
-  const { R } = getSessionValues(aggNonce, aggPubkey, msg);
-
+export function partialSigAgg(psigs, session) {
+  const { Q, tacc, R, e } = getSessionValues(session);
   let s = 0n;
-  for (const psig of partialSigs) {
-    s = Fn.create(s + bytesToNum(psig));
+  for (let i = 0; i < psigs.length; i++) {
+    const si = bytesToNum(psigs[i]);
+    if (si >= n) throw new InvalidContributionError(i, 'psig');
+    s = Fn.create(s + si);
   }
-
-  const sig = concatBytes(getPlainPubkey(R), numTo32b(s));
-  if (!schnorr.verify(sig, msg, aggPubkey)) {
-    throw new Error('partialSigAgg: aggregated signature is invalid');
-  }
-  return sig;
+  const g = hasEvenY(Q) ? 1n : n - 1n;
+  s = Fn.create(s + e * g * tacc);
+  return concatBytes(xbytes(R), numTo32b(s));
 }
 
-export {
-  Point, G, Fn, n,
-  taggedHash, pointToBytes, lift_x,
-  numTo32b, bytesToNum,
-  hasEvenY, cbytes, getPlainPubkey,
-  getNonceCoeff, getSessionValues, consumeSecNonce,
-};
+// ---- Deterministic signing (BIP327 DeterministicSign) ----
+
+export function detSign(sk, aggOtherNonce, pubkeys, tweaks, isXonly, msg, rand = null) {
+  const skPrime = rand === null ? sk : xor(sk, taggedHash('MuSig/aux', rand));
+  const aggpk = getXonlyPk(keyAggAndTweak(pubkeys, tweaks, isXonly));
+  const P = mul(G, bytesToNum(sk));
+  const pk = cbytes(P);
+  const kHash = (i) => taggedHash('MuSig/deterministic/nonce', skPrime, aggOtherNonce, aggpk, u64be(msg.length), msg, new Uint8Array([i]));
+  const k1 = Fn.create(bytesToNum(kHash(0)));
+  const k2 = Fn.create(bytesToNum(kHash(1)));
+  if (k1 === 0n || k2 === 0n) throw new Error('deterministic nonce is zero');
+  const pubNonce = concatBytes(cbytes(mul(G, k1)), cbytes(mul(G, k2)));
+  const secNonce = concatBytes(numTo32b(k1), numTo32b(k2), pk);
+  let aggNonce;
+  try { aggNonce = nonceAgg([pubNonce, aggOtherNonce]); } catch { throw new InvalidContributionError(null, 'aggothernonce'); }
+  const session = sessionCtx(aggNonce, pubkeys, tweaks, isXonly, msg);
+  return { pubNonce, psig: sign(secNonce, sk, session) };
+}
+
+export { G, ZERO, n, Fn, taggedHash, cbytes, xbytes, hasEvenY, bytesToNum, numTo32b, concatBytes };

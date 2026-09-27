@@ -14,14 +14,7 @@ import { schnorr } from '@noble/curves/secp256k1.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { nip19 } from 'nostr-tools';
 
-import {
-  keyAgg, nonceGen, nonceAgg,
-  taggedHash, lift_x, hasEvenY, getPlainPubkey, bytesToNum, numTo32b,
-} from './musig2.js';
-import {
-  adaptorSign, adaptorVerify, adaptorAggregate, completeAdaptorSig,
-  G, Fn, n, pointToBytes,
-} from './adaptor.js';
+import { xonlyKeyAgg, tapTweak, swapNonceGen, nonceAgg, adaptorSign, adaptorVerify, adaptorAggregate, completeAdaptorSig, adaptorExtract, adaptorSecretFromBytes, G, Fn, n, lift_x, hasEvenY, bytesToNum, numTo32b, pointToBytes, Point } from './adaptor.js';
 import {
   bitcoinRpc, createSwapOutput, verifySwapOutput,
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
@@ -32,7 +25,7 @@ import {
   fundFromGenesis, getBalance, waitForTx,
   web3, ONE_ALPH, PrivateKeyWallet,
 } from './alph-swap.js';
-import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
+import { computeTweakedPrivateKey } from './taproot-utils.js';
 import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS, claimFeeFor, checkClaimFee, CLAIM_CONFIRMATIONS } from './timelocks.js';
 
 const log = (phase, msg) => console.log(`[${phase}] ${msg}`);
@@ -115,13 +108,7 @@ export async function recoverSwap(bobSecHex) {
 
       // Extract t from on-chain BTC signature
       const onChainSig = await extractSignatureFromTx(state.btcClaimTxid);
-      const sOnChain = bytesToNum(onChainSig.slice(32, 64));
-      const sPreTweaked = bytesToNum(hexToBytes(state.btcAdaptorAgg.s));
-      const tacc = BigInt(state.tacc);
-      const btcE = BigInt(state.btcE);
-      const tweakContrib = Fn.create(tacc * btcE);
-      const tEffective = Fn.create(sOnChain - sPreTweaked - tweakContrib);
-      const extractedT = state.btcAdaptorAgg.negR ? Fn.neg(tEffective) : tEffective;
+      const extractedT = bytesToNum(adaptorExtract(onChainSig.slice(32, 64), hexToBytes(state.btcAdaptorAgg.s), state.btcAdaptorAgg.negR));
       log('RECOVER', `Extracted adaptor secret t: ${extractedT.toString(16).slice(0, 16)}...`);
 
       // Complete ALPH adaptor signature
@@ -240,7 +227,7 @@ async function main() {
 
   // P_swap = MuSig2_KeyAgg(P_alice, P_bob)
   const pubkeys = [alicePub, bobPub];
-  const { aggPubkey, keyCoeffs, gacc } = keyAgg(pubkeys);
+  const { aggPubkey, keyCtx } = xonlyKeyAgg(pubkeys);
   log('KEYAGG', `P_swap (aggregated key): ${bytesToHex(aggPubkey).slice(0, 16)}...`);
 
   // ============================================================
@@ -322,8 +309,6 @@ async function main() {
     alicePub: bytesToHex(alicePub),
     bobPub: bytesToHex(bobPub),
     aggPubkey: bytesToHex(aggPubkey),
-    keyCoeffs: keyCoeffs.map(k => k.toString()),
-    gacc: gacc.toString(),
     contractId: deployResult.contractId,
     contractAddress: deployResult.contractAddress,
     groupIndex: deployResult.groupIndex,
@@ -354,57 +339,49 @@ async function main() {
   );
   log('PRESIGN', `BTC sighash: ${bytesToHex(btcSighash).slice(0, 16)}... (claim fee ${claimFeeSat} sat)`);
 
-  const { Qbytes, tweakScalar, negated: tweakNeg } = computeTweakedKey(aggPubkey, p2tr.hash);
+  // BIP327 x-only tweak of the key context: partial signatures are made for Q and
+  // the aggregate includes the tweak's contribution.
+  const { Qbytes, keyCtx: btcKeyCtx } = tapTweak(keyCtx, p2tr.hash);
   log('PRESIGN', `Tweaked output key Q: ${bytesToHex(Qbytes).slice(0, 16)}...`);
 
-  // BIP-327 apply_tweak: when Q has odd Y, negate gacc and tweak
-  const gaccTweaked = tweakNeg ? Fn.create(n - gacc) : gacc;
-  const tacc = tweakNeg ? Fn.neg(tweakScalar) : tweakScalar;
-
-  // BTC adaptor presign: signers produce partials using Q as aggregate key,
-  // with gaccTweaked, then tacc*e is added after aggregation.
-  const btcNonceA = nonceGen(aliceSecBytes, Qbytes, btcSighash);
-  const btcNonceB = nonceGen(bobSecBytes, Qbytes, btcSighash);
+  const btcNonceA = swapNonceGen(aliceSecBytes, Qbytes, btcSighash);
+  const btcNonceB = swapNonceGen(bobSecBytes, Qbytes, btcSighash);
   const btcAggNonce = nonceAgg([btcNonceA.pubNonce, btcNonceB.pubNonce]);
 
   log('PRESIGN', 'Creating BTC adaptor pre-signatures (tweaked key)...');
-  const btcAdaptorA = adaptorSign(aliceSecBytes, btcNonceA.secNonce, btcAggNonce, keyCoeffs, Qbytes, btcSighash, T, 0, gaccTweaked);
-  const btcAdaptorB = adaptorSign(bobSecBytes, btcNonceB.secNonce, btcAggNonce, keyCoeffs, Qbytes, btcSighash, T, 1, gaccTweaked);
+  const btcAdaptorA = adaptorSign(aliceSecBytes, btcNonceA.secNonce, btcAggNonce, btcKeyCtx, btcSighash, T);
+  const btcAdaptorB = adaptorSign(bobSecBytes, btcNonceB.secNonce, btcAggNonce, btcKeyCtx, btcSighash, T);
 
-  const btcV1 = adaptorVerify(btcAdaptorA, btcNonceA.pubNonce, alicePub, btcAggNonce, keyCoeffs, Qbytes, btcSighash, T, 0, gaccTweaked);
-  const btcV2 = adaptorVerify(btcAdaptorB, btcNonceB.pubNonce, bobPub, btcAggNonce, keyCoeffs, Qbytes, btcSighash, T, 1, gaccTweaked);
+  const btcV1 = adaptorVerify(btcAdaptorA, btcNonceA.pubNonce, alicePub, btcAggNonce, btcKeyCtx, btcSighash, T);
+  const btcV2 = adaptorVerify(btcAdaptorB, btcNonceB.pubNonce, bobPub, btcAggNonce, btcKeyCtx, btcSighash, T);
   log('PRESIGN', `BTC adaptor presig Alice valid: ${btcV1}`);
   log('PRESIGN', `BTC adaptor presig Bob   valid: ${btcV2}`);
   if (!btcV1 || !btcV2) throw new Error('BTC adaptor verification failed');
 
-  const btcAdaptorAgg = adaptorAggregate([btcAdaptorA, btcAdaptorB], btcAggNonce, Qbytes, btcSighash, T);
+  const btcAdaptorAgg = adaptorAggregate([btcAdaptorA, btcAdaptorB], btcAggNonce, btcKeyCtx, btcSighash, T);
 
-  // Apply taproot tweak contribution: s_tweaked = s_agg + tacc * e (mod n)
-  const btcE = computeAdaptorChallenge(btcAggNonce, Qbytes, btcSighash, T);
-  const sTweaked = Fn.create(bytesToNum(btcAdaptorAgg.s) + Fn.create(tacc * btcE));
-  const btcTweakedAgg = { R: btcAdaptorAgg.R, s: numTo32b(sTweaked), negR: btcAdaptorAgg.negR };
-
-  log('PRESIGN', 'BTC adaptor pre-sig aggregated + tweaked');
+  const btcTweakedAgg = btcAdaptorAgg; // the taproot tweak is part of the BIP327 key context
+  log('PRESIGN', 'BTC adaptor pre-sig aggregated (tweaked key)');
 
   // --- ALPH claim: sign with untweaked P_swap (no taproot tweak needed) ---
   const alphMsg = hexToBytes(deployResult.contractId);
   log('PRESIGN', `ALPH message (contractId): ${deployResult.contractId.slice(0, 16)}...`);
 
-  const alphNonceA = nonceGen(aliceSecBytes, aggPubkey, alphMsg);
-  const alphNonceB = nonceGen(bobSecBytes, aggPubkey, alphMsg);
+  const alphNonceA = swapNonceGen(aliceSecBytes, aggPubkey, alphMsg);
+  const alphNonceB = swapNonceGen(bobSecBytes, aggPubkey, alphMsg);
   const alphAggNonce = nonceAgg([alphNonceA.pubNonce, alphNonceB.pubNonce]);
 
   log('PRESIGN', 'Creating ALPH adaptor pre-signatures...');
-  const alphAdaptorA = adaptorSign(aliceSecBytes, alphNonceA.secNonce, alphAggNonce, keyCoeffs, aggPubkey, alphMsg, T, 0, gacc);
-  const alphAdaptorB = adaptorSign(bobSecBytes, alphNonceB.secNonce, alphAggNonce, keyCoeffs, aggPubkey, alphMsg, T, 1, gacc);
+  const alphAdaptorA = adaptorSign(aliceSecBytes, alphNonceA.secNonce, alphAggNonce, keyCtx, alphMsg, T);
+  const alphAdaptorB = adaptorSign(bobSecBytes, alphNonceB.secNonce, alphAggNonce, keyCtx, alphMsg, T);
 
-  const alphV1 = adaptorVerify(alphAdaptorA, alphNonceA.pubNonce, alicePub, alphAggNonce, keyCoeffs, aggPubkey, alphMsg, T, 0, gacc);
-  const alphV2 = adaptorVerify(alphAdaptorB, alphNonceB.pubNonce, bobPub, alphAggNonce, keyCoeffs, aggPubkey, alphMsg, T, 1, gacc);
+  const alphV1 = adaptorVerify(alphAdaptorA, alphNonceA.pubNonce, alicePub, alphAggNonce, keyCtx, alphMsg, T);
+  const alphV2 = adaptorVerify(alphAdaptorB, alphNonceB.pubNonce, bobPub, alphAggNonce, keyCtx, alphMsg, T);
   log('PRESIGN', `ALPH adaptor presig Alice valid: ${alphV1}`);
   log('PRESIGN', `ALPH adaptor presig Bob   valid: ${alphV2}`);
   if (!alphV1 || !alphV2) throw new Error('ALPH adaptor verification failed');
 
-  const alphAdaptorAgg = adaptorAggregate([alphAdaptorA, alphAdaptorB], alphAggNonce, aggPubkey, alphMsg, T);
+  const alphAdaptorAgg = adaptorAggregate([alphAdaptorA, alphAdaptorB], alphAggNonce, keyCtx, alphMsg, T);
   log('PRESIGN', 'ALPH adaptor pre-sig aggregated');
 
   // Checkpoint: presigned — adaptor pre-sigs exchanged (critical for recovery)
@@ -416,15 +393,11 @@ async function main() {
       s: bytesToHex(btcAdaptorAgg.s),
       negR: btcAdaptorAgg.negR,
     },
-    btcTweakedS: bytesToHex(btcTweakedAgg.s),
     alphAdaptorAgg: {
       R: bytesToHex(alphAdaptorAgg.R),
       s: bytesToHex(alphAdaptorAgg.s),
       negR: alphAdaptorAgg.negR,
     },
-    tacc: tacc.toString(),
-    btcE: btcE.toString(),
-    gaccTweaked: gaccTweaked.toString(),
     Qbytes: bytesToHex(Qbytes),
     btcSighash: bytesToHex(btcSighash),
   });
@@ -459,12 +432,8 @@ async function main() {
   log('CLAIM', 'Bob extracts adaptor secret t from on-chain BTC signature...');
   const onChainSig = await extractSignatureFromTx(claimTxid);
 
-  // s_onchain = s_pretweaked + tacc*e + t_eff  =>  t_eff = s_onchain - s_pretweaked - tacc*e
-  const sOnChain = bytesToNum(onChainSig.slice(32, 64));
-  const sPreTweaked = bytesToNum(btcAdaptorAgg.s); // before tweak
-  const tweakContrib = Fn.create(tacc * btcE);
-  const tEffective = Fn.create(sOnChain - sPreTweaked - tweakContrib);
-  const extractedT = btcTweakedAgg.negR ? Fn.neg(tEffective) : tEffective;
+  // t = s_onchain - s_agg (negated back when R' was negated)
+  const extractedT = bytesToNum(adaptorExtract(onChainSig.slice(32, 64), btcAdaptorAgg.s, btcAdaptorAgg.negR));
 
   log('CLAIM', `Extracted t: ${extractedT.toString(16).slice(0, 16)}...`);
   log('CLAIM', `Original  t: ${t.toString(16).slice(0, 16)}...`);
@@ -547,7 +516,7 @@ async function testAlphRefund() {
 
   // Deploy contract with timeout already expired
   const compiled = await compileSwapContract();
-  const { aggPubkey } = keyAgg([alicePub, bobPub]);
+  const { aggPubkey } = xonlyKeyAgg([alicePub, bobPub]);
   const ALPH_AMOUNT = ONE_ALPH * 10n;
 
   const deploy = await deploySwapContract(
@@ -585,7 +554,7 @@ async function testBtcRefund() {
   log('REFUND-BTC', `Bob BTC: ${bobBtcAddr}`);
 
   // MuSig2 key aggregation
-  const { aggPubkey } = keyAgg([alicePub, bobPub]);
+  const { aggPubkey } = xonlyKeyAgg([alicePub, bobPub]);
 
   // Create taproot swap output with a locktime already in the past (median time past has passed it)
   const pastLocktime = nowSeconds() - 3 * 3600;
