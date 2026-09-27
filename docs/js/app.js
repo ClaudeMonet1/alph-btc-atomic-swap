@@ -10,6 +10,8 @@ import { SwapEngine } from './swap-engine.js';
 import { encryptTo as nip44EncryptTo, decryptFrom as nip44DecryptFrom } from './nip44.js';
 import { getMedianTimePast } from './btc.js';
 import { groupOfAddress, addressFromPublicKey } from './alph.js';
+import { btcConfirmationsFor } from './timelocks.js';
+import { BTC_NETWORK_NAME } from './btc.js';
 import { getP2TRAddress } from './btc.js';
 import { PetriNetViewer } from './petri-viewer.js';
 
@@ -193,7 +195,10 @@ function subscribe(subId, filters, onEvent) {
 
 const swapEventWaiters = [];
 
-function waitForSwapEvent(kind, sessionId, fromPub, predicate = null, timeoutMs = 600000) {
+// Waits that span the peer's on-chain confirmation wait (lock and claim phases)
+// get CHAIN_WAIT_MS; the timelocks are the real deadline, and the user can abort.
+const CHAIN_WAIT_MS = 6 * 3600 * 1000;
+function waitForSwapEvent(kind, sessionId, fromPub, predicate = null, timeoutMs = 3600_000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       const idx = swapEventWaiters.findIndex(w => w.resolve === resolve);
@@ -1262,7 +1267,7 @@ async function executeSetupAlice() {
     updateStep('setup', { info: `adaptorPoint sent. Waiting for Bob's BTC lock...` });
 
     const btcLockedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
-      (e) => JSON.parse(e.content).type === 'btc_locked');
+      (e) => JSON.parse(e.content).type === 'btc_locked', CHAIN_WAIT_MS);
     const btcLocked = JSON.parse(btcLockedEvent.content);
 
     if (btcLocked.btcLocktime === undefined) throw new Error('Peer runs an old version without the BTC locktime: refusing to lock');
@@ -1281,6 +1286,7 @@ async function executeLockAlice() {
 
   try {
     const deployResult = await state.engine.deployAlph();
+    saveSwapState(); // the contract is on chain: remember it before anything else can go wrong
     updateStep('lock', { info: `ALPH deployed: ${deployResult.contractAddress.slice(0, 16)}...\nSending to peer...` });
 
     const event = await createSwapSetup({
@@ -1291,7 +1297,7 @@ async function executeLockAlice() {
 
     updateStep('lock', { info: `ALPH: ${deployResult.contractAddress.slice(0, 16)}...\nWaiting for Bob to verify...` });
     await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
-      (e) => JSON.parse(e.content).type === 'verified');
+      (e) => JSON.parse(e.content).type === 'verified', CHAIN_WAIT_MS);
 
     state.engine.computeContext();
     updateStep('lock', { info: `ALPH: ${deployResult.contractAddress.slice(0, 16)}... | Bob verified | Context computed` });
@@ -1317,7 +1323,7 @@ async function executeClaimAlice() {
 
     updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nWaiting for Bob to claim ALPH...` });
     const alphClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
-      (e) => JSON.parse(e.content).type === 'alph_claimed');
+      (e) => JSON.parse(e.content).type === 'alph_claimed', CHAIN_WAIT_MS);
     const alphClaimed = JSON.parse(alphClaimedEvent.content);
     updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nBob claimed ALPH: ${alphClaimed.txid.slice(0, 16)}...`, alphClaimTxid: alphClaimed.txid });
     await refreshBalance();
@@ -1357,6 +1363,7 @@ async function executeLockBob() {
   try {
     const utxo = state.selectedUtxo || null;
     const lockResult = await state.engine.lockBtc(utxo);
+    saveSwapState(); // the lock is on chain: remember it before anything else can go wrong
     updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}... vout=${lockResult.vout}\nPublishing...` });
 
     const event = await createSwapSetup({
@@ -1365,9 +1372,10 @@ async function executeLockBob() {
     });
     await nostrPublish(event);
 
-    updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}...\nWaiting for Alice to deploy ALPH...` });
+    const lockDepth = btcConfirmationsFor(state.activeSwap.btcSat, BTC_NETWORK_NAME);
+    updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}...\nWaiting for Alice to deploy ALPH. She first waits for ${lockDepth} confirmation(s) of this lock (signet blocks come every 10 to 20 minutes), so this step takes a while.` });
     const alphDeployedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
-      (e) => JSON.parse(e.content).type === 'alph_deployed');
+      (e) => JSON.parse(e.content).type === 'alph_deployed', CHAIN_WAIT_MS);
     const alphDeployed = JSON.parse(alphDeployedEvent.content);
 
     if (alphDeployed.claimFeeSat === undefined || !alphDeployed.deployTxId) throw new Error('Peer runs an old version without the claim fee or the deployment txid: refusing to continue');
@@ -1393,7 +1401,7 @@ async function executeClaimBob() {
   try {
     updateStep('claim', { info: 'Waiting for Alice to claim BTC...' });
     const btcClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
-      (e) => JSON.parse(e.content).type === 'btc_claimed');
+      (e) => JSON.parse(e.content).type === 'btc_claimed', CHAIN_WAIT_MS);
     const btcClaimed = JSON.parse(btcClaimedEvent.content);
 
     state.engine.btcClaimTxid = btcClaimed.txid;
@@ -1930,7 +1938,11 @@ function renderRecoveryActions(checkpoint) {
   const alphEmpty = state.stepData._alphContractEmpty;
   let html = `<div id="timeout-display" style="width:100%; font-size:11px; color:#8b949e; margin-bottom:8px;"></div>`;
 
-  if (checkpoint === 'locked') {
+  if (checkpoint === 'btc_locked') {
+    html += `<button class="sm primary" id="recovery-resume-btn">Resume Swap</button> `;
+    html += `<span style="color:#8b949e; font-size:12px">BTC locked; Alice had not deployed yet. Resume waits for her contract (peer must be online).</span> `;
+    html += `<button class="sm danger" id="recovery-refund-btc-btn" disabled>Refund BTC</button> `;
+  } else if (checkpoint === 'locked') {
     html += `<button class="sm primary" id="recovery-resume-btn">Resume Swap</button> `;
     if (role === 'alice') {
       if (alphEmpty) {
@@ -2119,6 +2131,14 @@ async function resumeSwapFromLocked() {
 
   const { role } = state.activeSwap;
   try {
+    // The lock step was interrupted (Bob waiting for Alice's contract, or Alice
+    // waiting for Bob's verification): re-run it. lockBtc/deployAlph reuse what
+    // is already on chain, and retryStep continues with the following steps.
+    if (state.stepData.lock?.status !== 'done') {
+      if (state.stepData.setup?.status !== 'done') updateStep('setup', { status: 'done' });
+      await retryStep('lock');
+      return;
+    }
     // Context should already be computed from rehydrate, but ensure it
     if (!state.engine.ctx) state.engine.computeContext();
 
