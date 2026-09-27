@@ -14,7 +14,9 @@
     "vendor:check": "node scripts/vendor.mjs --check",
     "smoke:web": "node scripts/smoke-web.mjs",
     "test:bip327": "node test/bip327.test.mjs",
-    "compile:contract": "node scripts/compile-contract.mjs"
+    "compile:contract": "node scripts/compile-contract.mjs",
+    "test:keys": "node test/keys.test.mjs",
+    "test:vault": "node scripts/vault-test.mjs"
   },
   "keywords": [
     "alephium",

@@ -16,6 +16,7 @@ import { BTC_NETWORK_NAME } from './btc.js';
 import { getP2TRAddress } from './btc.js';
 import { BUILD } from './build.js';
 import { deriveKeys, legacyKeys } from './keys.js';
+import { deriveVaultKey, newSalt, sealString, openString, saltOf } from './vault.js';
 
 // GitHub Pages caches every file for ten minutes: a tab opened before a deploy
 // runs the old modules. Compare the module build id with version.json fetched
@@ -1793,8 +1794,12 @@ function resetSwap() {
 // Auto-Connect
 // ============================================================
 
-const STORAGE_KEY = 'btc-alph-swap-nsec';
+const STORAGE_KEY = 'btc-alph-swap-nsec';           // plaintext secret (no passphrase)
+const STORAGE_KEY_ENC = 'btc-alph-swap-nsec-enc';   // vault record (passphrase set)
 const BACKUP_CONFIRMED_KEY = 'btc-alph-swap-backup-confirmed';
+// Session vault key (AES-GCM, derived from the passphrase); null when no passphrase is set.
+let vaultKey = null, vaultSalt = null;
+const hasPassphrase = () => !!localStorage.getItem(STORAGE_KEY_ENC);
 const SWAP_STATE_KEY = 'btc-alph-swap-state';
 const PROCESSED_OFFERS_KEY = 'btc-alph-swap-processed';
 
@@ -1817,8 +1822,28 @@ function markOfferProcessed(offerId) {
   localStorage.setItem(PROCESSED_OFFERS_KEY, JSON.stringify(arr));
 }
 
-// A stored key is never replaced: it may hold funds.
-function getOrCreateNsec() {
+// A stored key is never replaced: it may hold funds. With a passphrase set, the
+// secret is only available after the vault is opened; a cancelled prompt leaves
+// the page locked (nothing is deleted).
+async function loadOrCreateNsec(statusEl) {
+  const encRaw = localStorage.getItem(STORAGE_KEY_ENC);
+  if (encRaw) {
+    const record = JSON.parse(encRaw);
+    for (;;) {
+      const pass = prompt('This wallet is protected by a passphrase. Enter it to unlock (Cancel keeps the page locked):');
+      if (pass === null) throw new Error('Wallet locked: reload and enter the passphrase to use it.');
+      if (statusEl) statusEl.textContent = 'Unlocking...';
+      try {
+        const salt = saltOf(record);
+        const key = await deriveVaultKey(pass, salt);
+        const hex = await openString(key, record);
+        if (hex.length !== 64) throw new Error('bad record');
+        vaultKey = key; vaultSalt = salt;
+        localStorage.removeItem(STORAGE_KEY); // a plaintext copy has no business next to the vault
+        return hex;
+      } catch { alert('Wrong passphrase.'); }
+    }
+  }
   const hex = localStorage.getItem(STORAGE_KEY);
   if (hex && hex.length === 64) return hex;
   // Any secret works: the Alephium key is derived from it into the target group (keys.js).
@@ -1827,6 +1852,38 @@ function getOrCreateNsec() {
   const fresh = bytesToHex(sec);
   localStorage.setItem(STORAGE_KEY, fresh);
   return fresh;
+}
+
+// Set, change or remove the passphrase. The secret and the current swap state are re-sealed.
+async function setPassphrase() {
+  if (hasPassphrase()) {
+    if (!confirm('A passphrase is set. Remove it and store the key in clear again?')) return;
+    localStorage.setItem(STORAGE_KEY, bytesToHex(state.secBytes));
+    localStorage.removeItem(STORAGE_KEY_ENC);
+    vaultKey = null; vaultSalt = null;
+    saveSwapState();
+    addLogMsg('system', 'Passphrase removed: the key is stored in clear in this browser.', 'System');
+  } else {
+    const p1 = prompt('Choose a passphrase (at least 8 characters). It encrypts your key and swap state in this browser. Losing it means losing access unless you have backed up the nsec.');
+    if (p1 === null) return;
+    if (p1.length < 8) { alert('At least 8 characters.'); return; }
+    const p2 = prompt('Repeat the passphrase:');
+    if (p2 !== p1) { alert('The passphrases differ.'); return; }
+    const salt = newSalt();
+    const key = await deriveVaultKey(p1, salt);
+    const record = await sealString(key, salt, bytesToHex(state.secBytes));
+    localStorage.setItem(STORAGE_KEY_ENC, JSON.stringify(record));
+    localStorage.removeItem(STORAGE_KEY);
+    vaultKey = key; vaultSalt = salt;
+    saveSwapState();
+    addLogMsg('system', 'Passphrase set: the key and the swap state are now encrypted at rest (PBKDF2-SHA256, AES-256-GCM).', 'System');
+  }
+  initPassphraseButton();
+}
+
+function initPassphraseButton() {
+  const btn = document.getElementById('passphrase-btn');
+  if (btn) btn.textContent = hasPassphrase() ? '\u{1F512} Passphrase set' : 'Set passphrase';
 }
 
 const groupOfPub = (pubHex) => groupOfAddress(addressFromPublicKey(pubHex, 'bip340-schnorr'));
@@ -1885,18 +1942,33 @@ function saveSwapState() {
       activeSwap: state.activeSwap,
       stepData: state.stepData,
     };
-    localStorage.setItem(SWAP_STATE_KEY, JSON.stringify(data));
+    const json = JSON.stringify(data);
+    if (vaultKey) {
+      // sealed asynchronously; writes are serialised so the latest state wins
+      saveQueue = saveQueue.then(async () => {
+        const record = await sealString(vaultKey, vaultSalt, json);
+        localStorage.setItem(SWAP_STATE_KEY, 'enc:' + JSON.stringify(record));
+      }).catch((e) => console.warn('Failed to seal swap state:', e));
+    } else {
+      localStorage.setItem(SWAP_STATE_KEY, json);
+    }
   } catch (e) {
     console.warn('Failed to save swap state:', e);
   }
 }
+let saveQueue = Promise.resolve();
 
-function loadSwapState() {
+async function loadSwapState() {
   try {
     const raw = localStorage.getItem(SWAP_STATE_KEY);
     if (!raw) return null;
+    if (raw.startsWith('enc:')) {
+      if (!vaultKey) throw new Error('sealed swap state but no vault key');
+      return JSON.parse(await openString(vaultKey, JSON.parse(raw.slice(4))));
+    }
     return JSON.parse(raw);
-  } catch {
+  } catch (e) {
+    addLogMsg('system', `Saved swap state could not be read: ${e.message}`, 'Error');
     return null;
   }
 }
@@ -2355,8 +2427,9 @@ async function autoConnect() {
   errorEl.classList.add('hidden');
 
   try {
-    const nsecHex = getOrCreateNsec();
+    const nsecHex = await loadOrCreateNsec(statusEl);
     state.secBytes = hexToBytes(nsecHex);
+    initPassphraseButton();
 
     statusEl.textContent = 'Deriving identity...';
     // One secret, three keys: Nostr identity = the secret; Bitcoin and Alephium
@@ -2401,7 +2474,7 @@ async function autoConnect() {
     checkLegacyFunds();
 
     // Check for saved swap state to recover
-    const savedSwap = loadSwapState();
+    const savedSwap = await loadSwapState();
     if (savedSwap) {
       addLogMsg('system', 'Found saved swap state, recovering...', 'System');
       await recoverSwap(savedSwap);
@@ -2530,6 +2603,7 @@ document.getElementById('reset-key-btn').addEventListener('click', () => {
   const input = prompt(msg);
   if (input !== 'RESET') return;
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(STORAGE_KEY_ENC);
   localStorage.removeItem(BACKUP_CONFIRMED_KEY);
   location.reload();
 });
@@ -2783,6 +2857,8 @@ function initBackupState() {
     warning.classList.remove('hidden-warn');
   }
 }
+
+document.getElementById('passphrase-btn').addEventListener('click', () => { setPassphrase().catch((e) => addLogMsg('system', `Passphrase change failed: ${e.message}`, 'Error')); });
 
 document.getElementById('backup-btn').addEventListener('click', () => {
   const confirmed = confirm(
