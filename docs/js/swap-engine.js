@@ -16,12 +16,12 @@ import {
   sweepBtc as sweepBtcTx,
 } from './btc.js';
 import {
-  compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
+  compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState, verifyDeployment, ALPH_NETWORK,
   getBalance, waitForTx, transferAlph,
   web3, ONE_ALPH, addressFromPublicKey, groupOfAddress,
 } from './alph.js';
 import { computeTweakedPrivateKey } from './taproot-utils.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, MIN_LOCK_CONFIRMATIONS, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, CLAIM_VBYTES, REFUND_VBYTES, CLAIM_CONFIRMATIONS } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, btcConfirmationsFor, alphConfirmationsFor, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, CLAIM_VBYTES, REFUND_VBYTES } from './timelocks.js';
 
 // ============================================================
 // Shared context computation
@@ -309,7 +309,7 @@ export class SwapEngine {
   // ── Swap: Verify BTC (Alice) ──
   // Bob's chosen refund locktime must lie within the accepted window; the ALPH
   // timeout is derived from it so that Alice's refund opens after Bob's. The
-  // lock must be confirmed (MIN_LOCK_CONFIRMATIONS) before Alice locks anything:
+  // lock must be confirmed to the depth the amount calls for before Alice locks anything:
   // an unconfirmed lock is Bob's to replace. After the wait the window is
   // checked again, since confirmation may have eaten into it.
 
@@ -325,7 +325,7 @@ export class SwapEngine {
     const { aggPubkey } = xonlyKeyAgg(pubkeys);
     const { address: swapBtcAddress } = createSwapOutput(aggPubkey, peerPub, btcLocktime);
     const { confirmations } = await verifySwapOutput(txid, swapBtcAddress, this.btcAmount, {
-      minConfirmations: MIN_LOCK_CONFIRMATIONS, pollMs: LOCK_CONFIRMATION_POLL_MS, timeoutMs: LOCK_CONFIRMATION_TIMEOUT_MS, onProgress,
+      minConfirmations: btcConfirmationsFor(this.btcSat), pollMs: LOCK_CONFIRMATION_POLL_MS, timeoutMs: LOCK_CONFIRMATION_TIMEOUT_MS, onProgress,
     });
     checkBtcLocktime(btcLocktime);
 
@@ -369,11 +369,15 @@ export class SwapEngine {
 
   // ── Swap: Verify ALPH (Bob) ──
 
-  async verifyAlph(contractId, contractAddress, claimFeeSat) {
+  async verifyAlph(contractId, contractAddress, claimFeeSat, deployTxId, onProgress = null) {
     checkClaimFee(claimFeeSat, this.btcSat);
     this.claimFeeSat = claimFeeSat;
     this.contractId = contractId;
     this.contractAddress = contractAddress;
+
+    // The deployment must be the transaction that created this contract and be
+    // deep enough that a reorganisation cannot remove what Bob pre-signs against.
+    await verifyDeployment(deployTxId, contractAddress, alphConfirmationsFor(this.btcSat, ALPH_NETWORK), { onProgress });
 
     const compiled = await compileSwapContract();
     this.compiled = compiled;
@@ -587,10 +591,11 @@ export class SwapEngine {
 
     // Alice's claim must be confirmed before Bob spends the ALPH (a reorganised claim
     // would otherwise leave Alice with nothing); the 12 h margin leaves ample time.
+    const claimDepth = btcConfirmationsFor(this.btcSat);
     for (;;) {
       const c = await getConfirmations(btcClaimTxid);
-      if (onProgress) onProgress(c, CLAIM_CONFIRMATIONS);
-      if (c >= CLAIM_CONFIRMATIONS) break;
+      if (onProgress) onProgress(c, claimDepth);
+      if (c >= claimDepth) break;
       await new Promise(r => setTimeout(r, LOCK_CONFIRMATION_POLL_MS));
     }
 
