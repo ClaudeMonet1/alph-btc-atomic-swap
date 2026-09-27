@@ -51,11 +51,21 @@ export async function estimateFee(vBytes = 150) {
 // Esplora's recommended fees lag the mempool on signet (a live run saw
 // halfHourFee 1 while blocks cleared at 3 to 6 sat/vB), so take the larger of
 // the fastest recommendation and the median of the next projected block.
+// Signet blocks are small and the mempool.space projections assume full-size
+// blocks, so /v1/fees/recommended said 1 sat/vB while miners only included
+// 3 sat/vB and above (two live runs stalled on this). The rate is therefore the
+// largest of the recommendation, the next-block projection and the 25th
+// percentile fee rate of recent mined blocks (median over six: what miners actually took).
 export async function estimateFeeRate() {
   const fees = await esploraApi('/v1/fees/recommended');
-  let nextBlockMedian = 0;
+  let nextBlockMedian = 0, minedFloor = 0;
   try { const blocks = await esploraApi('/v1/fees/mempool-blocks'); nextBlockMedian = blocks?.[0]?.medianFee || 0; } catch {}
-  return Math.max(1, Math.ceil(Math.max(fees.fastestFee || 0, fees.halfHourFee || 0, nextBlockMedian)));
+  try {
+    const recent = await esploraApi('/v1/blocks');
+    const p25s = (recent || []).slice(0, 6).map((b) => b.extras?.feeRange?.[2] || 0).sort((a, b) => a - b);
+    minedFloor = p25s.length ? p25s[Math.floor(p25s.length / 2)] : 0; // median over the six blocks: one expensive block does not set the price
+  } catch {}
+  return Math.max(1, Math.ceil(Math.max(fees.fastestFee || 0, fees.halfHourFee || 0, nextBlockMedian, minedFloor)));
 }
 
 export async function getUtxos(address) {
