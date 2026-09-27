@@ -30,6 +30,11 @@ const selftest = await page.evaluate(async () => {
     return { total: results.length, failed: results.filter((r) => !r.ok).map((r) => `${r.name}: ${r.problem}`) };
   } catch (e) { return { total: 0, failed: ['self-test did not run: ' + (e.message || e)] }; }
 });
+// The compiled contract artifact must load and match the embedded source
+const artifact = await page.evaluate(async () => {
+  try { const m = await import(new URL('./js/alph.js', location.href).href); const c = await m.compileSwapContract(); return { codeHash: c.contract.codeHash, bytecodeLen: c.contract.bytecode.length }; }
+  catch (e) { return { error: e.message || String(e) }; }
+});
 await browser.close();
 const npub = (state.text.match(/npub1[a-z0-9]{20,}/) || [])[0];
 const btc = (state.text.match(/tb1p[a-z0-9]{20,}/) || [])[0];
@@ -40,7 +45,8 @@ console.log('relay status     :', state.relayStatus);
 console.log('key in storage   :', state.hasNsec);
 console.log('identity shown   :', { npub: npub?.slice(0, 16), btc: btc?.slice(0, 12), alph: alph?.slice(0, 12) });
 console.log('bip327 self-test :', selftest.failed.length ? selftest.failed : `${selftest.total} checks passed`);
+console.log('contract artifact:', artifact.error ? artifact.error : `codeHash ${artifact.codeHash.slice(0, 16)}..., ${artifact.bytecodeLen / 2} bytes`);
 console.log('console (last 8) :'); for (const l of console_.slice(-8)) console.log('  ' + l.slice(0, 160));
-const ok = errors.length === 0 && failed.length === 0 && npub && btc && state.hasNsec && selftest.total > 0 && selftest.failed.length === 0;
+const ok = errors.length === 0 && failed.length === 0 && npub && btc && state.hasNsec && selftest.total > 0 && selftest.failed.length === 0 && !artifact.error;
 console.log(ok ? '\nWEB SMOKE OK' : '\nWEB SMOKE FAILED');
 process.exit(ok ? 0 : 1);

@@ -6,6 +6,7 @@ import alphWeb3 from '@alephium/web3';
 const { web3, ONE_ALPH, DUST_AMOUNT, addressFromPublicKey, groupOfAddress, buildContractByteCode, buildScriptByteCode } = alphWeb3;
 import { schnorr } from '@noble/curves/secp256k1';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
+import { sha256 } from '@noble/hashes/sha256';
 import { verifyUnsignedTx } from './alph-verify.js';
 
 const ALPH_NODE_URL = 'https://node.testnet.alephium.org';
@@ -92,18 +93,23 @@ TxScript RefundSwap(htlc: AtomicSwap) {
 
 // ---- Compile ----
 
+// The public testnet node refuses the compile endpoint from browsers (CORS
+// preflight 403), so the browser loads the artifact compiled by
+// scripts/compile-contract.mjs (docs/contracts/atomic-swap.json) and checks
+// that it was compiled from the source embedded here. Both parties therefore
+// use identical bytecode.
+let compiledCache = null;
 export async function compileSwapContract() {
-  const result = await nodeApi('/contracts/compile-project', 'POST', {
-    code: SWAP_CONTRACT_SOURCE,
-  });
-  const contract = result.contracts.find(c => c.name === 'AtomicSwap');
-  const claimScript = result.scripts.find(s => s.name === 'ClaimSwap');
-  const refundScript = result.scripts.find(s => s.name === 'RefundSwap');
-  if (!contract || !claimScript || !refundScript) {
-    throw new Error('Compilation failed: missing contract/script. Got: ' +
-      JSON.stringify({ contracts: result.contracts.map(c => c.name), scripts: result.scripts.map(s => s.name) }));
-  }
-  return { contract, claimScript, refundScript, structs: result.structs || [] };
+  if (compiledCache) return compiledCache;
+  const res = await fetch(new URL('../contracts/atomic-swap.json', import.meta.url));
+  if (!res.ok) throw new Error(`cannot load the compiled contract artifact: HTTP ${res.status}`);
+  const artifact = await res.json();
+  const sourceHash = bytesToHex(sha256(new TextEncoder().encode(SWAP_CONTRACT_SOURCE)));
+  if (artifact.sourceSha256 !== sourceHash) throw new Error('compiled contract artifact does not match the embedded contract source: run npm run compile:contract');
+  const { contract, claimScript, refundScript, structs } = artifact;
+  if (!contract?.bytecode || !claimScript?.bytecodeTemplate || !refundScript?.bytecodeTemplate) throw new Error('compiled contract artifact is incomplete');
+  compiledCache = { contract, claimScript, refundScript, structs: structs || [] };
+  return compiledCache;
 }
 
 // ---- Deploy ----

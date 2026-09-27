@@ -1,0 +1,64 @@
+{
+  "sourceSha256": "9bdd080bdf7ded08f0599971e3e773f57f45310a5fba3400038fbf1aaadfc842",
+  "compiledAt": "2026-09-27T08:29:31.381Z",
+  "nodeVersion": "v4.7.0",
+  "contract": {
+    "name": "AtomicSwap",
+    "bytecode": "0402144028010201010007d3650bba3fb1ce00160085ce01b0010200000008d3920288f656ce03340c7bce02b0",
+    "codeHash": "2a8d313c2c32a39c8984fb233a30a9144f181c1266c8e7a452ddfeec0234cd2b",
+    "fields": {
+      "names": [
+        "swapKey",
+        "claimAddress",
+        "refundAddress",
+        "timeout"
+      ],
+      "types": [
+        "ByteVec",
+        "Address",
+        "Address",
+        "U256"
+      ],
+      "isMutable": [
+        false,
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "claimScript": {
+    "name": "ClaimSwap",
+    "bytecodeTemplate": "01010300000005{1}0d0c{0}0100",
+    "fields": {
+      "names": [
+        "htlc",
+        "sig"
+      ],
+      "types": [
+        "AtomicSwap",
+        "ByteVec"
+      ],
+      "isMutable": [
+        false,
+        false
+      ]
+    }
+  },
+  "refundScript": {
+    "name": "RefundSwap",
+    "bytecodeTemplate": "010103000000040c0c{0}0101",
+    "fields": {
+      "names": [
+        "htlc"
+      ],
+      "types": [
+        "AtomicSwap"
+      ],
+      "isMutable": [
+        false
+      ]
+    }
+  },
+  "structs": []
+}
