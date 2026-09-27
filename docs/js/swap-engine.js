@@ -576,6 +576,8 @@ export class SwapEngine {
   // ── Swap: Bump the claim (Alice) ──
   // The claim's output is Alice's own P2TR: a child spending it pays for the parent.
 
+  async getClaimConfirmations() { return this.btcClaimTxid ? getConfirmations(this.btcClaimTxid) : 0; }
+
   async bumpClaimFee() {
     if (!this.btcClaimTxid) throw new Error('no claim to bump');
     if (await getConfirmations(this.btcClaimTxid) > 0) throw new Error('claim already confirmed');

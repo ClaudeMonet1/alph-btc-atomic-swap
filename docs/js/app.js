@@ -8,7 +8,8 @@ import { bech32 } from 'bech32';
 import qrcode from 'qrcode-generator';
 import { SwapEngine } from './swap-engine.js';
 import { encryptTo as nip44EncryptTo, decryptFrom as nip44DecryptFrom } from './nip44.js';
-import { getMedianTimePast } from './btc.js';
+import { getMedianTimePast, estimateFeeRate } from './btc.js';
+import { CLAIM_VBYTES } from './timelocks.js';
 import { groupOfAddress, addressFromPublicKey } from './alph.js';
 import { btcConfirmationsFor } from './timelocks.js';
 import { BTC_NETWORK_NAME } from './btc.js';
@@ -1360,6 +1361,28 @@ async function executeLockAlice() {
   }
 }
 
+// While Alice's claim is unconfirmed, bump it (child pays for parent) if the
+// fee floor has moved above its rate: Bob claims the ALPH only once the claim
+// is confirmed, and the signet floor moved 1 -> 6 sat/vB during a live run.
+function watchClaimFee(claimTxid) {
+  let bumped = false;
+  const started = Date.now();
+  const timer = setInterval(async () => {
+    try {
+      if (bumped || Date.now() - started < 5 * 60_000) return;
+      if (await state.engine.getClaimConfirmations() > 0) { clearInterval(timer); return; }
+      const need = await estimateFeeRate();
+      const have = state.engine.claimFeeSat / CLAIM_VBYTES;
+      if (need <= have) return;
+      bumped = true;
+      const r = await state.engine.bumpClaimFee();
+      addLogMsg('claim', `Claim ${claimTxid.slice(0, 12)}... paid ${have.toFixed(1)} sat/vB, the floor is ${need}: bumped with child ${r.txid.slice(0, 16)}... (${r.childFee} sat, ${r.feeRate} sat/vB)`, 'You');
+      updateStep('claim', { info: `BTC claimed: ${claimTxid.slice(0, 16)}... (fee bumped: ${r.feeRate} sat/vB)\nWaiting for Bob to claim ALPH...` });
+    } catch (e) { addLogMsg('claim', `Fee bump check failed: ${e.message}`, 'Error'); }
+  }, 60_000);
+  return () => clearInterval(timer);
+}
+
 async function executeClaimAlice() {
   const { sessionId, peerPubHex } = state.activeSwap;
 
@@ -1375,8 +1398,12 @@ async function executeClaimAlice() {
     await nostrPublish(event);
 
     updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nWaiting for Bob to claim ALPH...` });
-    const alphClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
-      (e) => JSON.parse(e.content).type === 'alph_claimed', CHAIN_WAIT_MS);
+    const stopWatch = watchClaimFee(result.txid);
+    let alphClaimedEvent;
+    try {
+      alphClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
+        (e) => JSON.parse(e.content).type === 'alph_claimed', CHAIN_WAIT_MS);
+    } finally { stopWatch(); }
     const alphClaimed = JSON.parse(alphClaimedEvent.content);
     updateStep('claim', { info: `BTC claimed: ${result.txid.slice(0, 16)}...\nBob claimed ALPH: ${alphClaimed.txid.slice(0, 16)}...`, alphClaimTxid: alphClaimed.txid });
     await refreshBalance();
