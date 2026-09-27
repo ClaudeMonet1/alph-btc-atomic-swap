@@ -12,7 +12,8 @@
     "reset": "rm -rf devnet/bitcoin/regtest devnet/alephium/.alephium .swap-state.json && echo 'Chain data and swap state cleared.'",
     "vendor": "node scripts/vendor.mjs",
     "vendor:check": "node scripts/vendor.mjs --check",
-    "smoke:web": "node scripts/smoke-web.mjs"
+    "smoke:web": "node scripts/smoke-web.mjs",
+    "test:bip327": "node test/bip327.test.mjs"
   },
   "keywords": [
     "alephium",

@@ -11,11 +11,10 @@
 // src/atomic-swap.js.
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
-import { keyAgg, nonceGen, nonceAgg, hasEvenY, bytesToNum, numTo32b } from '../src/musig2.js';
-import { adaptorSign, adaptorVerify, adaptorAggregate, completeAdaptorSig, adaptorExtract, G, Fn, n, pointToBytes } from '../src/adaptor.js';
-import { bitcoinRpc, createSwapOutput, buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx, mineBlocks, extractSignatureFromTx, REGTEST, bitcoin } from '../src/btc-swap.js';
+import { xonlyKeyAgg, tapTweak, swapNonceGen, nonceAgg, adaptorSign, adaptorVerify, adaptorAggregate, completeAdaptorSig, adaptorExtract, adaptorSecretFromBytes, G, Fn, n, lift_x, hasEvenY, bytesToNum, numTo32b, pointToBytes, Point } from '../src/adaptor.js';
+import { bitcoinRpc, createSwapOutput, buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx, mineBlocks, extractSignatureFromTx, REGTEST, bitcoin, mineMatureCoinbase } from '../src/btc-swap.js';
 import { compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState, fundFromGenesis, getBalance, waitForTx, web3, ONE_ALPH, PrivateKeyWallet, addressFromPublicKey, groupOfAddress } from '../src/alph-swap.js';
-import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from '../src/taproot-utils.js';
+import { computeTweakedPrivateKey } from '../src/taproot-utils.js';
 import { btcLocktimeNow, alphTimeoutBounds } from '../src/timelocks.js';
 
 const log = (who, m) => console.log(`[${who}] ${m}`);
@@ -34,17 +33,15 @@ const bobBtc = bitcoin.payments.p2tr({ internalPubkey: Buffer.from(bobPub), netw
 
 await waitForTx((await fundFromGenesis(aliceW.address, ONE_ALPH * 100n)).txId);
 await waitForTx((await fundFromGenesis(bobW.address, ONE_ALPH * 5n)).txId);
-const hashes = await bitcoinRpc('generatetoaddress', [101, bobBtc]);
-const cb = (await bitcoinRpc('getblock', [hashes[0], 2])).tx[0];
-const cbVout = cb.vout.findIndex(o => o.scriptPubKey.address === bobBtc);
-const cbSat = Math.round(cb.vout[cbVout].value * 1e8);
+const coinbase = await mineMatureCoinbase(bobBtc, 50_100_000); // fails clearly when the regtest subsidy has halved too far
+const cb = { txid: coinbase.txid }; const cbVout = coinbase.vout; const cbSat = coinbase.amountSat;
 
 // Alice's adaptor secret, normalised as the swap does
 let tBytes = schnorr.utils.randomSecretKey();
 let t = bytesToNum(tBytes);
 let T = G.multiply(t);
 if (!hasEvenY(T)) { T = T.negate(); t = Fn.neg(t); tBytes = numTo32b(t); }
-const { aggPubkey, keyCoeffs, gacc } = keyAgg([alicePub, bobPub]);
+const { aggPubkey, keyCtx } = xonlyKeyAgg([alicePub, bobPub]);
 
 // ---- Bob locks 0.5 BTC with the swap's default refund locktime (24 h)
 const btcLocktime = btcLocktimeNow();
@@ -80,24 +77,20 @@ console.log('The remainder replays the old attack with the check bypassed, to sh
 
 // ---- Pre-signatures exchanged as in the swap
 const { sighash: btcSighash } = buildClaimTx(fundTxid, fundVout, BTC_SAT, aliceBtc, internalPubkey, scriptTree);
-const { Qbytes, tweakScalar, negated } = computeTweakedKey(aggPubkey, p2tr.hash);
-const gaccT = negated ? Fn.create(n - gacc) : gacc;
-const tacc = negated ? Fn.neg(tweakScalar) : tweakScalar;
-const nA = nonceGen(aliceSec, Qbytes, btcSighash), nB = nonceGen(bobSec, Qbytes, btcSighash);
+const { Qbytes, keyCtx: btcKeyCtx } = tapTweak(keyCtx, p2tr.hash);
+const nA = swapNonceGen(aliceSec, Qbytes, btcSighash), nB = swapNonceGen(bobSec, Qbytes, btcSighash);
 const aggNonce = nonceAgg([nA.pubNonce, nB.pubNonce]);
-const psA = adaptorSign(aliceSec, nA.secNonce, aggNonce, keyCoeffs, Qbytes, btcSighash, T, 0, gaccT);
-const psB = adaptorSign(bobSec, nB.secNonce, aggNonce, keyCoeffs, Qbytes, btcSighash, T, 1, gaccT);
-if (!adaptorVerify(psB, nB.pubNonce, bobPub, aggNonce, keyCoeffs, Qbytes, btcSighash, T, 1, gaccT)) throw new Error('bob presig');
-const agg = adaptorAggregate([psA, psB], aggNonce, Qbytes, btcSighash, T);
-const e = computeAdaptorChallenge(aggNonce, Qbytes, btcSighash, T);
-const sTweaked = numTo32b(Fn.create(bytesToNum(agg.s) + Fn.create(tacc * e)));
+const psA = adaptorSign(aliceSec, nA.secNonce, aggNonce, btcKeyCtx, btcSighash, T);
+const psB = adaptorSign(bobSec, nB.secNonce, aggNonce, btcKeyCtx, btcSighash, T);
+if (!adaptorVerify(psB, nB.pubNonce, bobPub, aggNonce, btcKeyCtx, btcSighash, T)) throw new Error('bob presig');
+const agg = adaptorAggregate([psA, psB], aggNonce, btcKeyCtx, btcSighash, T);
 const alphMsg = hexToBytes(deploy.contractId);
-const mA = nonceGen(aliceSec, aggPubkey, alphMsg), mB = nonceGen(bobSec, aggPubkey, alphMsg);
+const mA = swapNonceGen(aliceSec, aggPubkey, alphMsg), mB = swapNonceGen(bobSec, aggPubkey, alphMsg);
 const alphAggNonce = nonceAgg([mA.pubNonce, mB.pubNonce]);
 const alphAgg = adaptorAggregate([
-  adaptorSign(aliceSec, mA.secNonce, alphAggNonce, keyCoeffs, aggPubkey, alphMsg, T, 0, gacc),
-  adaptorSign(bobSec, mB.secNonce, alphAggNonce, keyCoeffs, aggPubkey, alphMsg, T, 1, gacc),
-], alphAggNonce, aggPubkey, alphMsg, T);
+  adaptorSign(aliceSec, mA.secNonce, alphAggNonce, keyCtx, alphMsg, T),
+  adaptorSign(bobSec, mB.secNonce, alphAggNonce, keyCtx, alphMsg, T),
+], alphAggNonce, keyCtx, alphMsg, T);
 log('BOTH', 'adaptor pre-signatures exchanged and verified');
 
 // ---- Alice refunds her ALPH first ...
@@ -107,7 +100,7 @@ const after = (await getBalance(aliceW.address)).balance;
 log('ALICE', `refunded ALPH: +${Number(after - before) / 1e18} ALPH`);
 
 // ---- ... then claims Bob's BTC with the completed adaptor signature (no timelock on the key path)
-const sig = completeAdaptorSig(agg.R, sTweaked, tBytes, agg.negR);
+const sig = completeAdaptorSig(agg.R, agg.s, tBytes, agg.negR);
 if (!schnorr.verify(sig, btcSighash, Qbytes)) throw new Error('completed sig invalid');
 const { psbt } = buildClaimTx(fundTxid, fundVout, BTC_SAT, aliceBtc, internalPubkey, scriptTree);
 const claimTxid = await broadcastTx(finalizeKeyPathSpend(psbt, sig));
@@ -117,7 +110,7 @@ log('ALICE', `claimed ${claimed.value} BTC in ${claimTxid} (Bob's CLTV refund op
 
 // ---- Bob extracts t and tries to claim ALPH: the contract no longer exists
 const onChain = await extractSignatureFromTx(claimTxid);
-const tExtracted = adaptorExtract(onChain.slice(32, 64), sTweaked, agg.negR);
+const tExtracted = adaptorExtract(onChain.slice(32, 64), agg.s, agg.negR);
 log('BOB', `extracted t ${bytesToHex(tExtracted).slice(0, 16)}... (matches: ${bytesToHex(tExtracted) === bytesToHex(tBytes)})`);
 const alphSig = completeAdaptorSig(alphAgg.R, alphAgg.s, tExtracted, alphAgg.negR);
 if (!schnorr.verify(alphSig, alphMsg, aggPubkey)) throw new Error('alph sig invalid');

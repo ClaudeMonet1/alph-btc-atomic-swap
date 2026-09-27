@@ -184,9 +184,11 @@ Two deployment modes share the same crypto core:
 
 | File | What it does |
 |------|-------------|
-| `src/musig2.js` | BIP-327 MuSig2: key aggregation, nonce gen, partial sign/verify/agg |
-| `src/adaptor.js` | Adaptor signatures: sign, verify, aggregate, complete, extract |
-| `src/taproot-utils.js` | Taproot tweaked keys, adaptor challenge, tweaked private key |
+| `src/curve.js` | Curve shim over `@noble/curves` 2.x (the browser build has its own over 1.x) |
+| `src/musig2.js` | BIP327 MuSig2, checked against the BIP's vectors: KeyAgg, ApplyTweak, NonceGen, NonceAgg, Sign, PartialSigVerify, PartialSigAgg, DeterministicSign |
+| `src/adaptor.js` | Swap layer: x-only party keys, taproot tweak of the key context, adaptor sign/verify/aggregate/complete/extract |
+| `src/taproot-utils.js` | Tweaked private key for the parties' own P2TR outputs |
+| `src/bip327-selftest.js` | BIP327 vector runner and adaptor round trip (Node: `npm run test:bip327`; browser: part of `npm run smoke:web`) |
 | `src/btc-swap.js` | Bitcoin taproot: P2TR output, key-path spend, refund via script-path |
 | `src/alph-swap.js` | Alephium contract: compile, deploy, claim, refund, verify state + bytecode |
 
@@ -199,11 +201,11 @@ Two deployment modes share the same crypto core:
 | `docs/js/swap-engine.js` | All swap logic as a client-side class (replaces server.js API) |
 | `docs/js/btc.js` | Bitcoin module (Esplora-only, signet-hardcoded) |
 | `docs/js/alph.js` | Alephium module (testnet-hardcoded) |
-| `docs/js/musig2.js` | BIP-327 MuSig2 (browser-compatible, uses `secp256k1.ProjectivePoint`) |
-| `docs/js/adaptor.js` | Adaptor signatures (browser-compatible) |
-| `docs/js/taproot-utils.js` | Taproot key tweaking (browser-compatible) |
+| `docs/js/curve.js` | Curve shim over the vendored `@noble/curves` 1.x |
+| `docs/js/musig2.js`, `adaptor.js`, `taproot-utils.js`, `bip327-selftest.js` | Byte-identical to the `src/` files |
+| `docs/spec/bip327/` | BIP327 test vectors, served with the page for the browser self-test |
 
-All browser dependencies are loaded from esm.sh via import map — `@noble/curves`, `bitcoinjs-lib`, `@alephium/web3`, `bech32`. The Buffer polyfill is loaded before any modules via top-level `await`.
+Browser dependencies are bundled from the pinned packages into `docs/vendor/` with checksums (`npm run vendor`, `npm run vendor:check`) and mapped by the import map with an integrity block; nothing is fetched from a CDN. The Buffer polyfill is loaded before any modules via top-level `await`.
 
 ### CLI Tests
 

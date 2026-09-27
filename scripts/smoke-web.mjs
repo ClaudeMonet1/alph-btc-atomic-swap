@@ -21,6 +21,15 @@ const state = await page.evaluate(() => ({
   hasNsec: !!localStorage.getItem('btc-alph-swap-nsec'),
   text: document.body.innerText.slice(0, 4000),
 }));
+// BIP327 vectors and adaptor round trip, run by the browser build of musig2.js/adaptor.js
+const selftest = await page.evaluate(async () => {
+  try {
+    const m = await import(new URL('./js/bip327-selftest.js', location.href).href);
+    const load = (name) => fetch(new URL('./spec/bip327/' + name, location.href)).then((r) => r.json());
+    const results = [...await m.runVectors(load), ...m.runAdaptorRoundTrip(4)];
+    return { total: results.length, failed: results.filter((r) => !r.ok).map((r) => `${r.name}: ${r.problem}`) };
+  } catch (e) { return { total: 0, failed: ['self-test did not run: ' + (e.message || e)] }; }
+});
 await browser.close();
 const npub = (state.text.match(/npub1[a-z0-9]{20,}/) || [])[0];
 const btc = (state.text.match(/tb1p[a-z0-9]{20,}/) || [])[0];
@@ -30,7 +39,8 @@ console.log('failed requests  :', failed.length ? failed : 'none');
 console.log('relay status     :', state.relayStatus);
 console.log('key in storage   :', state.hasNsec);
 console.log('identity shown   :', { npub: npub?.slice(0, 16), btc: btc?.slice(0, 12), alph: alph?.slice(0, 12) });
+console.log('bip327 self-test :', selftest.failed.length ? selftest.failed : `${selftest.total} checks passed`);
 console.log('console (last 8) :'); for (const l of console_.slice(-8)) console.log('  ' + l.slice(0, 160));
-const ok = errors.length === 0 && failed.length === 0 && npub && btc && state.hasNsec;
+const ok = errors.length === 0 && failed.length === 0 && npub && btc && state.hasNsec && selftest.total > 0 && selftest.failed.length === 0;
 console.log(ok ? '\nWEB SMOKE OK' : '\nWEB SMOKE FAILED');
 process.exit(ok ? 0 : 1);

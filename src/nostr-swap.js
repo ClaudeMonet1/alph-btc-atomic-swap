@@ -18,14 +18,7 @@ import { sha256 } from '@noble/hashes/sha256.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { nip19 } from 'nostr-tools';
 
-import {
-  keyAgg, nonceGen, nonceAgg,
-  lift_x, hasEvenY, bytesToNum, numTo32b,
-} from './musig2.js';
-import {
-  adaptorSign, adaptorVerify, adaptorAggregate, completeAdaptorSig, adaptorExtract,
-  G, Fn, n, pointToBytes,
-} from './adaptor.js';
+import { xonlyKeyAgg, tapTweak, swapNonceGen, nonceAgg, adaptorSign, adaptorVerify, adaptorAggregate, completeAdaptorSig, adaptorExtract, adaptorSecretFromBytes, G, Fn, n, lift_x, hasEvenY, bytesToNum, numTo32b, pointToBytes, Point } from './adaptor.js';
 import {
   bitcoinRpc, createSwapOutput, verifySwapOutput,
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
@@ -36,7 +29,7 @@ import {
   fundFromGenesis, getBalance, waitForTx,
   web3, ONE_ALPH, PrivateKeyWallet, addressFromPublicKey, groupOfAddress,
 } from './alph-swap.js';
-import { computeTweakedKey, computeAdaptorChallenge, computeTweakedPrivateKey } from './taproot-utils.js';
+import { computeTweakedPrivateKey } from './taproot-utils.js';
 import { startRelay } from './relay.js';
 import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS, claimFeeFor, checkClaimFee, REFUND_VBYTES, CLAIM_CONFIRMATIONS } from './timelocks.js';
 import {
@@ -85,7 +78,7 @@ function generateSameGroupKeys() {
 // Called after both locks are in place and verified.
 function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcSat, contractId, btcLocktime, claimFeeSat }) {
   const pubkeys = [alicePub, bobPub];
-  const { aggPubkey, keyCoeffs, gacc } = keyAgg(pubkeys);
+  const { aggPubkey, keyCtx } = xonlyKeyAgg(pubkeys);
 
   const { address: swapBtcAddress, internalPubkey, scriptTree, p2tr } =
     createSwapOutput(aggPubkey, bobPub, btcLocktime);  // Bob = refund path
@@ -94,9 +87,7 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
     internalPubkey: Buffer.from(alicePub), network: REGTEST,
   }).address;
 
-  const { Qbytes, tweakScalar, negated: tweakNeg } = computeTweakedKey(aggPubkey, p2tr.hash);
-  const gaccTweaked = tweakNeg ? Fn.create(n - gacc) : gacc;
-  const tacc = tweakNeg ? Fn.neg(tweakScalar) : tweakScalar;
+  const { Qbytes, keyCtx: btcKeyCtx } = tapTweak(keyCtx, p2tr.hash);
 
   const { sighash: btcSighash } = buildClaimTx(
     btcLockTxid, btcLockVout, btcSat, aliceBtcAddress, internalPubkey, scriptTree, claimFeeSat,
@@ -104,7 +95,7 @@ function computeSharedContext({ alicePub, bobPub, btcLockTxid, btcLockVout, btcS
   const alphMsg = hexToBytes(contractId);
 
   return {
-    aggPubkey, keyCoeffs, gacc, gaccTweaked, tacc,
+    aggPubkey, keyCtx, btcKeyCtx,
     Qbytes, btcSighash, alphMsg,
     swapBtcAddress, internalPubkey, scriptTree, p2tr,
     aliceBtcAddress, claimFeeSat,
@@ -154,7 +145,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   checkBtcLocktime(btcLocktime, minBtcLockSeconds === undefined ? {} : { minLockSeconds: minBtcLockSeconds });
   const alphTimeoutMs = alphTimeoutFor(btcLocktime);
   const pubkeys = [alicePub, bobPub];
-  const { aggPubkey } = keyAgg(pubkeys);
+  const { aggPubkey } = xonlyKeyAgg(pubkeys);
   const { address: swapBtcAddress } = createSwapOutput(aggPubkey, bobPub, btcLocktime);
   const { confirmations } = await verifySwapOutput(btcLocked.txid, swapBtcAddress, BTC_AMOUNT, { minConfirmations: MIN_LOCK_CONFIRMATIONS, pollMs: 2000 });
   checkBtcLocktime(btcLocktime, minBtcLockSeconds === undefined ? {} : { minLockSeconds: minBtcLockSeconds });
@@ -196,8 +187,8 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   });
 
   // ── NONCE: Commit ──
-  const btcNonceA = nonceGen(aliceSec, ctx.Qbytes, ctx.btcSighash);
-  const alphNonceA = nonceGen(aliceSec, ctx.aggPubkey, ctx.alphMsg);
+  const btcNonceA = swapNonceGen(aliceSec, ctx.Qbytes, ctx.btcSighash);
+  const alphNonceA = swapNonceGen(aliceSec, ctx.aggPubkey, ctx.alphMsg);
   const btcNonceHashA = bytesToHex(sha256(btcNonceA.pubNonce));
   const alphNonceHashA = bytesToHex(sha256(alphNonceA.pubNonce));
 
@@ -237,8 +228,8 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
 
   // ── PRESIG: Create and exchange ──
   log('ALICE', 'Creating adaptor pre-signatures...');
-  const btcAdaptorA = adaptorSign(aliceSec, btcNonceA.secNonce, btcAggNonce, ctx.keyCoeffs, ctx.Qbytes, ctx.btcSighash, T, 0, ctx.gaccTweaked);
-  const alphAdaptorA = adaptorSign(aliceSec, alphNonceA.secNonce, alphAggNonce, ctx.keyCoeffs, ctx.aggPubkey, ctx.alphMsg, T, 0, ctx.gacc);
+  const btcAdaptorA = adaptorSign(aliceSec, btcNonceA.secNonce, btcAggNonce, ctx.btcKeyCtx, ctx.btcSighash, T);
+  const alphAdaptorA = adaptorSign(aliceSec, alphNonceA.secNonce, alphAggNonce, ctx.keyCtx, ctx.alphMsg, T);
 
   await publish(ws, createSwapPresig(aliceSec, {
     sessionId, recipientPubHex: bobPubHex,
@@ -254,20 +245,18 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   const btcAdaptorB = hexToBytes(bobPresigs.btcPresig);
   const alphAdaptorB = hexToBytes(bobPresigs.alphPresig);
 
-  if (!adaptorVerify(btcAdaptorB, bobBtcNonce, bobPub, btcAggNonce, ctx.keyCoeffs, ctx.Qbytes, ctx.btcSighash, T, 1, ctx.gaccTweaked))
+  if (!adaptorVerify(btcAdaptorB, bobBtcNonce, bobPub, btcAggNonce, ctx.btcKeyCtx, ctx.btcSighash, T))
     throw new Error('Bob BTC adaptor verification failed');
-  if (!adaptorVerify(alphAdaptorB, bobAlphNonce, bobPub, alphAggNonce, ctx.keyCoeffs, ctx.aggPubkey, ctx.alphMsg, T, 1, ctx.gacc))
+  if (!adaptorVerify(alphAdaptorB, bobAlphNonce, bobPub, alphAggNonce, ctx.keyCtx, ctx.alphMsg, T))
     throw new Error('Bob ALPH adaptor verification failed');
   log('ALICE', 'Bob\'s pre-signatures verified');
 
   // Aggregate
-  const btcAdaptorAgg = adaptorAggregate([btcAdaptorA, btcAdaptorB], btcAggNonce, ctx.Qbytes, ctx.btcSighash, T);
-  const alphAdaptorAgg = adaptorAggregate([alphAdaptorA, alphAdaptorB], alphAggNonce, ctx.aggPubkey, ctx.alphMsg, T);
+  const btcAdaptorAgg = adaptorAggregate([btcAdaptorA, btcAdaptorB], btcAggNonce, ctx.btcKeyCtx, ctx.btcSighash, T);
+  const alphAdaptorAgg = adaptorAggregate([alphAdaptorA, alphAdaptorB], alphAggNonce, ctx.keyCtx, ctx.alphMsg, T);
 
   // Apply taproot tweak
-  const btcE = computeAdaptorChallenge(btcAggNonce, ctx.Qbytes, ctx.btcSighash, T);
-  const sTweaked = Fn.create(bytesToNum(btcAdaptorAgg.s) + Fn.create(ctx.tacc * btcE));
-  const btcTweakedAgg = { R: btcAdaptorAgg.R, s: numTo32b(sTweaked), negR: btcAdaptorAgg.negR };
+  const btcTweakedAgg = btcAdaptorAgg; // the taproot tweak is part of the BIP327 key context
 
   if (skipClaim) {
     log('ALICE', 'Skipping BTC claim (refund scenario)');
@@ -309,7 +298,6 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
     aliceAlphWallet, aliceBtcAddress,
     btcAdaptorAgg, alphAdaptorAgg, btcTweakedAgg,
     btcSighash: ctx.btcSighash, Qbytes: ctx.Qbytes,
-    gaccTweaked: ctx.gaccTweaked, tacc: ctx.tacc, btcE,
     fundTxid: btcLocked.txid, fundVout: btcLocked.vout,
     internalPubkey: ctx.internalPubkey, scriptTree: ctx.scriptTree, p2tr: ctx.p2tr, alphMsg: ctx.alphMsg,
   };
@@ -338,7 +326,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
 
   const T = lift_x(bytesToNum(hexToBytes(confirm.adaptorPoint)));
   const pubkeys = [alicePub, bobPub];
-  const { aggPubkey, keyCoeffs, gacc } = keyAgg(pubkeys);
+  const { aggPubkey, keyCtx } = xonlyKeyAgg(pubkeys);
 
   // ── SETUP: Lock BTC ──
   log('BOB', 'Creating Bitcoin taproot output...');
@@ -400,8 +388,8 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
   const aliceCommit = JSON.parse(aliceCommitEvent.content);
   log('BOB', 'Got Alice\'s nonce commitments');
 
-  const btcNonceB = nonceGen(bobSec, ctx.Qbytes, ctx.btcSighash);
-  const alphNonceB = nonceGen(bobSec, ctx.aggPubkey, ctx.alphMsg);
+  const btcNonceB = swapNonceGen(bobSec, ctx.Qbytes, ctx.btcSighash);
+  const alphNonceB = swapNonceGen(bobSec, ctx.aggPubkey, ctx.alphMsg);
   const btcNonceHashB = bytesToHex(sha256(btcNonceB.pubNonce));
   const alphNonceHashB = bytesToHex(sha256(alphNonceB.pubNonce));
 
@@ -445,15 +433,15 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
   const btcAdaptorA = hexToBytes(alicePresigs.btcPresig);
   const alphAdaptorA = hexToBytes(alicePresigs.alphPresig);
 
-  if (!adaptorVerify(btcAdaptorA, aliceBtcNonce, alicePub, btcAggNonce, ctx.keyCoeffs, ctx.Qbytes, ctx.btcSighash, T, 0, ctx.gaccTweaked))
+  if (!adaptorVerify(btcAdaptorA, aliceBtcNonce, alicePub, btcAggNonce, ctx.btcKeyCtx, ctx.btcSighash, T))
     throw new Error('Alice BTC adaptor verification failed');
-  if (!adaptorVerify(alphAdaptorA, aliceAlphNonce, alicePub, alphAggNonce, ctx.keyCoeffs, ctx.aggPubkey, ctx.alphMsg, T, 0, ctx.gacc))
+  if (!adaptorVerify(alphAdaptorA, aliceAlphNonce, alicePub, alphAggNonce, ctx.keyCtx, ctx.alphMsg, T))
     throw new Error('Alice ALPH adaptor verification failed');
   log('BOB', 'Alice\'s pre-signatures verified');
 
   log('BOB', 'Creating adaptor pre-signatures...');
-  const btcAdaptorB = adaptorSign(bobSec, btcNonceB.secNonce, btcAggNonce, ctx.keyCoeffs, ctx.Qbytes, ctx.btcSighash, T, 1, ctx.gaccTweaked);
-  const alphAdaptorB = adaptorSign(bobSec, alphNonceB.secNonce, alphAggNonce, ctx.keyCoeffs, ctx.aggPubkey, ctx.alphMsg, T, 1, ctx.gacc);
+  const btcAdaptorB = adaptorSign(bobSec, btcNonceB.secNonce, btcAggNonce, ctx.btcKeyCtx, ctx.btcSighash, T);
+  const alphAdaptorB = adaptorSign(bobSec, alphNonceB.secNonce, alphAggNonce, ctx.keyCtx, ctx.alphMsg, T);
 
   await publish(ws, createSwapPresig(bobSec, {
     sessionId, recipientPubHex: alicePubHex,
@@ -462,19 +450,17 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
   }));
 
   // Aggregate
-  const btcAdaptorAgg = adaptorAggregate([btcAdaptorA, btcAdaptorB], btcAggNonce, ctx.Qbytes, ctx.btcSighash, T);
-  const alphAdaptorAgg = adaptorAggregate([alphAdaptorA, alphAdaptorB], alphAggNonce, ctx.aggPubkey, ctx.alphMsg, T);
+  const btcAdaptorAgg = adaptorAggregate([btcAdaptorA, btcAdaptorB], btcAggNonce, ctx.btcKeyCtx, ctx.btcSighash, T);
+  const alphAdaptorAgg = adaptorAggregate([alphAdaptorA, alphAdaptorB], alphAggNonce, ctx.keyCtx, ctx.alphMsg, T);
 
   // Apply taproot tweak
-  const btcE = computeAdaptorChallenge(btcAggNonce, ctx.Qbytes, ctx.btcSighash, T);
-  const sTweaked = Fn.create(bytesToNum(btcAdaptorAgg.s) + Fn.create(ctx.tacc * btcE));
-  const btcTweakedAgg = { R: btcAdaptorAgg.R, s: numTo32b(sTweaked), negR: btcAdaptorAgg.negR };
+  const btcTweakedAgg = btcAdaptorAgg; // the taproot tweak is part of the BIP327 key context
 
   if (stopAfterPresign) {
     log('BOB', '*** Stopping after pre-sign ***');
     return {
       aggPubkey, btcAdaptorAgg, alphAdaptorAgg, btcTweakedAgg,
-      tacc: ctx.tacc, btcE, compiled,
+      compiled,
       contractId: alphDeployed.contractId,
       groupIndex: bobAlphWallet.group,
       bobAlphWallet,
@@ -517,7 +503,6 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
     aggPubkey, compiled, bobAlphWallet, bobBtcAddress,
     btcAdaptorAgg, alphAdaptorAgg, btcTweakedAgg,
     btcSighash: ctx.btcSighash, Qbytes: ctx.Qbytes,
-    gaccTweaked: ctx.gaccTweaked, tacc: ctx.tacc, btcE,
     fundTxid, fundVout, internalPubkey, scriptTree,
   };
 }
