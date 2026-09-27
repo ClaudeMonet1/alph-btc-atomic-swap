@@ -48,6 +48,10 @@ The contract uses `verifyBIP340Schnorr!(selfContractId!(), swapKey, sig)` to ver
 
 The contract holds ALPH and is destroyed on claim/refund via `destroySelf!()`, which sends all assets to the specified address.
 
+## Keys
+
+One secret, three keys (audit S12 and W9, 2026-09-27). The stored nsec is the Nostr identity. The Bitcoin key is `H_tag("alph-btc-swap/v1/btc", nsec)` and the Alephium key is `H_tag("alph-btc-swap/v1/alph", nsec || counter)` for the first counter whose address falls in group 1 (`keys.js`, same file in both builds). A Bitcoin signature (BIP341 sighash), an Alephium signature (transaction id) and a Nostr signature (event id) are therefore made by different keys and can never be mistaken for one another, and an imported nsec of any Alephium group can trade. Peers announce `keys: { btc, alph }` in offers, counters and accepts; the engine refuses a peer without them. Funds left on the previous single-key addresses are detected at load and can be moved with one click.
+
 ## Alephium Group Sharding
 
 Alephium uses 4-group sharding. A contract can only be called by accounts of its own group, and `destroySelf!` can only pay an address of its own group: the node rejects a payout to another group with `InvalidOutputGroupIndex` (checked on the devnet, `audit/group-constraint.test.mjs`). So Alice's refund address (the deployer, always in the contract's group) and Bob's claim address must be in the same group, otherwise Bob could never claim and Alice, who claims the BTC first, would end with both assets. This is enforced three times: the offer is refused when the peer's address is in another group, `initSwap` refuses such a peer, and Bob's contract verification checks that the claim address is in the contract's group. `refund()` may be called by anyone in the group once the timeout has passed and always pays `refundAddress`, so Alice does not need gas of her own to recover. The web app grinds every new key into `TARGET_ALPH_GROUP` (group 1) so that all its users can trade with each other. The Node demos constrain key generation so Alice and Bob end up in the same group:

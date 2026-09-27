@@ -15,6 +15,7 @@ import { btcConfirmationsFor } from './timelocks.js';
 import { BTC_NETWORK_NAME } from './btc.js';
 import { getP2TRAddress } from './btc.js';
 import { BUILD } from './build.js';
+import { deriveKeys, legacyKeys } from './keys.js';
 
 // GitHub Pages caches every file for ten minutes: a tab opened before a deploy
 // runs the old modules. Compare the module build id with version.json fetched
@@ -270,6 +271,7 @@ async function createOfferEvent({ offerId, direction, alphAmount, btcSat, expire
       btcSat,
       network: state.network,
       expiresAt,
+      keys: { btc: state.keys.btc.pubHex, alph: state.keys.alph.pubHex },
     }),
   });
 }
@@ -303,12 +305,13 @@ async function createCounterEvent({ offerId, offerEventId, offerCreator, index, 
       alphAmount: String(alphAmount),
       btcSat,
       message: message || '',
+      keys: { btc: state.keys.btc.pubHex, alph: state.keys.alph.pubHex },
     }),
   });
 }
 
 async function createAcceptEvent({ offerId, offerEventId, offerCreator, alphAmount, btcSat, counterparty }) {
-  const payload = { action: 'accept', offerId, alphAmount: String(alphAmount), btcSat };
+  const payload = { action: 'accept', offerId, alphAmount: String(alphAmount), btcSat, keys: { btc: state.keys.btc.pubHex, alph: state.keys.alph.pubHex } };
   if (counterparty) payload.counterparty = counterparty;
   return signEvent({
     kind: SWAP_OFFER_KIND,
@@ -520,6 +523,7 @@ function handleNewOffer(event, content) {
     counters: [],
     acceptEvent: null,
     isMine: event.pubkey === state.pubKeyHex,
+    keys: content.keys || null, // creator's { btc, alph } x-only keys; absent on an old build
   };
 
   state.offers.set(offerId, offer);
@@ -556,6 +560,7 @@ function handleCounter(event, content) {
     btcSat: content.btcSat,
     message: content.message || '',
     isMine: event.pubkey === state.pubKeyHex,
+    keys: content.keys || null,
   };
 
   offer.counters.push(counter);
@@ -572,7 +577,7 @@ function handleAcceptEvent(event, content) {
 
   if (offer.isMine) {
     const acceptor = content.counterparty || event.pubkey;
-    const groupProblem = acceptor === state.pubKeyHex ? null : peerGroupProblem(acceptor);
+    const groupProblem = acceptor === state.pubKeyHex ? null : peerGroupProblem(peerKeysFor(offer, event, content));
     if (groupProblem) { addLogMsg('system', `Ignoring accept of ${content.offerId.slice(0, 8)}... : ${groupProblem}`, 'System'); return; }
   }
 
@@ -951,17 +956,28 @@ async function publishOffer() {
 
 // The swap contract lives in one Alephium group and can only be called by, and
 // pay, addresses of that group; a peer in another group cannot trade with us.
-function peerGroupProblem(peerPubHex) {
-  const mine = groupOfAddress(addressFromPublicKey(state.pubKeyHex, 'bip340-schnorr'));
-  const theirs = groupOfAddress(addressFromPublicKey(peerPubHex, 'bip340-schnorr'));
+function peerGroupProblem(peerKeys) {
+  if (!peerKeys?.alph || !peerKeys?.btc) return 'peer did not announce its Bitcoin and Alephium keys (old build): it must reload';
+  const mine = state.engine.group;
+  let theirs;
+  try { theirs = groupOfPub(peerKeys.alph); } catch { return "peer's Alephium key is malformed"; }
   return theirs === mine ? null : `peer's Alephium address is in group ${theirs}, yours in group ${mine}`;
+}
+// The peer's keys for a swap: the creator's from the offer, the acceptor's from
+// the accept (or from its counter-offer when the creator accepted a counter).
+function peerKeysFor(offer, acceptEvent, acceptContent) {
+  if (offer.isMine) {
+    if (acceptContent.counterparty) return offer.counters.find((c) => c.pubkey === acceptContent.counterparty)?.keys || null;
+    return acceptContent.keys || null;
+  }
+  return offer.keys || null;
 }
 
 async function acceptOffer(offerId) {
   const offer = state.offers.get(offerId);
   if (!offer) return;
-  const groupProblem = peerGroupProblem(offer.pubkey);
-  if (groupProblem) { alert(`Cannot take this offer: ${groupProblem}. The swap contract cannot be claimed or refunded across groups.`); return; }
+  const groupProblem = peerGroupProblem(offer.keys);
+  if (groupProblem) { alert(`Cannot take this offer: ${groupProblem}.`); return; }
 
   // Acceptor role: sell_alph offer → acceptor is bob; buy_alph offer → acceptor is alice
   const role = offer.direction === 'sell_alph' ? 'bob' : 'alice';
@@ -1096,11 +1112,19 @@ function startSwapFromAccept(offer, acceptEvent, acceptContent) {
   const sessionId = acceptEvent.id;
   const alphAmount = acceptContent.alphAmount;
   const btcSat = acceptContent.btcSat;
+  const peerKeys = peerKeysFor(offer, acceptEvent, acceptContent);
+  if (!peerKeys?.btc || !peerKeys?.alph) {
+    addLogMsg('system', `Not starting swap ${sessionId.slice(0, 8)}...: the peer did not announce its Bitcoin and Alephium keys (old build). Both sides must run the current build.`, 'Error');
+    markOfferProcessed(offer.id);
+    return;
+  }
+  const peer = { nostrPubHex: peerPubHex, btcPubHex: peerKeys.btc, alphPubHex: peerKeys.alph };
 
   state.activeSwap = {
     offerId: offer.id,
     role,
     peerPubHex,
+    peer,
     sessionId,
     alphAmount,
     btcSat,
@@ -1305,7 +1329,7 @@ async function executeSetupAlice() {
   const btcAmount = btcSat / 1e8;
 
   try {
-    const initResult = state.engine.initSwap('alice', peerPubHex, btcAmount, String(alphAmount), sessionId);
+    const initResult = state.engine.initSwap('alice', state.activeSwap.peer || peerPubHex, btcAmount, String(alphAmount), sessionId);
     saveSwapState(); // the adaptor secret and the session survive a reload from here on
 
     state.stepData.setup = { ...state.stepData.setup, adaptorPoint: initResult.adaptorPoint };
@@ -1427,7 +1451,7 @@ async function executeSetupBob() {
       (e) => JSON.parse(e.content).type === 'confirm');
     const confirm = JSON.parse(confirmEvent.content);
 
-    state.engine.initSwap('bob', peerPubHex, btcAmount, String(alphAmount), sessionId);
+    state.engine.initSwap('bob', state.activeSwap.peer || peerPubHex, btcAmount, String(alphAmount), sessionId);
     state.engine.setAdaptorPoint(confirm.adaptorPoint);
     saveSwapState();
 
@@ -1755,7 +1779,7 @@ function resetSwap() {
   state.selectedUtxo = null;
 
   // Re-create engine for fresh swap state (keeps same keys)
-  state.engine = new SwapEngine(state.secBytes, hexToBytes(state.pubKeyHex));
+  state.engine = new SwapEngine(state.keys);
 
   document.getElementById('swap-placeholder').classList.remove('hidden');
   document.getElementById('swap-active').classList.add('hidden');
@@ -1793,31 +1817,44 @@ function markOfferProcessed(offerId) {
   localStorage.setItem(PROCESSED_OFFERS_KEY, JSON.stringify(arr));
 }
 
-const TARGET_ALPH_GROUP = 1;
-
-// A stored key is never replaced: it may hold funds. A new key is ground into the
-// target Alephium group so that both parties of a swap can call the same contract;
-// a stored key outside that group is kept and reported (keyGroupWarning).
+// A stored key is never replaced: it may hold funds.
 function getOrCreateNsec() {
   const hex = localStorage.getItem(STORAGE_KEY);
   if (hex && hex.length === 64) return hex;
-  // Grind until we find a key in the target ALPH group
+  // Any secret works: the Alephium key is derived from it into the target group (keys.js).
   const sec = new Uint8Array(32);
-  for (;;) {
-    crypto.getRandomValues(sec);
-    const pub = schnorr.getPublicKey(sec);
-    const addr = addressFromPublicKey(bytesToHex(pub), 'bip340-schnorr');
-    if (groupOfAddress(addr) === TARGET_ALPH_GROUP) break;
-  }
+  crypto.getRandomValues(sec);
   const fresh = bytesToHex(sec);
   localStorage.setItem(STORAGE_KEY, fresh);
   return fresh;
 }
 
-function keyGroupWarning(pubKeyHex) {
-  const group = groupOfAddress(addressFromPublicKey(pubKeyHex, 'bip340-schnorr'));
-  if (group === TARGET_ALPH_GROUP) return null;
-  return `Your key is in Alephium group ${group}; swaps on this page expect group ${TARGET_ALPH_GROUP}. The key was kept (it may hold funds): sweep it and reset to trade here.`;
+const groupOfPub = (pubHex) => groupOfAddress(addressFromPublicKey(pubHex, 'bip340-schnorr'));
+
+// Until 2026-09-27 the Nostr key was also the Bitcoin and Alephium key. Funds
+// left at those addresses are shown and can be moved to the derived addresses.
+async function checkLegacyFunds() {
+  try {
+    const legacy = new SwapEngine(legacyKeys(state.secBytes));
+    const bal = await legacy.getBalances();
+    const btcSat = bal.btcConfirmedSat + bal.btcUnconfirmedSat;
+    const alph = Number(bal.alph);
+    if (btcSat === 0 && alph === 0) return;
+    addLogMsg('system', `Funds on the previous single-key addresses: ${btcSat} sat at ${legacy.btcAddress}, ${alph} ALPH at ${legacy.alphAddress}. Use "Move legacy funds" to bring them to the new addresses.`, 'System');
+    const div = document.createElement('div');
+    div.style.cssText = 'background:#1f6feb;color:#fff;padding:8px;font-size:13px;text-align:center';
+    div.innerHTML = `Your keys changed on 2026-09-27 (one key per chain). The previous addresses still hold ${btcSat} sat and ${alph} ALPH. <button id="legacy-sweep-btn" class="sm" style="margin-left:8px">Move legacy funds</button>`;
+    document.body.prepend(div);
+    document.getElementById('legacy-sweep-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('legacy-sweep-btn'); btn.disabled = true; btn.textContent = 'Moving...';
+      try {
+        if (btcSat > 0) { const txid = await legacy.sweepBtc(state.btcAddress); addLogMsg('system', `Legacy BTC swept in ${txid}`, 'You'); }
+        if (alph > 0.01) { const txId = await legacy.sweepAlph(state.alphAddress); addLogMsg('system', `Legacy ALPH swept in ${txId}`, 'You'); }
+        div.textContent = 'Legacy funds moved; they appear at the new addresses once confirmed.';
+        setTimeout(refreshBalance, 5000);
+      } catch (e) { addLogMsg('system', `Legacy sweep failed: ${e.message}`, 'Error'); btn.disabled = false; btn.textContent = 'Move legacy funds'; }
+    });
+  } catch (e) { addLogMsg('system', `Legacy funds check failed: ${e.message}`, 'System'); }
 }
 
 function npubEncode(pubKeyHex) {
@@ -2320,16 +2357,16 @@ async function autoConnect() {
   try {
     const nsecHex = getOrCreateNsec();
     state.secBytes = hexToBytes(nsecHex);
-    const groupWarning = keyGroupWarning(bytesToHex(schnorr.getPublicKey(state.secBytes)));
-    if (groupWarning) setTimeout(() => addLogMsg('system', groupWarning, 'Warning'), 0);
 
     statusEl.textContent = 'Deriving identity...';
-    const pubKey = schnorr.getPublicKey(state.secBytes);
-    state.pubKeyHex = bytesToHex(pubKey);
+    // One secret, three keys: Nostr identity = the secret; Bitcoin and Alephium
+    // keys derived with domain separation, the Alephium one in the target group.
+    state.keys = deriveKeys(state.secBytes, groupOfPub);
+    state.pubKeyHex = state.keys.nostr.pubHex;
     state.npub = npubEncode(state.pubKeyHex);
 
     // Create the swap engine
-    state.engine = new SwapEngine(state.secBytes, pubKey);
+    state.engine = new SwapEngine(state.keys);
     state.btcAddress = state.engine.btcAddress;
     state.alphAddress = state.engine.alphAddress;
     state.network = 'testnet';
@@ -2361,6 +2398,7 @@ async function autoConnect() {
     updateRelayStatus();
     addLogMsg('system', `Connected via ${connected.length} relays: ${relayNames}`, 'System');
     checkBuild();
+    checkLegacyFunds();
 
     // Check for saved swap state to recover
     const savedSwap = loadSwapState();
