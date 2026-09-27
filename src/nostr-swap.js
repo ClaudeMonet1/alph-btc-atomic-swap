@@ -25,13 +25,13 @@ import {
   mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin, estimateFeeRate, mineMatureCoinbase, getConfirmations,
 } from './btc-swap.js';
 import {
-  compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
+  compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState, verifyDeployment, getAlphNetwork,
   fundFromGenesis, getBalance, waitForTx,
   web3, ONE_ALPH, PrivateKeyWallet, addressFromPublicKey, groupOfAddress,
 } from './alph-swap.js';
 import { computeTweakedPrivateKey } from './taproot-utils.js';
 import { startRelay } from './relay.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS, claimFeeFor, checkClaimFee, REFUND_VBYTES, CLAIM_CONFIRMATIONS } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, btcConfirmationsFor, alphConfirmationsFor, claimFeeFor, checkClaimFee, REFUND_VBYTES } from './timelocks.js';
 import {
   connectRelay, publish, waitForSwapEvent, waitForEvent,
   createPublicEvent, createSwapSetup, createSwapNonce, createSwapPresig, createSwapClaim,
@@ -147,7 +147,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   const pubkeys = [alicePub, bobPub];
   const { aggPubkey } = xonlyKeyAgg(pubkeys);
   const { address: swapBtcAddress } = createSwapOutput(aggPubkey, bobPub, btcLocktime);
-  const { confirmations } = await verifySwapOutput(btcLocked.txid, swapBtcAddress, BTC_AMOUNT, { minConfirmations: MIN_LOCK_CONFIRMATIONS, pollMs: 2000 });
+  const { confirmations } = await verifySwapOutput(btcLocked.txid, swapBtcAddress, BTC_AMOUNT, { minConfirmations: btcConfirmationsFor(BTC_SAT), pollMs: 2000 });
   checkBtcLocktime(btcLocktime, minBtcLockSeconds === undefined ? {} : { minLockSeconds: minBtcLockSeconds });
   log('ALICE', `BTC output verified with ${confirmations} confirmation(s)`);
 
@@ -172,6 +172,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
     contractId: deployResult.contractId,
     contractAddress: deployResult.contractAddress,
     claimFeeSat,
+    deployTxId: deployResult.txId,
   }));
 
   // ── SETUP: Wait for Bob's verification ──
@@ -279,7 +280,7 @@ async function aliceSideSwap(ws, aliceSec, bobPubHex, sessionId, {
   const { psbt } = buildClaimTx(btcLocked.txid, btcLocked.vout, BTC_SAT, aliceBtcAddress, ctx.internalPubkey, ctx.scriptTree, claimFeeSat);
   const signedTxHex = finalizeKeyPathSpend(psbt, btcFinalSig);
   const claimTxid = await broadcastTx(signedTxHex);
-  await mineBlocks(1, aliceBtcAddress);
+  await mineBlocks(btcConfirmationsFor(BTC_SAT), aliceBtcAddress);
   log('ALICE', `BTC claimed! txid: ${claimTxid}`);
 
   await publish(ws, createSwapClaim(aliceSec, {
@@ -342,7 +343,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
   const fundSig = schnorr.sign(fundSighash, bobTweakedKey);
   const fundTxHex = finalizeKeyPathSpend(fundPsbt, fundSig);
   const fundTxid = await broadcastTx(fundTxHex);
-  await mineBlocks(1, bobBtcAddress);
+  await mineBlocks(btcConfirmationsFor(BTC_SAT), bobBtcAddress);
 
   const fundRawTx = await bitcoinRpc('getrawtransaction', [fundTxid, true]);
   const fundVout = fundRawTx.vout.findIndex(o => o.scriptPubKey.address === swapBtcAddress);
@@ -360,7 +361,8 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
   log('BOB', `ALPH contract: ${alphDeployed.contractAddress}, proposed claim fee ${alphDeployed.claimFeeSat} sat`);
   checkClaimFee(alphDeployed.claimFeeSat, BTC_SAT);
 
-  // ── Verify ALPH contract ──
+  // ── Verify ALPH contract: the deployment created it and is deep enough, then its state ──
+  await verifyDeployment(alphDeployed.deployTxId, alphDeployed.contractAddress, alphConfirmationsFor(BTC_SAT, getAlphNetwork().name), { pollMs: 1000 });
   const compiled = await compileSwapContract();
   const aliceAlphAddress = addressFromPublicKey(alicePubHex, 'bip340-schnorr');
   const bounds = alphTimeoutBounds(btcLocktime);
@@ -486,7 +488,7 @@ async function bobSideSwap(ws, bobSec, alicePubHex, sessionId, {
     throw new Error('ALPH completed signature invalid');
 
   // Claim ALPH once Alice's claim is confirmed (a reorganised claim would leave her with nothing)
-  while ((await getConfirmations(btcClaimed.txid)) < CLAIM_CONFIRMATIONS) await new Promise(r => setTimeout(r, 2000));
+  while ((await getConfirmations(btcClaimed.txid)) < btcConfirmationsFor(BTC_SAT)) await new Promise(r => setTimeout(r, 2000));
   await new Promise(r => setTimeout(r, 3000));
   log('BOB', 'Calling swap() on Alephium contract...');
   const alphClaimResult = await claimSwap(bobAlphWallet, alphDeployed.contractId, bytesToHex(alphFinalSig), compiled, bobAlphWallet.group);

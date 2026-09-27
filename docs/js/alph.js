@@ -9,6 +9,7 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { verifyUnsignedTx } from './alph-verify.js';
 
 const ALPH_NODE_URL = 'https://node.testnet.alephium.org';
+export const ALPH_NETWORK = 'testnet';
 web3.setCurrentNodeProvider(ALPH_NODE_URL);
 
 // Extract 32-byte contract ID hex from base58-encoded contract address
@@ -230,6 +231,28 @@ export async function getBalance(address) {
     balance: BigInt(result.balance),
     lockedBalance: BigInt(result.lockedBalance),
   };
+}
+
+// ---- Deployment depth ----
+// Bob relies on the contract existing with the state he verified. A deployment
+// that is reorganised out after he pre-signed would leave him claiming nothing,
+// so he waits until the deployment transaction has `minConfirmations` on its
+// chain. The transaction must be the one that created `contractAddress` (a
+// generated ContractOutput paying it), so a made-up txId cannot vouch for it.
+export async function verifyDeployment(txId, contractAddress, minConfirmations, { pollMs = 4000, timeoutMs = 3600_000, onProgress = null } = {}) {
+  if (!/^[0-9a-f]{64}$/i.test(txId || '')) throw new Error('deployment txId missing or malformed');
+  const details = await nodeApi(`/transactions/details/${txId}`);
+  const created = (details.generatedOutputs || []).some((o) => o.type === 'ContractOutput' && o.address === contractAddress);
+  if (!created) throw new Error(`transaction ${txId} did not create contract ${contractAddress}`);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const status = await nodeApi(`/transactions/status?txId=${txId}`);
+    const confirmations = status.type === 'Confirmed' ? status.chainConfirmations : 0;
+    if (onProgress) onProgress(confirmations, minConfirmations);
+    if (confirmations >= minConfirmations) return { confirmations };
+    if (Date.now() >= deadline) throw new Error(`deployment ${txId} has ${confirmations} of ${minConfirmations} confirmations after ${timeoutMs / 1000}s`);
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
 }
 
 // ---- Wait for tx confirmation ----

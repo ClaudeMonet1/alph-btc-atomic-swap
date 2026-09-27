@@ -21,12 +21,12 @@ import {
   mineBlocks, extractSignatureFromTx, buildRefundTx, REGTEST, bitcoin, estimateFeeRate, mineMatureCoinbase, getConfirmations,
 } from './btc-swap.js';
 import {
-  compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState,
+  compileSwapContract, deploySwapContract, claimSwap, refundSwap, verifyContractState, verifyDeployment, getAlphNetwork,
   fundFromGenesis, getBalance, waitForTx,
   web3, ONE_ALPH, PrivateKeyWallet,
 } from './alph-swap.js';
 import { computeTweakedPrivateKey } from './taproot-utils.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, MIN_LOCK_CONFIRMATIONS, claimFeeFor, checkClaimFee, CLAIM_CONFIRMATIONS } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, nowSeconds, btcConfirmationsFor, alphConfirmationsFor, claimFeeFor, checkClaimFee } from './timelocks.js';
 
 const log = (phase, msg) => console.log(`[${phase}] ${msg}`);
 
@@ -261,7 +261,7 @@ async function main() {
   const fundSig = schnorr.sign(fundSighash, bobTweakedKey);
   const fundTxHex = finalizeKeyPathSpend(fundPsbt, fundSig);
   const fundTxid = await broadcastTx(fundTxHex);
-  await mineBlocks(1, bobBtcAddress);
+  await mineBlocks(btcConfirmationsFor(BTC_SAT), bobBtcAddress);
 
   // Find the swap output vout in the funding tx
   const fundRawTx = await bitcoinRpc('getrawtransaction', [fundTxid, true]);
@@ -292,12 +292,13 @@ async function main() {
 
   // Alice verifies Bob's BTC lock: correct address, amount, confirmed
   log('VERIFY-LOCK', 'Alice verifies BTC taproot output...');
-  const { confirmations } = await verifySwapOutput(fundTxid, swapBtcAddress, BTC_AMOUNT, { minConfirmations: MIN_LOCK_CONFIRMATIONS, pollMs: 2000 });
+  const { confirmations } = await verifySwapOutput(fundTxid, swapBtcAddress, BTC_AMOUNT, { minConfirmations: btcConfirmationsFor(BTC_SAT), pollMs: 2000 });
   log('VERIFY-LOCK', `BTC output verified: correct address, amount, ${confirmations} confirmation(s)`);
 
   // Bob verifies Alice's ALPH lock: correct swapKey, claimAddress, refundAddress, amount,
   // and a timeout that opens only after his own BTC refund plus the margin
-  log('VERIFY-LOCK', 'Bob verifies Alephium contract state...');
+  log('VERIFY-LOCK', 'Bob verifies Alephium contract deployment depth and state...');
+  await verifyDeployment(deployResult.txId, deployResult.contractAddress, alphConfirmationsFor(BTC_SAT, getAlphNetwork().name), { pollMs: 1000 });
   const bounds = alphTimeoutBounds(btcLocktime);
   await verifyContractState(
     deployResult.contractAddress,
@@ -426,7 +427,7 @@ async function main() {
   const { psbt } = buildClaimTx(fundTxid, fundVout, BTC_SAT, aliceBtcAddress, internalPubkey, scriptTree, claimFeeSat);
   const signedTxHex = finalizeKeyPathSpend(psbt, btcFinalSig);
   const claimTxid = await broadcastTx(signedTxHex);
-  await mineBlocks(1, bobBtcAddress);
+  await mineBlocks(btcConfirmationsFor(BTC_SAT), bobBtcAddress);
   log('CLAIM', `BTC claimed! txid: ${claimTxid}`);
 
   // Checkpoint: btc_claimed — Alice has BTC, Bob must extract t to claim ALPH
@@ -457,7 +458,7 @@ async function main() {
   if (!alphSigValid) throw new Error('ALPH completed signature invalid!');
 
   // Bob claims only once Alice's claim is confirmed (mined above); then wait for contract propagation
-  while ((await getConfirmations(claimTxid)) < CLAIM_CONFIRMATIONS) await new Promise(r => setTimeout(r, 2000));
+  while ((await getConfirmations(claimTxid)) < btcConfirmationsFor(BTC_SAT)) await new Promise(r => setTimeout(r, 2000));
   await new Promise(r => setTimeout(r, 3000));
 
   log('CLAIM', 'Bob calls swap() on Alephium contract...');
