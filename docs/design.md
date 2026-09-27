@@ -90,6 +90,10 @@ If it were the other way round (as in versions before 2026-09-27, which had ALPH
 
 The claim is pre-signed, so its fee is fixed before either party signs: Alice proposes it when she deploys the contract (twice the current half-hour estimate for a 111 vB key-path spend, at least 1 sat/vB, at most 5% of the amount), Bob checks the same bounds before pre-signing, and both build the identical claim transaction from it. If the claim still gets stuck, Alice bumps it by spending its output, which is her own P2TR, with a child that pays for the parent (`bumpClaimFee`, "Bump claim fee" in the recovery panel). Bob's refund is built at refund time at the current rate and can be bumped the same way. Before 2026-09-27 both used a hard-coded 300 satoshis.
 
+## Passphrase Vault
+
+The key and the swap state live in `localStorage`, readable by anything that can read the browser profile (audit W3). "Set passphrase" in the identity panel seals both with WebCrypto (`vault.js`): PBKDF2-SHA256 with 600,000 iterations and a random salt derives an AES-256-GCM key, each record gets its own IV, and the derived key stays in memory for the session only. On load the page asks for the passphrase; a wrong one fails authentication, Cancel leaves the page locked and deletes nothing. The passphrase can be removed again. It protects against someone reading the storage, not against a compromised browser or page, and losing it means losing access unless the nsec was backed up. `scripts/vault-test.mjs` exercises set, reload, wrong and right passphrase, remove.
+
 ## State Persistence and Recovery
 
 The swap orchestrator saves state at three checkpoints:

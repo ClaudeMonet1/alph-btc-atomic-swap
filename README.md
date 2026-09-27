@@ -205,7 +205,7 @@ Two deployment modes share the same crypto core:
 | `docs/js/musig2.js`, `adaptor.js`, `taproot-utils.js`, `bip327-selftest.js` | Byte-identical to the `src/` files |
 | `docs/spec/bip327/` | BIP327 test vectors, served with the page for the browser self-test |
 
-Browser dependencies are bundled from the pinned packages into `docs/vendor/` with checksums (`npm run vendor`, `npm run vendor:check`) and mapped by the import map with an integrity block; nothing is fetched from a CDN. The Buffer polyfill is loaded before any modules via top-level `await`.
+Browser dependencies are bundled from the pinned packages into `docs/vendor/` with checksums (`npm run vendor`, `npm run vendor:check`) and mapped by the import map with an integrity block; nothing is fetched from a CDN. The Buffer polyfill is loaded before any modules via top-level `await`. The key and the swap state can be sealed with a passphrase (PBKDF2-SHA256 to AES-256-GCM, `docs/js/vault.js`); by default they are stored in clear.
 
 ### CLI Tests
 
