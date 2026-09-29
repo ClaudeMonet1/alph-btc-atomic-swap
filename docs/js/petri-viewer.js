@@ -1,5 +1,6 @@
 // Petri Net Protocol Viewer — Interactive SVG simulator
-// Matches the formal model in docs/protocol.md
+// Draws and fires the net defined in petri-net.js (the same definition documented in docs/protocol.md).
+import { PLACES, TRANSITIONS } from './petri-net.js';
 // Responsive: vertical happy path on wide screens, horizontal on narrow
 
 export class PetriNetViewer {
@@ -18,83 +19,8 @@ export class PetriNetViewer {
   // ── Net definition (topology only, no coords) ──────────────
 
   _defineNet() {
-    this.places = [
-      // Happy path (center column)
-      { id: 'ready', label: 'ready' },
-      { id: 'swap_agreed', label: 'swap_agreed' },
-      { id: 'btc_locked', label: 'btc_locked' },
-      { id: 'both_locked', label: 'both_locked' },
-      { id: 'presigs_ready', label: 'presigs_ready' },
-      { id: 't_revealed', label: 't_revealed' },
-      { id: 'done', label: 'done' },
-      // Cancel path
-      { id: 'alph_refundable', label: 'alph_refundable' },
-      { id: 'btc_cancel_wait', label: 'btc_cancel_wait' },
-      { id: 'btc_cancel_refundable', label: 'btc_cancel_refundable' },
-      { id: 'recovery_done', label: 'recovery_done' },
-      // Abort path
-      { id: 'btc_abort_wait', label: 'btc_abort_wait' },
-      { id: 'btc_abort_refundable', label: 'btc_abort_refundable' },
-    ];
-
-    this.transitions = [
-      { id: 'start', label: 'start', actor: null,
-        inputs: [], outputs: ['ready'],
-        desc: 'Initialize the protocol' },
-      { id: 'negotiate', label: 'negotiate', actor: null,
-        inputs: ['ready'], outputs: ['swap_agreed'],
-        desc: 'Both parties agree on swap parameters' },
-      { id: 'negotiate_timeout', label: 'neg_timeout', actor: 'timeout',
-        inputs: ['swap_agreed'], outputs: ['done'],
-        desc: 'Bob doesn\'t lock BTC — abort' },
-      { id: 'lock_btc', label: 'lock_btc', actor: 'Bob',
-        inputs: ['swap_agreed'], outputs: ['btc_locked'],
-        desc: 'Bob locks BTC in taproot output' },
-      { id: 'lock_timeout', label: 'lock_timeout', actor: 'timeout',
-        inputs: ['btc_locked'], outputs: ['btc_abort_wait'],
-        desc: 'Alice doesn\'t lock ALPH — Bob waits for refund' },
-      { id: 'lock_alph', label: 'lock_alph', actor: 'Alice',
-        inputs: ['btc_locked'], outputs: ['both_locked'],
-        desc: 'Alice locks ALPH in Ralph contract' },
-      { id: 'exchange_presigs', label: 'exch_presigs', actor: null,
-        inputs: ['both_locked'], outputs: ['presigs_ready'],
-        desc: 'Exchange adaptor pre-signatures via Nostr' },
-      { id: 'exchange_timeout', label: 'exch_timeout', actor: 'timeout',
-        inputs: ['both_locked'], outputs: ['alph_refundable', 'btc_cancel_wait'],
-        desc: 'Pre-sig exchange stalls — fork to cancel' },
-      { id: 'alice_claims_btc', label: 'alice_claim', actor: 'Alice',
-        inputs: ['presigs_ready'], outputs: ['t_revealed'],
-        desc: 'Alice claims BTC, revealing adaptor secret t' },
-      { id: 't2_timeout', label: 't2_timeout', actor: 'timeout',
-        inputs: ['presigs_ready'], outputs: ['alph_refundable', 'btc_cancel_wait'],
-        desc: 'Alice doesn\'t claim — fork to cancel' },
-      { id: 'bob_claims_alph', label: 'bob_claim', actor: 'Bob',
-        inputs: ['t_revealed'], outputs: ['done'],
-        desc: 'Bob extracts t and claims ALPH' },
-      // Cancel path
-      { id: 'alice_cancel_refund', label: 'alice_refund', actor: 'Alice',
-        inputs: ['alph_refundable'], outputs: ['recovery_done'],
-        desc: 'Alice refunds ALPH after T2' },
-      { id: 't1_timeout', label: 't1_timeout', actor: 'timeout',
-        inputs: ['btc_cancel_wait'], outputs: ['btc_cancel_refundable'],
-        desc: 'T1 expires — Bob can refund BTC' },
-      { id: 'bob_cancel_refund', label: 'bob_refund', actor: 'Bob',
-        inputs: ['btc_cancel_refundable'], outputs: ['recovery_done'],
-        desc: 'Bob refunds BTC after T1' },
-      { id: 'both_recovered', label: 'both_recov', actor: null,
-        inputs: ['recovery_done', 'recovery_done'], outputs: ['done'],
-        desc: 'Both refunds complete — join' },
-      // Abort path
-      { id: 't1_timeout_abort', label: 't1_abort', actor: 'timeout',
-        inputs: ['btc_abort_wait'], outputs: ['btc_abort_refundable'],
-        desc: 'T1 expires — Bob can refund locked BTC' },
-      { id: 'bob_abort_refund', label: 'bob_abort', actor: 'Bob',
-        inputs: ['btc_abort_refundable'], outputs: ['done'],
-        desc: 'Bob refunds BTC (abort path)' },
-      { id: 'stop', label: 'stop', actor: null,
-        inputs: ['done'], outputs: [],
-        desc: 'Protocol terminates — net is empty' },
-    ];
+    this.places = PLACES.map((p) => ({ ...p, label: p.id }));
+    this.transitions = TRANSITIONS.map((t) => ({ ...t, label: t.label || t.id.replace(/_/g, ' ') }));
   }
 
   // ── Layout (responsive) ────────────────────────────────────
@@ -107,127 +33,21 @@ export class PetriNetViewer {
 
   _pos(map, id, x, y) { map[id] = { x, y }; }
 
+  // Nodes carry a (col, row) on a grid: columns are the happy path (1), the
+  // Bitcoin timer and refunds (2), the Alephium timer and refunds (3) and the
+  // early abort (0). Wide screens draw rows top to bottom, narrow ones left to right.
   _layoutVertical() {
-    // Happy path: center column, top to bottom
-    // Abort: left column        Cancel: right column
-    // done/stop: bottom center, below everything — all paths flow down
-    const S = 55;
-    const cx = 350, lx = 90, rx = 640;
-    const pMap = {}, tMap = {};
-
-    // Happy path — center column (without done/stop, those go at bottom)
-    let y = 25;
-    this._pos(tMap, 'start', cx, y);            y += S;
-    this._pos(pMap, 'ready', cx, y);             y += S;
-    this._pos(tMap, 'negotiate', cx, y);         y += S;
-    this._pos(pMap, 'swap_agreed', cx, y);       y += S;
-    this._pos(tMap, 'lock_btc', cx, y);          y += S;
-    this._pos(pMap, 'btc_locked', cx, y);        y += S;
-    this._pos(tMap, 'lock_alph', cx, y);         y += S;
-    this._pos(pMap, 'both_locked', cx, y);       y += S;
-    this._pos(tMap, 'exchange_presigs', cx, y);  y += S;
-    this._pos(pMap, 'presigs_ready', cx, y);     y += S;
-    this._pos(tMap, 'alice_claims_btc', cx, y);  y += S;
-    this._pos(pMap, 't_revealed', cx, y);        y += S;
-    this._pos(tMap, 'bob_claims_alph', cx, y);
-    const happyEndY = y;
-
-    // Abort path (left column)
-    const saY = pMap.swap_agreed.y;
-    const blY = pMap.btc_locked.y;
-    this._pos(tMap, 'negotiate_timeout', lx, saY);
-    this._pos(tMap, 'lock_timeout', lx, blY);
-    this._pos(pMap, 'btc_abort_wait', lx, blY + S);
-    this._pos(tMap, 't1_timeout_abort', lx, blY + S * 2);
-    this._pos(pMap, 'btc_abort_refundable', lx, blY + S * 3);
-    this._pos(tMap, 'bob_abort_refund', lx, blY + S * 4);
-    const abortEndY = blY + S * 4;
-
-    // Cancel path (right column)
-    const bkY = pMap.both_locked.y;
-    const prY = pMap.presigs_ready.y;
-    this._pos(tMap, 'exchange_timeout', rx, bkY);
-    this._pos(tMap, 't2_timeout', rx, prY);
-    const forkY = prY + S;
-    const rlx = rx - 60, rrx = rx + 60;
-    this._pos(pMap, 'alph_refundable', rlx, forkY);
-    this._pos(pMap, 'btc_cancel_wait', rrx, forkY);
-    this._pos(tMap, 'alice_cancel_refund', rlx, forkY + S);
-    this._pos(tMap, 't1_timeout', rrx, forkY + S);
-    this._pos(pMap, 'btc_cancel_refundable', rrx, forkY + S * 2);
-    this._pos(tMap, 'bob_cancel_refund', rrx, forkY + S * 3);
-    this._pos(pMap, 'recovery_done', rx, forkY + S * 4);
-    this._pos(tMap, 'both_recovered', rx, forkY + S * 5);
-    const cancelEndY = forkY + S * 5;
-
-    // done/stop at bottom center — below all three paths
-    const doneY = Math.max(happyEndY, abortEndY, cancelEndY) + S;
-    this._pos(pMap, 'done', cx, doneY);
-    this._pos(tMap, 'stop', cx, doneY + S);
-
-    for (const p of this.places) { const c = pMap[p.id]; if (c) { p.x = c.x; p.y = c.y; } }
-    for (const t of this.transitions) { const c = tMap[t.id]; if (c) { t.x = c.x; t.y = c.y; } }
-
-    this.svg.setAttribute('viewBox', `0 0 800 ${doneY + S + 25}`);
+    const colX = [70, 250, 470, 690], rowH = 48, top = 25;
+    let maxRow = 0;
+    for (const n of [...this.places, ...this.transitions]) { n.x = colX[n.col]; n.y = top + n.row * rowH; maxRow = Math.max(maxRow, n.row); }
+    this.svg.setAttribute('viewBox', `0 0 800 ${top + (maxRow + 1) * rowH}`);
   }
 
   _layoutHorizontal() {
-    // Happy path: left to right, generous 55px steps
-    // Abort: branch below-left   Cancel: branch below-right
-    const S = 55;
-    const cy = 50;
-    const pMap = {}, tMap = {};
-
-    let x = 30;
-    this._pos(tMap, 'start', x, cy);            x += S;
-    this._pos(pMap, 'ready', x, cy);             x += S;
-    this._pos(tMap, 'negotiate', x, cy);         x += S;
-    this._pos(pMap, 'swap_agreed', x, cy);       x += S;
-    this._pos(tMap, 'lock_btc', x, cy);          x += S;
-    this._pos(pMap, 'btc_locked', x, cy);        x += S;
-    this._pos(tMap, 'lock_alph', x, cy);         x += S;
-    this._pos(pMap, 'both_locked', x, cy);       x += S;
-    this._pos(tMap, 'exchange_presigs', x, cy);  x += S;
-    this._pos(pMap, 'presigs_ready', x, cy);     x += S;
-    this._pos(tMap, 'alice_claims_btc', x, cy);  x += S;
-    this._pos(pMap, 't_revealed', x, cy);        x += S;
-    this._pos(tMap, 'bob_claims_alph', x, cy);   x += S;
-    this._pos(pMap, 'done', x, cy);              x += S;
-    this._pos(tMap, 'stop', x, cy);
-    const totalW = x + 30;
-
-    // Abort path (below left section)
-    const saX = pMap.swap_agreed.x;
-    const blX = pMap.btc_locked.x;
-    const abY = cy + S;
-    this._pos(tMap, 'negotiate_timeout', saX, abY);
-    this._pos(tMap, 'lock_timeout', blX, abY);
-    this._pos(pMap, 'btc_abort_wait', blX, abY + S);
-    this._pos(tMap, 't1_timeout_abort', blX, abY + S * 2);
-    this._pos(pMap, 'btc_abort_refundable', blX, abY + S * 3);
-    this._pos(tMap, 'bob_abort_refund', blX, abY + S * 4);
-
-    // Cancel path (below right section)
-    const bkX = pMap.both_locked.x;
-    const prX = pMap.presigs_ready.x;
-    const cnY = cy + S;
-    this._pos(tMap, 'exchange_timeout', bkX, cnY);
-    this._pos(tMap, 't2_timeout', prX, cnY);
-    const midX = (bkX + prX) / 2;
-    this._pos(pMap, 'alph_refundable', midX - 40, cnY + S);
-    this._pos(pMap, 'btc_cancel_wait', midX + 40, cnY + S);
-    this._pos(tMap, 'alice_cancel_refund', midX - 40, cnY + S * 2);
-    this._pos(tMap, 't1_timeout', midX + 40, cnY + S * 2);
-    this._pos(pMap, 'btc_cancel_refundable', midX + 40, cnY + S * 3);
-    this._pos(tMap, 'bob_cancel_refund', midX + 40, cnY + S * 4);
-    this._pos(pMap, 'recovery_done', midX, cnY + S * 4);
-    this._pos(tMap, 'both_recovered', midX, cnY + S * 5);
-
-    for (const p of this.places) { const c = pMap[p.id]; if (c) { p.x = c.x; p.y = c.y; } }
-    for (const t of this.transitions) { const c = tMap[t.id]; if (c) { t.x = c.x; t.y = c.y; } }
-
-    const maxY = cnY + S * 5.5;
-    this.svg.setAttribute('viewBox', `0 0 ${totalW} ${maxY}`);
+    const colY = [40, 110, 200, 290], rowW = 62, left = 30;
+    let maxRow = 0;
+    for (const n of [...this.places, ...this.transitions]) { n.x = left + n.row * rowW; n.y = colY[n.col]; maxRow = Math.max(maxRow, n.row); }
+    this.svg.setAttribute('viewBox', `0 0 ${left + (maxRow + 1) * rowW} 340`);
   }
 
   // ── State logic ─────────────────────────────────────────────
@@ -293,7 +113,7 @@ export class PetriNetViewer {
     const legend = document.createElement('div');
     legend.style.cssText = 'display:flex; gap:12px; margin-bottom:6px; font-size:10px; flex-wrap:wrap;';
     legend.innerHTML = [
-      ['#00d4aa', 'Alice'], ['#f7931a', 'Bob'], ['#d29922', 'Timeout'], ['#8b949e', 'System']
+      ['#00d4aa', 'Alice'], ['#f7931a', 'Bob'], ['#d29922', 'Timeout'], ['#58a6ff', 'Chain'], ['#a371f7', 'Anyone'], ['#8b949e', 'Both / system']
     ].map(([c, l]) => `<span><span style="display:inline-block;width:8px;height:8px;background:${c};border-radius:2px;margin-right:3px;vertical-align:middle"></span><span style="color:${c}">${l}</span></span>`).join('');
     this.container.appendChild(legend);
 
@@ -342,6 +162,8 @@ export class PetriNetViewer {
     if (actor === 'Alice') return '#00d4aa';
     if (actor === 'Bob') return '#f7931a';
     if (actor === 'timeout') return '#d29922';
+    if (actor === 'chain') return '#58a6ff';
+    if (actor === 'anyone') return '#a371f7';
     return '#8b949e';
   }
 

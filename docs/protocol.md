@@ -1,113 +1,96 @@
 # BTC-ALPH Atomic Swap — Petri Net Protocol Model
 
-Formal protocol model for the atomic swap. The protocol is modeled as an open Petri net that starts and ends with an empty net, with a single conflict point determining swap success or refund. Atomicity is guaranteed — either both parties swap or both refund.
+Formal protocol model for the atomic swap as implemented (rewritten 2026-09-29 after the audit). The protocol is an open Petri net that starts and ends with an empty net. Its safety property, checked exhaustively, is that Bob can never end with both assets; Alice can end with both only if Bob stays offline for the twelve hours after her claim, which is a liveness requirement on Bob, stated below rather than hidden.
 
-## Adaptor Signature Protocol
+## The net
 
-Alice has ALPH, wants BTC. Bob has BTC, wants ALPH.
+Alice has ALPH and wants BTC; Bob has BTC and wants ALPH. The net below is generated from `docs/js/petri-net.js`, the same definition the page's simulator runs (`scripts/petri-doc.mjs --check` keeps them equal; `npm run test:petri` explores every reachable marking). Timers are tokens: `lock_btc` starts `btc_timer` (T_btc = lock time + 24 h, an absolute `OP_CHECKLOCKTIMEVERIFY` on Bob's refund leaf), `lock_alph` starts `alph_timer` (T_alph = T_btc + 12 h, the contract timeout; Bob refuses less than T_btc + 6 h). Actors: `@Alice`, `@Bob`, `@anyone`; timeouts and chain confirmations carry no actor.
 
+<!-- net:start -->
 ```
 ;start () -> ready
-```
-
-Both parties agree on swap parameters. Each announces its Bitcoin and Alephium public keys in its offer, counter-offer or accept (`keys: { btc, alph }`); both are derived from the party's Nostr secret with domain separation (`keys.js`), so the Nostr identity, the MuSig2 party key and the Alephium account are three different keys backed by one secret. Alice generates adaptor secret t, shares T = t*G. MuSig2 key aggregation produces P_swap.
-
-```
 ;negotiate ready -> swap_agreed
+;negotiate_timeout swap_agreed -> done
+;lock_btc@Bob swap_agreed -> btc_locked btc_timer
+;btc_confirms btc_locked -> btc_confirmed
+;lock_alph@Alice btc_confirmed -> alph_locked alph_timer
+;exchange_presigs alph_locked -> presigs_ready
+;alice_claims_btc@Alice presigs_ready btc_timer -> t_revealed
+;bob_claims_alph@Bob t_revealed alph_timer -> done
+;stop done -> ()
+;t_btc_timeout btc_timer -> btc_refund_open
+;bob_abort_refund@Bob btc_confirmed btc_refund_open -> done
+;bob_stall_refund@Bob alph_locked btc_refund_open -> btc_refunded
+;bob_refund@Bob presigs_ready btc_refund_open -> btc_refunded
+;alice_late_claim@Alice presigs_ready btc_refund_open -> t_revealed
+;both_refunded btc_refunded alph_refunded -> done
+;t_alph_timeout alph_timer -> alph_refundable
+;alph_refund@anyone alph_refundable -> alph_refunded
+;alice_has_both t_revealed alph_refunded -> done
 ```
 
-Bob funds from his nsec-derived P2TR address and locks BTC in a taproot output. Key path: P_swap (2-of-2). Script path: Bob can refund after the absolute locktime T_btc (OP_CHECKLOCKTIMEVERIFY), which he chooses and sends to Alice.
-
-```
-;lock_btc@Bob swap_agreed -> btc_locked
-```
-
-Alice verifies Bob's lock on Bitcoin (address, amount, confirmation depth for the amount, and that T_btc lies within her accepted window), then locks ALPH in a Ralph contract with timeout T_alph = T_btc + 12 h. `swap(sig)` verifies a MuSig2 signature against P_swap and sends funds to Bob's address. `refund()` may be called by anyone after T_alph and pays Alice's refund address. Both addresses must be in the contract's Alephium group (see design.md); both sides refuse a peer from another group before anything is locked. Bob verifies the contract, including T_alph >= T_btc + 6 h, before he pre-signs: Alice's refund must open only after Bob's, otherwise she could refund and then claim the BTC.
-
-```
-;lock_alph@Alice btc_locked -> both_locked
-```
-
-**Why a contract on ALPH instead of MuSig2?** Alephium supports Schnorr natively, so a symmetric MuSig2 construction is possible on both chains. The protocol uses a Ralph contract on the ALPH side instead for pragmatic reasons:
-
-- **Inspectable state** — contract fields (swap key, claim/refund addresses, timeout) are readable on-chain, so the counterparty can verify the lock without trusting key aggregation.
-- **Unilateral locking** — deploying a contract is a single tx from Alice. A MuSig2 funding output would require an interactive signing round just to lock.
-- **Explicit timeouts** — the contract enforces `blockTimeStamp > timeout` directly. MuSig2 would need Alephium script-path opcodes equivalent to Bitcoin's CSV/CLTL.
-- **Atomic destruction** — after claim or refund, the contract self-destructs and returns all ALPH automatically.
-
-The trade-off is asymmetry: BTC uses taproot MuSig2, ALPH uses a contract. A pure MuSig2 design on both chains would be more elegant but would add interactive rounds and verification complexity.
-
-Both parties exchange adaptor pre-signatures via Nostr DMs (NIP-44 encrypted). Each side provides a partial MuSig2 signature tweaked by the adaptor point T. Both verify the other's adaptor is valid. If the exchange stalls (party goes offline, Nostr fails), `exchange_timeout` fires when the timeouts pass, forking into the cancel path so both parties recover their assets.
-
-```
-;exchange_presigs both_locked -> presigs_ready
-;exchange_timeout both_locked -> alph_refundable btc_cancel_wait
-```
-
-**Conflict**: `alice_claims_btc` and `t2_timeout` (Bob's refund at T_btc) both consume `presigs_ready`. Exactly one fires. This is the protocol's decision point — everything after is deterministic.
+- `start`: Someone accepts an offer; both pages start the same session
+- `negotiate`: Alice draws t and sends T; both compute the MuSig2 key from the announced Bitcoin keys
+- `negotiate_timeout` (timeout): Bob never locks (1 h): nothing is at stake, the session ends
+- `lock_btc` (Bob): Bob locks BTC in the taproot output (key path: MuSig2 key; leaf: Bob after T_btc = now + 24 h) and starts T_btc
+- `btc_confirms` (chain): Alice waits for the confirmation depth of the amount (one block on signet) and re-checks the locktime window
+- `lock_alph` (Alice): Alice deploys the contract with T_alph = T_btc + 12 h; Bob checks the deployment depth, the state and T_alph >= T_btc + 6 h
+- `exchange_presigs`: Nonce commit and reveal, then adaptor pre-signatures for the BTC claim and the ALPH claim, each verified
+- `alice_claims_btc` (Alice): Alice completes the pre-signature with t and spends the key path before T_btc (bumping the fee if needed)
+- `bob_claims_alph` (Bob): Bob reads t from the confirmed claim, completes the ALPH pre-signature and calls swap() before T_alph
+- `stop`: The net is empty again
+- `t_btc_timeout` (timeout): Median time past reaches T_btc: Bob's refund opens (the page refunds automatically)
+- `bob_abort_refund` (Bob): Alice never deployed: Bob refunds through the leaf; nothing else to recover
+- `bob_stall_refund` (Bob): The exchange stalled: Bob refunds through the leaf; Alice refunds at T_alph
+- `bob_refund` (Bob): Alice has not claimed: Bob's refund confirms first and closes the key path
+- `alice_late_claim` (Alice): Alice's claim confirms before Bob's refund: the race Bob avoids by refunding at once; Bob still has 12 h to claim the ALPH
+- `both_refunded`: Cancel path complete: both parties recovered
+- `t_alph_timeout` (timeout): Block time reaches T_alph: refund() opens
+- `alph_refund` (anyone): refund() is permissionless and always pays Alice
+- `alice_has_both`: Bob stayed offline for the 12 h after her claim: Alice holds the BTC and her ALPH. Liveness, not atomicity: Bob must claim within the window
+<!-- net:end -->
 
 ### Happy path
 
-Alice completes her adaptor, producing a valid MuSig2 signature. She claims BTC to her nsec-derived P2TR address. The completed signature reveals the adaptor secret t (anyone can compute t = s_complete - s_pre). Bob extracts t from Alice's Bitcoin claim transaction, completes his own adaptor, and claims ALPH. Alice must claim before Bob refunds; Bob then has until T_alph (12 h after T_btc) to extract t and claim.
-
-```
-;alice_claims_btc@Alice presigs_ready -> t_revealed
-;bob_claims_alph@Bob t_revealed -> done
-```
+`start`, `negotiate`, `lock_btc`, `btc_confirms`, `lock_alph`, `exchange_presigs`, `alice_claims_btc`, `bob_claims_alph`, `stop`. Alice's claim consumes `btc_timer`: once her claim is on chain, Bob's refund leaf can never be spent. Bob's claim consumes `alph_timer`: once the contract is claimed, Alice's refund can never open. Between the two, the implementation waits for confirmation depth on both chains (Alice on Bob's lock, Bob on Alice's deployment and on Alice's claim), and Alice bumps her claim's fee when it sits below the floor; those waits are inside `btc_confirms`, `lock_alph` and `bob_claims_alph`.
 
 ### Cancel path
 
-If Alice doesn't claim BTC before Bob refunds it, the cancel path is taken. This produces tokens in two independent places via a fork — ALPH and BTC refunds happen on different chains with different timelocks, so they proceed in parallel.
+`t_btc_timeout` fires when Bitcoin's median time past reaches T_btc and opens Bob's refund. Three cases:
 
-```
-;t2_timeout presigs_ready -> alph_refundable btc_cancel_wait
-```
+- Alice never deployed (`btc_confirmed` still marked): `bob_abort_refund`, nothing else to recover.
+- The exchange stalled after her deployment (`alph_locked`): `bob_stall_refund`, then `t_alph_timeout` and `alph_refund` twelve hours later, joined by `both_refunded`.
+- Pre-signatures were exchanged (`presigs_ready`) and Alice has not claimed: `bob_refund` and `alice_late_claim` are both enabled and consume the same two tokens. This is the race the audit found: the key path has no timelock, so Alice can still claim until Bob's refund confirms. The page therefore refunds automatically the moment T_btc passes, and Alice's own refund opens only twelve hours later, so a late claim leaves Bob the whole window to take the ALPH.
 
-Bob refunds BTC once T_btc has passed (and should do so promptly). Alice refunds ALPH after T_alph, 12 h later. These are independent — neither blocks the other. Both must complete before the protocol terminates.
+### The liveness case
 
-```
-;alice_cancel_refund@Alice alph_refundable -> recovery_done
-;t1_timeout btc_cancel_wait -> btc_cancel_refundable
-;bob_cancel_refund@Bob btc_cancel_refundable -> recovery_done
-;both_recovered recovery_done recovery_done -> done
-```
-
-### Termination
-
-All paths produce a token in `done`. The `stop` transition closes the net.
-
-```
-;stop done -> ()
-```
+After `t_revealed`, `bob_claims_alph` and `t_alph_timeout` compete for `alph_timer`. If Bob is offline for the twelve hours after Alice's claim, `alph_refund` then `alice_has_both` fire: Alice holds the BTC and her ALPH. The construction cannot prevent this (a timeout must eventually free Alice's ALPH); it is a liveness requirement on Bob, whose page polls for Alice's claim and claims as soon as it is confirmed.
 
 ## Properties
 
-**Terminal states**: Two paths to `done` (consumed by `stop`):
-- Happy path: `alice_claims_btc` -> `bob_claims_alph` -> `done` (swap complete)
-- Cancel path: fork -> `alice_cancel_refund` + `bob_cancel_refund` -> `both_recovered` -> `done` (full refund)
+Checked exhaustively by `test/petri.test.mjs` over every reachable marking:
 
-The cancel path is reachable from two places: `t2_timeout` at `presigs_ready` (Alice didn't claim) or `exchange_timeout` at `both_locked` (presig exchange stalled).
+- **Safety**: every place holds at most one token; the only dead marking is the empty net, so every run ends with `stop`.
+- **Bob never ends with both assets**: no run fires both a Bob refund and `bob_claims_alph` (`bob_refund` and `alice_late_claim` are mutually exclusive; `alice_claims_btc` consumes the Bitcoin timer).
+- **Alice ends with both assets only through `alice_has_both`**, i.e. only if Bob does not claim within T_alph − T_btc = 12 h of her claim.
+- **Every transition is reachable.**
 
-**Safety**: The net is 2-bounded. All places are 1-bounded except `recovery_done`, which holds 2 tokens on the cancel path (one per refund). The `both_recovered` join consumes both. Conflicts at `both_locked` and `presigs_ready` ensure mutual exclusion between the swap and cancel paths.
-
-**Atomicity**: If `alice_claims_btc` fires, `t_revealed` is produced, guaranteeing `bob_claims_alph` fires. The ordering T_alph = T_btc + 12 h ensures Bob always has time to extract t and claim ALPH, and that Alice cannot refund ALPH while the BTC is still claimable. Neither party can get both assets. The net does not model the timelock values themselves: with T_alph < T_btc the same net admits a run where Alice refunds ALPH and then claims BTC (the defect found by the 2026-09-27 audit). Atomicity therefore holds only for parameterisations with T_alph ≥ T_btc + margin, which is why Bob's verification of the deployed contract (`alphTimeoutBounds`) is part of the protocol and not an optional check, and why Bob waits for Alice's claim to confirm before spending the ALPH.
-
-**Liveness**: Under clock fairness, if either party is unresponsive, a timeout eventually fires. `exchange_timeout` covers the presig exchange phase, `t2_timeout` covers the claim phase. The `both_recovered` join ensures the cancel path completes only after both parties have reclaimed their assets.
+The net does not model the timelock *values*: with T_alph < T_btc the same net would admit a run where Alice refunds ALPH and then claims BTC (the defect found by the 2026-09-27 audit). Atomicity therefore rests on Bob's verification of the deployed contract (`alphTimeoutBounds`: T_btc + 6 h ≤ T_alph ≤ T_btc + 7 d), which is part of the protocol and not an optional check, and on Bob refunding promptly at T_btc.
 
 ## Abort Before Locking
 
-Either party can abandon the swap before committing assets on-chain. These early aborts extend the setup phase:
+`negotiate_timeout` (Bob never locks; the page waits one hour for a message before giving up) ends the session with nothing at stake. A reload at any point restores the saved session (`started`, `btc_locked`, `locked`, `presigned`, `btc_claimed` checkpoints) and resumes from the first unfinished step; the setup, lock and deployment steps are idempotent.
 
-```
-;negotiate_timeout swap_agreed -> done
-;lock_timeout btc_locked -> btc_abort_wait
-;t1_timeout_abort btc_abort_wait -> btc_abort_refundable
-;bob_abort_refund@Bob btc_abort_refundable -> done
-```
+## Why a contract on ALPH instead of MuSig2?
 
-`negotiate_timeout` — Bob doesn't lock BTC. Alice loses nothing (she hasn't locked yet).
+Alephium supports Schnorr natively, so a symmetric MuSig2 construction is possible on both chains. The protocol uses a Ralph contract on the ALPH side instead for pragmatic reasons:
 
-`lock_timeout` — Alice doesn't lock ALPH after seeing Bob's lock. Bob's BTC is already on-chain, so the token moves to `btc_abort_wait`. After T_btc, Bob refunds via the script path.
+- **Inspectable state** — contract fields (swap key, claim/refund addresses, timeout) are readable on-chain, so the counterparty can verify the lock without trusting key aggregation.
+- **Unilateral locking** — deploying a contract is a single tx from Alice. A MuSig2 funding output would require an interactive signing round just to lock.
+- **Explicit timeouts** — the contract enforces `blockTimeStamp >= timeout` directly. MuSig2 would need Alephium script-path opcodes equivalent to Bitcoin's CLTV.
+- **Atomic destruction** — after claim or refund, the contract self-destructs and returns all ALPH automatically.
+
+The trade-off is asymmetry: BTC uses taproot MuSig2, ALPH uses a contract. A pure MuSig2 design on both chains would be more elegant but would add interactive rounds and verification complexity.
 
 ## Composition
 
@@ -121,18 +104,16 @@ Each environment net interfaces through shared places at the boundary.
 
 ## Nostr Event Mapping
 
-The protocol phases map to structured Nostr events:
+| Phase | Kind | Content `type` / `phase` | Content |
+|-------|------|--------------------------|---------|
+| Discovery | 38389 | `offer`, `counter`, `accept`, `cancel` | Amounts, direction, expiry (24 h), the party's `keys: { btc, alph }` |
+| `negotiate` | 38390 | `confirm` | Alice's adaptor point T |
+| `lock_btc` | 38390 | `btc_locked` | Funding txid and vout, amount, T_btc, Bob's keys |
+| `lock_alph` | 38390 | `alph_deployed`, then `verified` | Contract id and address, deployment txid, proposed claim fee; Bob's verification |
+| `exchange_presigs` | 38391 | `commit`, `reveal` | Hashes of the public nonces, then the nonces |
+| `exchange_presigs` | 38392 | (pre-signatures) | Adaptor pre-signatures for the BTC and ALPH claims |
+| `alice_claims_btc` | 38393 | `btc_claimed` | BTC claim txid (reveals t once confirmed) |
+| `bob_claims_alph` | 38393 | `alph_claimed` | ALPH claim txid |
+| abort | 38390 | `abort` | The peer gave up before locking |
 
-| Phase | Kind | Action | Content |
-|-------|------|--------|---------|
-| Discovery | 38389 | `offer` | Public offer: amounts, direction, npub |
-| Discovery | 38389 | `accept` | Offer acceptance, triggers swap |
-| `negotiate` | 38390 | `setup` | Role, adaptor point T, swap parameters |
-| `lock_btc` / `lock_alph` | 38390 | `locked` | Funding txid, contract address |
-| `exchange_presigs` | 38391 | `nonce-commit` | Hash of nonce (commit phase) |
-| `exchange_presigs` | 38391 | `nonce-reveal` | MuSig2 public nonces |
-| `exchange_presigs` | 38392 | `presig` | Adaptor pre-signatures |
-| `alice_claims_btc` | 38393 | `claim-btc` | BTC claim txid (reveals t) |
-| `bob_claims_alph` | 38393 | `claim-alph` | ALPH claim txid |
-
-Offer events (38389) are public. All other events are NIP-44 v2 encrypted between the two swap parties (`nip44.js`, cross-checked against nostr-tools; NIP-04 in the browser and plaintext in the Node scripts until 2026-09-27). A message that does not decrypt is ignored; there is no plaintext fallback.
+Offer events (38389) are public. All other events are NIP-44 v2 encrypted between the two swap parties (`nip44.js`, cross-checked against nostr-tools; NIP-04 in the browser and plaintext in the Node scripts until 2026-09-27). A message that does not decrypt is ignored; there is no plaintext fallback. An accept older than the page is not allowed to start a swap (relays replay two days of events on every load).
