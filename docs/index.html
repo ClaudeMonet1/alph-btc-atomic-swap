@@ -562,38 +562,41 @@
 
         <h4>Protocol (5 steps)</h4>
         <ol>
-          <li><strong>Setup</strong> &mdash; Alice generates an adaptor secret <em>t</em> and sends the public adaptor point <em>T</em> to Bob</li>
-          <li><strong>Lock</strong> &mdash; Bob locks BTC in a Taproot output (with CSV timelock for refund). Alice deploys an ALPH contract (with timeout for refund). Both sides cross-verify.</li>
-          <li><strong>Nonces</strong> &mdash; Commit-then-reveal MuSig2 nonce exchange (prevents grinding attacks)</li>
-          <li><strong>Pre-sign</strong> &mdash; Exchange adaptor pre-signatures for both BTC and ALPH claim transactions</li>
-          <li><strong>Claim</strong> &mdash; Alice completes the adaptor signature and claims BTC, revealing <em>t</em> on the Bitcoin blockchain. Bob extracts <em>t</em> from the Bitcoin witness data and claims ALPH.</li>
+          <li><strong>Setup</strong> &mdash; Alice generates an adaptor secret <em>t</em> and sends the public adaptor point <em>T</em> to Bob. Both know each other's Bitcoin and Alephium keys from the offer and the accept.</li>
+          <li><strong>Lock</strong> &mdash; Bob locks BTC in a Taproot output whose refund leaf opens at T<sub>btc</sub> = now + 24 h (absolute locktime). Alice waits for the lock to confirm, then deploys the ALPH contract with timeout T<sub>alph</sub> = T<sub>btc</sub> + 12 h. Bob checks the deployment's depth, its state and that T<sub>alph</sub> is at least 6 h after T<sub>btc</sub> before he signs anything.</li>
+          <li><strong>Nonces</strong> &mdash; Commit-then-reveal MuSig2 nonce exchange (BIP327; a secret nonce is used once)</li>
+          <li><strong>Pre-sign</strong> &mdash; Exchange adaptor pre-signatures for the BTC claim and the ALPH claim; each side verifies the other's</li>
+          <li><strong>Claim</strong> &mdash; Alice completes the adaptor signature and claims BTC, revealing <em>t</em> in the Bitcoin witness (her page bumps the fee if the claim stalls). Once that claim is confirmed, Bob extracts <em>t</em> and claims the ALPH.</li>
         </ol>
 
         <h4>Timeouts &amp; Refunds</h4>
         <table>
-          <tr><td style="padding-right:16px; color:#f7931a">BTC refund (T1)</td><td>144 blocks after lock tx confirms (~24h mainnet, ~2.5h signet)</td></tr>
-          <tr><td style="padding-right:16px; color:#00d4aa">ALPH refund (T2)</td><td>6 hours after contract deployment</td></tr>
-          <tr><td style="padding-right:16px; color:#8b949e">Offer expiry</td><td>1 hour after publishing</td></tr>
+          <tr><td style="padding-right:16px; color:#f7931a">BTC refund (T<sub>btc</sub>)</td><td>24 h after Bob's lock, absolute locktime measured against Bitcoin's median time past. Bob's page refunds automatically as soon as it opens.</td></tr>
+          <tr><td style="padding-right:16px; color:#00d4aa">ALPH refund (T<sub>alph</sub>)</td><td>T<sub>btc</sub> + 12 h. <code>refund()</code> can then be called by anyone and always pays Alice.</td></tr>
+          <tr><td style="padding-right:16px; color:#8b949e">Offer expiry</td><td>24 h after publishing</td></tr>
+          <tr><td style="padding-right:16px; color:#8b949e">Message waits</td><td>Up to 6 h for the peer's next message during the lock and claim phases (a signet block can take 20 min), 1 h otherwise</td></tr>
         </table>
-        <p style="margin-top:8px">T2 &lt; T1 is critical: Alice can refund ALPH before Bob can refund BTC, preventing a scenario where Bob claims both assets.</p>
+        <p style="margin-top:8px">T<sub>alph</sub> &gt; T<sub>btc</sub> is what makes the swap atomic: Alice's claim reveals <em>t</em>, so her ALPH refund must open only after Bob's BTC refund, otherwise she could refund her ALPH and then still take the BTC. Bob refuses to sign for a contract that violates this. The remaining requirement is on Bob: he must claim the ALPH within the 12 h after Alice's claim, which his page does as soon as her claim is confirmed.</p>
 
         <h4>Security</h4>
         <ul>
-          <li>Funds are safe at every step &mdash; if the peer disappears, wait for timeout and use refund buttons</li>
-          <li>Swap messages (setup, nonces, pre-signatures, claims) are <strong>encrypted</strong> peer-to-peer (NIP-04)</li>
-          <li>Offers are public so they can be discovered by anyone on Nostr</li>
-          <li>Uses Schnorr adaptor signatures for atomicity &mdash; no hash preimages</li>
-          <li>BTC side uses Taproot MuSig2. ALPH side uses a Ralph contract &mdash; asymmetric by design for inspectable state, unilateral locking, and explicit timeouts (a symmetric MuSig2 construction is possible but adds complexity)</li>
+          <li>Funds are safe at every step &mdash; if the peer disappears, the recovery panel shows the refund countdown and refunds when it opens</li>
+          <li>Swap messages (setup, nonces, pre-signatures, claims) are <strong>NIP-44 encrypted</strong> peer-to-peer; offers are public so anyone on Nostr can find them</li>
+          <li>One secret, three keys: your nsec is the Nostr identity; the Bitcoin and Alephium keys are derived from it, so no signature is valid on two chains</li>
+          <li>Every transaction built by a node is decoded and checked before it is signed; the contract is shipped pre-compiled and its bytecode is verified on chain</li>
+          <li>BTC side uses Taproot MuSig2 (BIP327). ALPH side uses a Ralph contract &mdash; asymmetric by design for inspectable state, unilateral locking, and explicit timeouts</li>
+          <li>Set a passphrase in the identity panel to encrypt your key and swap state in this browser</li>
         </ul>
 
         <h4>Important Notes</h4>
         <ul>
-          <li><strong>Bob (BTC seller) needs a small amount of ALPH (~0.01 ALPH)</strong> to pay gas fees when claiming ALPH on the Alephium side. Use the ALPH faucet to get testnet tokens before accepting a swap.</li>
-          <li>Balance warnings will appear when publishing or accepting offers if your funds appear insufficient.</li>
+          <li><strong>Bob (BTC seller) needs a little ALPH (~0.01 ALPH)</strong> to pay gas when claiming ALPH. Use the ALPH faucet before accepting a swap.</li>
+          <li>Both pages must run the same build (the log shows it) and show the same session id once a swap starts.</li>
+          <li>A swap takes two signet blocks at least (Bob's lock, Alice's claim): plan for 30 to 60 minutes.</li>
         </ul>
 
         <h4>Recovery</h4>
-        <p>Swap state is saved to localStorage at key checkpoints (<em>locked</em>, <em>presigned</em>, <em>btc_claimed</em>). If the page is refreshed mid-swap, recovery UI appears with available actions: resume (if peer is online), claim, or refund (after timeout).</p>
+        <p>Swap state is saved in this browser at every checkpoint (<em>started</em>, <em>btc_locked</em>, <em>locked</em>, <em>presigned</em>, <em>btc_claimed</em>). If the page is reloaded mid-swap, the recovery panel offers to resume (peer online), claim, or refund once the timeout opens; the setup, lock and deployment steps can be retried without locking or deploying twice.</p>
       </div>
     </div>
   </div>
