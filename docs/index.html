@@ -142,7 +142,7 @@
     flex-shrink: 0;
   }
   .key-icon { font-size: 13px; flex-shrink: 0; }
-  .key-masked { color: #484f58; letter-spacing: 2px; }
+  .key-masked { color: #484f58; letter-spacing: 2px; white-space: nowrap; overflow: hidden; word-break: normal; }
   .key-row {
     display: flex; align-items: center; gap: 8px; font-size: 11px;
     padding: 4px 8px; border: 1px solid #30363d; border-radius: 4px;
@@ -431,6 +431,8 @@
     .addr-line { gap: 4px; }
     .addr-btns { flex-wrap: wrap; }
     .key-row { flex-wrap: wrap; }
+    /* the key takes the first line, the buttons the second: no one-dot-per-line column */
+    .key-value { flex: 1 1 calc(100% - 30px); }
   }
 
   /* Scrollbar */
