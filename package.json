@@ -16,7 +16,8 @@
     "test:bip327": "node test/bip327.test.mjs",
     "compile:contract": "node scripts/compile-contract.mjs",
     "test:keys": "node test/keys.test.mjs",
-    "test:vault": "node scripts/vault-test.mjs"
+    "test:vault": "node scripts/vault-test.mjs",
+    "test:petri": "node test/petri.test.mjs && node scripts/petri-doc.mjs --check"
   },
   "keywords": [
     "alephium",
