@@ -76,6 +76,7 @@ const state = {
   network: 'testnet',
   startedAt: Math.floor(Date.now() / 1000), // page load; older accepts are history, not a swap to start
   lastEventAt: 0, lastPeerEventAt: 0, lastSwapEvent: null,
+  swapRun: null, // token of the step chain in progress; replaced on reset, abort or recovery
   // Relays
   relays: [],
   seenEvents: new Set(),
@@ -1277,7 +1278,7 @@ async function handlePeerAbort() {
   swapEventWaiters.length = 0;
 
   markOfferProcessed(state.activeSwap.offerId);
-  const lockDone = state.stepData.lock?.status === 'done';
+  const lockDone = state.stepData.lock?.status === 'done' || ownFundsOnChain();
   const offer = state.offers.get(state.activeSwap.offerId);
   if (offer) offer.status = lockDone ? 'aborted_locked' : 'aborted';
 
@@ -1294,9 +1295,15 @@ async function handlePeerAbort() {
 // Auto-Execute Swap
 // ============================================================
 
+// Every step checks that the swap it started for is still the active one: an
+// abort, a peer abort or a reset ends the chain (a step that was awaiting a
+// confirmation must not go on to deploy or lock).
+function stepGuard(run) { return () => { if (state.swapRun !== run) throw new Error('Swap aborted'); }; }
+
 async function autoExecuteSwap() {
   if (!state.activeSwap) return;
   const { role } = state.activeSwap;
+  const run = state.swapRun = {}; const check = stepGuard(run);
 
   try {
     updateStep('setup', { status: 'active' });
@@ -1305,6 +1312,7 @@ async function autoExecuteSwap() {
     } else {
       await executeSetupBob();
     }
+    check();
     updateStep('setup', { status: 'done' });
 
     if (state.stepData.lock?.status !== 'done') {
@@ -1314,16 +1322,17 @@ async function autoExecuteSwap() {
       } else {
         await executeLockBob();
       }
+      check();
       updateStep('lock', { status: 'done' });
       saveSwapState();
     }
 
     updateStep('nonces', { status: 'active' });
-    await executeNonces();
+    await executeNonces(); check();
     updateStep('nonces', { status: 'done' });
 
     updateStep('presign', { status: 'active' });
-    await executePresign();
+    await executePresign(); check();
     updateStep('presign', { status: 'done' });
     saveSwapState();
 
@@ -1333,11 +1342,13 @@ async function autoExecuteSwap() {
     } else {
       await executeClaimBob();
     }
+    check();
     updateStep('claim', { status: 'done' });
 
     showSwapComplete();
 
   } catch (e) {
+    if (!state.activeSwap) { addLogMsg('system', 'Swap step ended after the swap was aborted', 'System'); return; }
     addLogMsg('system', `Swap error: ${e.message}`, 'Error');
   }
 }
@@ -1347,13 +1358,14 @@ async function retryStep(stepId) {
   const { role } = state.activeSwap;
 
   updateStep(stepId, { status: 'active', error: null });
+  const run = state.swapRun = {}; const check = stepGuard(run);
 
   try {
     const stepFns = {
       alice: { setup: executeSetupAlice, lock: executeLockAlice, nonces: executeNonces, presign: executePresign, claim: executeClaimAlice },
       bob: { setup: executeSetupBob, lock: executeLockBob, nonces: executeNonces, presign: executePresign, claim: executeClaimBob },
     };
-    await stepFns[role][stepId]();
+    await stepFns[role][stepId](); check();
     updateStep(stepId, { status: 'done' });
     saveSwapState();
 
@@ -1363,7 +1375,7 @@ async function retryStep(stepId) {
       const nextStep = stepOrder[i];
       if (state.stepData[nextStep]?.status === 'done') continue;
       updateStep(nextStep, { status: 'active' });
-      await stepFns[role][nextStep]();
+      await stepFns[role][nextStep](); check();
       updateStep(nextStep, { status: 'done' });
       saveSwapState();
     }
@@ -1749,6 +1761,7 @@ async function refundAlph() {
   try {
     const result = await state.engine.refundAlph();
     showRecoveryStatus(`ALPH refunded! txid: ${result.txid.slice(0, 16)}...`, 'ok');
+    addLogMsg('recovery', `ALPH refunded in ${result.txid}`, 'You');
     await refreshBalance();
   } catch (e) {
     showRecoveryStatus(`ALPH refund error: ${e.message}`, 'error');
@@ -1762,6 +1775,7 @@ async function refundBtc() {
   try {
     const result = await state.engine.refundBtc();
     showRecoveryStatus(`BTC refunded! txid: ${result.txid.slice(0, 16)}...`, 'ok');
+    addLogMsg('recovery', `BTC refunded in ${result.txid}`, 'You');
     await refreshBalance();
   } catch (e) {
     showRecoveryStatus(`BTC refund error: ${e.message}`, 'error');
@@ -1834,9 +1848,19 @@ async function sendAbortNotification() {
   }
 }
 
+// Bob has coins on chain once his lock is broadcast; Alice once her contract is
+// deployed (her engine also records Bob's lock txid, which is not her money).
+function ownFundsOnChain() {
+  if (!state.activeSwap || !state.engine) return false;
+  return state.activeSwap.role === 'bob' ? !!state.engine.btcLockTxid : !!state.engine.contractId;
+}
+
 async function abortSwap() {
   if (!state.activeSwap) return;
-  const lockDone = state.stepData.lock?.status === 'done';
+  // Anything of ours on chain (Bob's lock, Alice's contract) means recovery, not
+  // a reset: the lock step is not "done" until the peer has acted, but the coins
+  // are already committed (found by the local refund drill on 2026-10-01).
+  const lockDone = state.stepData.lock?.status === 'done' || ownFundsOnChain();
   let msg = 'Abort this swap?';
   if (lockDone) {
     msg += '\n\nFunds are already locked on-chain. After aborting, the recovery UI will appear with refund options.';
@@ -1873,6 +1897,7 @@ function resetSwap() {
   state.activeSwap = null;
   state.stepData = {};
   state.selectedUtxo = null;
+  state.swapRun = null;
 
   // Re-create engine for fresh swap state (keeps same keys)
   state.engine = new SwapEngine(state.keys);
@@ -2135,6 +2160,7 @@ function showRecoveryUI(checkpoint) {
 }
 
 async function transitionToRecovery() {
+  state.swapRun = null; // any step still running for this swap stops at its next check
   // Stop active pollers/monitors
   stopBtcClaimPoller();
   stopTimeoutMonitor();
@@ -2173,14 +2199,14 @@ async function checkOnChainState(checkpoint) {
   try {
     // Check BTC lock tx exists on-chain
     if (state.engine?.btcLockTxid) {
-      const txResp = await fetch(`https://mempool.space/signet/api/tx/${state.engine.btcLockTxid}`);
+      const txResp = await fetch(`${CONFIG.btcApi}/tx/${state.engine.btcLockTxid}`);
       if (!txResp.ok) {
         addLogMsg('system', 'BTC lock tx not found on-chain', 'System');
       }
 
       // Check if BTC lock output is already spent (claimed)
       if (state.engine.btcLockVout != null) {
-        const outspendResp = await fetch(`https://mempool.space/signet/api/tx/${state.engine.btcLockTxid}/outspend/${state.engine.btcLockVout}`);
+        const outspendResp = await fetch(`${CONFIG.btcApi}/tx/${state.engine.btcLockTxid}/outspend/${state.engine.btcLockVout}`);
         if (outspendResp.ok) {
           const outspend = await outspendResp.json();
           if (outspend.spent && outspend.txid) {
@@ -2367,7 +2393,7 @@ async function recoveryClaimAlph() {
 async function findBtcClaimTx() {
   if (!state.engine.btcLockTxid || state.engine.btcLockVout == null) return null;
   try {
-    const resp = await fetch(`https://mempool.space/signet/api/tx/${state.engine.btcLockTxid}/outspend/${state.engine.btcLockVout}`);
+    const resp = await fetch(`${CONFIG.btcApi}/tx/${state.engine.btcLockTxid}/outspend/${state.engine.btcLockVout}`);
     if (!resp.ok) return null;
     const data = await resp.json();
     if (data.spent && data.txid) return data.txid;

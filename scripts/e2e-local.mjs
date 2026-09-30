@@ -35,10 +35,12 @@ const stop = () => { for (const p of procs) try { p.kill('SIGTERM'); } catch {} 
 process.on('exit', stop); process.on('SIGINT', () => { stop(); process.exit(130); });
 
 start('page', 'python3', ['-m', 'http.server', String(PAGE), '--bind', '127.0.0.1', '--directory', `${here}/docs`]);
-start('shim', 'node', ['devnet/esplora-shim.mjs', String(SHIM)], { BTC_RPC_URL: RPC_URL, MINE_INTERVAL_MS: process.env.MINE_INTERVAL_MS || '15000' });
+start('shim', 'node', ['devnet/esplora-shim.mjs', String(SHIM)], { BTC_RPC_URL: RPC_URL, MINE_INTERVAL_MS: process.env.MINE_INTERVAL_MS || (process.env.E2E_MODE === 'refund' ? '40000' : '15000') });
 start('relay', 'node', ['devnet/nostr-relay.mjs', String(RELAY)]);
 await new Promise((r) => setTimeout(r, 1500));
 
+// a refund drill leaves the regtest clock in the future: mining then fails with time-too-new
+{ const tip = await rpc('getblock', [await rpc('getbestblockhash'), 1]); if (tip.time > Date.now() / 1000 + 7200) { console.error('regtest tip is in the future (after a refund drill): reset the chain first (stop-regtest; rm -rf devnet/bitcoin/regtest; start-regtest)'); stop(); process.exit(2); } }
 // fund Bob (A) with a mature coinbase and both with devnet ALPH
 console.log('funding', keys.A.btc, 'on regtest and both keys on devnet');
 await rpc('generatetoaddress', [1, keys.A.btc]);
@@ -48,7 +50,7 @@ for (const n of ['A', 'B']) await waitForTx((await fundFromGenesis(keys[n].alph,
 
 const url = `http://127.0.0.1:${PAGE}/index.html?btcNetwork=regtest&btcApi=http://127.0.0.1:${SHIM}&btcExplorer=http://127.0.0.1:${SHIM}&alphNetwork=devnet&alphNode=http://127.0.0.1:22973&alphExplorer=http://127.0.0.1:22973&relays=ws://127.0.0.1:${RELAY}`;
 console.log('running the two-browser swap against', url);
-const e2e = spawn('node', ['scripts/e2e-web.mjs', url, String(seconds), process.env.E2E_DIR || 'buy_alph'], { cwd: here, env: { ...process.env, E2E_KEYS: `${tmp}/keys.json`, E2E_PROFILE_DIR: `${tmp}/profiles`, E2E_SAT: process.env.E2E_SAT || '5000', E2E_ALPH: process.env.E2E_ALPH || '0.5' }, stdio: 'inherit' });
+const e2e = spawn('node', ['scripts/e2e-web.mjs', url, String(seconds), process.env.E2E_DIR || 'buy_alph'], { cwd: here, env: { ...process.env, BTC_RPC_URL: RPC_URL, E2E_KEYS: `${tmp}/keys.json`, E2E_PROFILE_DIR: `${tmp}/profiles`, E2E_SAT: process.env.E2E_SAT || '5000', E2E_ALPH: process.env.E2E_ALPH || '0.5' }, stdio: 'inherit' });
 const code = await new Promise((r) => e2e.on('exit', r));
 stop();
 process.exit(code);

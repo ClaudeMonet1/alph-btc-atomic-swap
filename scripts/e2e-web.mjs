@@ -3,12 +3,16 @@
 // other: A publishes an offer, B accepts, both report their step boxes and
 // console output. Usage: node scripts/e2e-web.mjs [url] [seconds] [dir]
 // dir = buy_alph (A is Bob, the BTC side; default) or sell_alph (A is Alice).
+// E2E_MODE=swap (default) | counter (B counter-offers, A accepts the counter) |
+// refund (A aborts once both locks are done; with BTC_RPC_URL set, the harness
+// moves the regtest clock past T_btc and expects Bob's page to refund itself).
 // Profiles persist under E2E_PROFILE_DIR so funded test keys can be reused.
 import puppeteer from 'puppeteer-core';
 import { mkdirSync } from 'node:fs';
 const url = process.argv[2] || 'https://claudemonet1.github.io/alph-btc-atomic-swap/index.html';
 const seconds = Number(process.argv[3] || 90);
 const dir = process.argv[4] || 'buy_alph';
+const mode = process.env.E2E_MODE || 'swap';
 const profileDir = process.env.E2E_PROFILE_DIR || '/tmp/e2e-profiles';
 import { rmSync, readFileSync } from 'node:fs';
 // E2E_KEYS=<json file with {A:{nsecHex},B:{nsecHex}}> seeds the pages with known keys (funded test keys
@@ -35,6 +39,8 @@ async function open(name) {
   const logs = [];
   page.on('console', (m) => logs.push(`${m.type()}: ${m.text()}`));
   page.on('pageerror', (e) => logs.push(`PAGEERROR: ${e.message}`));
+  page.on('framenavigated', (f) => { if (f === page.mainFrame()) logs.push(`NAVIGATED: ${f.url().slice(0, 120)}`); });
+  page.on('error', (e) => logs.push(`CRASH: ${e.message}`));
   page.on('dialog', async (d) => { logs.push(`DIALOG(${d.type()}): ${d.message().slice(0, 200)}`); await d.accept(); });
   await page.goto(url, { waitUntil: 'load' });
   await page.waitForFunction(() => /npub1[a-z0-9]{20,}/.test(document.body.innerText), { timeout: 60000 });
@@ -49,6 +55,7 @@ const steps = (page) => page.evaluate(() => document.getElementById('steps')?.te
 const balances = (page) => page.evaluate(() => (document.body.innerText.match(/[\d.]+ (?:BTC|ALPH)/g) || []).slice(0, 4).join(' | '));
 
 const A = await open('A'); const B = await open('B');
+process.on('uncaughtException', (e) => { console.log('HARNESS ERROR:', e.message); console.log('--- A console:'); for (const l of A.logs.slice(-25)) console.log('  ' + l.slice(0, 200)); console.log('--- B console:'); for (const l of B.logs.slice(-25)) console.log('  ' + l.slice(0, 200)); process.exit(1); });
 console.log('A', A.ident, '\nB', B.ident);
 await sleep(8000); // relays
 console.log('A balances:', await balances(A.page)); console.log('B balances:', await balances(B.page));
@@ -74,29 +81,79 @@ const offerId = await A.page.evaluate(async () => {
   return null;
 });
 console.log('A offer id:', offerId);
-// B accepts exactly that offer (never a stranger's)
-const accepted = await B.page.evaluate(async (id) => {
-  for (let i = 0; i < 60; i++) {
-    const btn = document.querySelector(`.accept-offer-btn[data-offer="${id}"]`);
-    if (btn) { btn.click(); return id; }
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-  return null;
-}, offerId);
+let accepted;
+if (mode === 'counter') {
+  // B counter-offers a smaller amount; A (the maker) accepts the counter
+  const countered = await B.page.evaluate(async (id, alph, sat) => {
+    for (let i = 0; i < 60; i++) {
+      const btn = document.querySelector(`.counter-offer-btn[data-offer="${id}"]`);
+      if (btn) {
+        btn.click(); await new Promise((r) => setTimeout(r, 300));
+        const form = btn.closest('.offer-card').querySelector('.counter-form'); if (!form) return 'no form';
+        form.querySelector('.counter-alph').value = alph; form.querySelector('.counter-sat').value = sat;
+        form.querySelector('.submit-counter-btn').click(); return id;
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return null;
+  }, offerId, process.env.E2E_COUNTER_ALPH || '0.4', process.env.E2E_COUNTER_SAT || '4000');
+  console.log('B countered offer', countered);
+  accepted = await A.page.evaluate(async (id) => {
+    for (let i = 0; i < 60; i++) {
+      const btn = document.querySelector(`.accept-counter-btn[data-offer="${id}"]`);
+      if (btn) { btn.click(); return id; }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return null;
+  }, offerId);
+  console.log('A accepted the counter on', accepted);
+} else {
+  // B accepts exactly that offer (never a stranger's)
+  accepted = await B.page.evaluate(async (id) => {
+    for (let i = 0; i < 60; i++) {
+      const btn = document.querySelector(`.accept-offer-btn[data-offer="${id}"]`);
+      if (btn) { btn.click(); return id; }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return null;
+  }, offerId);
+}
 console.log('B accepted offer', accepted);
 
 // Poll both sides; stop early when both have claimed or either side shows an error.
-let lastA = '', lastB = '';
-for (let t = 15; t <= seconds; t += 15) {
-  await sleep(15000);
+let lastA = '', lastB = '', aborted = false;
+const pollMs = mode === 'refund' ? 1000 : 15000; // the refund drill must catch the lock before Alice deploys
+for (let t = pollMs / 1000; t <= seconds; t += pollMs / 1000) {
+  await sleep(pollMs);
   const a = await steps(A.page), b = await steps(B.page);
   if (a !== lastA || b !== lastB) {
     console.log(`\n===== t=${t}s (${new Date().toISOString()})\n--- A (${dir === 'buy_alph' ? 'Bob' : 'Alice'}) steps:\n${a.replace(/\n\s*\n/g, '\n')}\n--- B (${dir === 'buy_alph' ? 'Alice' : 'Bob'}) steps:\n${b.replace(/\n\s*\n/g, '\n')}`);
     lastA = a; lastB = b;
   }
   const done = (x) => /5\. Claim\s*✓ Done/.test(x);
+  if (mode === 'refund') {
+    // abort as soon as Bob's lock is out and before Alice deploys: Bob's refund is the only way back
+    const bobLocked = (x) => /BTC locked: [0-9a-f]{16}/.test(x);
+    if (!aborted && bobLocked(dir === 'buy_alph' ? a : b)) {
+      aborted = true;
+      console.log('\n===== Bob has locked: A aborts (Bob goes to recovery, Alice resets)');
+      await A.page.click('#abort-swap-btn'); await sleep(3000);
+      if (process.env.BTC_RPC_URL) {
+        // regtest: move the clock past T_btc so the shim's next blocks carry a median time past beyond the locktime
+        const rpc = async (method, params = []) => { const j = await fetch(process.env.BTC_RPC_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Basic ' + Buffer.from(process.env.BTC_RPC_AUTH || 'nostralph:nostralph').toString('base64') }, body: JSON.stringify({ method, params }) }).then((r) => r.json()); if (j.error) throw new Error(j.error.message); return j.result; };
+        await rpc('setmocktime', [Math.floor(Date.now() / 1000) + 26 * 3600]);
+        console.log('regtest clock moved 26 h ahead; waiting for the median time past to follow');
+      }
+    }
+    const aLog = await A.page.evaluate(() => (document.getElementById('app-log')?.textContent || '') + (document.getElementById('recovery-status-msg')?.textContent || ''));
+    const refunded = /BTC refunded/.test(aLog) || /BTC refunded/.test(a);
+    if (refunded) { console.log('\n===== stop: Bob refunded after the abort'); break; }
+    if (/✗ Error/.test(a + b) && !aborted) { console.log('\n===== stop: a side reported an error'); break; }
+    continue;
+  }
   if ((done(a) && done(b)) || /✗ Error/.test(a + b)) { console.log('\n===== stop:', done(a) && done(b) ? 'both sides complete' : 'a side reported an error'); break; }
 }
+if (mode === 'refund' && process.env.BTC_RPC_URL) console.log('NOTE: the regtest chain now has blocks 26 h in the future; reset it (stop-regtest; rm -rf devnet/bitcoin/regtest; start-regtest) before other runs');
 const pageLog = (page) => page.evaluate(() => document.getElementById('app-log')?.textContent || '(no log panel)');
 console.log('\n--- A page log:\n' + (await pageLog(A.page)));
 console.log('\n--- B page log:\n' + (await pageLog(B.page)));
