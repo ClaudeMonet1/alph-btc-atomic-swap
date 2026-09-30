@@ -17,7 +17,9 @@
     "compile:contract": "node scripts/compile-contract.mjs",
     "test:keys": "node test/keys.test.mjs",
     "test:vault": "node scripts/vault-test.mjs",
-    "test:petri": "node test/petri.test.mjs && node scripts/petri-doc.mjs --check"
+    "test:petri": "node test/petri.test.mjs && node scripts/petri-doc.mjs --check",
+    "e2e:local": "node scripts/e2e-local.mjs",
+    "e2e:live": "node scripts/e2e-web.mjs"
   },
   "keywords": [
     "alephium",

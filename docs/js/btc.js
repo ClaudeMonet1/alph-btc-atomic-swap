@@ -9,9 +9,10 @@ bitcoin.initEccLib(ecc);
 
 // ---- Hardcoded signet config ----
 
-const NETWORK = bitcoin.networks.testnet;
-const ESPLORA_URL = 'https://mempool.space/signet/api';
-export const BTC_NETWORK_NAME = 'signet';
+import { CONFIG } from './config.js';
+export const BTC_NETWORK_NAME = CONFIG.btcNetwork;
+const NETWORK = { signet: bitcoin.networks.testnet, testnet: bitcoin.networks.testnet, regtest: bitcoin.networks.regtest, mainnet: bitcoin.networks.bitcoin }[BTC_NETWORK_NAME] || bitcoin.networks.testnet;
+const ESPLORA_URL = CONFIG.btcApi;
 
 // ---- Esplora API client ----
 

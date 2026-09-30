@@ -100,6 +100,12 @@ Both parties' transactions can sit under the fee floor (signet's floor moves and
 
 Relay publishes retry with backoff for up to a minute before a step fails, the last swap message is remembered and republished on a relay that reconnects (replaceable events make this idempotent), and the relay indicator shows reconnection and how long ago the peer last spoke. Every dialog is an in-page modal (`modal.js`): native dialogs blocked the page while a peer's message could arrive.
 
+## Endpoints and a local end-to-end run
+
+`config.js` holds the Bitcoin API (Esplora shape), the Alephium node, the explorer bases and the relays, with the public signet and testnet services as defaults. URL parameters override any of them and are remembered in the browser (`?btcNetwork=regtest&btcApi=…&alphNetwork=devnet&alphNode=…&relays=…`, `?resetConfig` restores the defaults); the Settings button shows what is in use. Faucet buttons hide off the test networks.
+
+`npm run e2e:local` runs the complete two-browser swap against local chains in under a minute: `devnet/esplora-shim.mjs` serves the Esplora endpoints the page uses over a Bitcoin Core regtest node and mines a block every 15 s, `devnet/nostr-relay.mjs` is a minimal NIP-01 relay, the page is served from `docs/`, fresh keys are funded from a regtest coinbase and the devnet genesis, and `scripts/e2e-web.mjs` drives the maker and the taker through offer, accept, lock, deployment, nonces, pre-signatures and both claims. It needs the regtest node (`BTC_RPC_URL`, default port 18543) and the devnet node (port 22973) running, as the alph-btc-bridge nix shell provides them. `npm run e2e:live` is the same harness against the published page and real signet coins.
+
 ## State Persistence and Recovery
 
 The swap orchestrator saves state at three checkpoints:

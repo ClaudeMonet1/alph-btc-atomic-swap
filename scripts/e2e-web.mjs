@@ -40,7 +40,7 @@ async function open(name) {
   await page.waitForFunction(() => /npub1[a-z0-9]{20,}/.test(document.body.innerText), { timeout: 60000 });
   const ident = await page.evaluate(() => ({
     npub: (document.body.innerText.match(/npub1[a-z0-9]{20,}/) || [])[0],
-    btc: (document.body.innerText.match(/tb1p[a-z0-9]{20,}/) || [])[0],
+    btc: (document.body.innerText.match(/(?:tb1p|bcrt1p|bc1p)[a-z0-9]{20,}/) || [])[0],
     alph: (document.body.innerText.match(/\b[1-9A-HJ-NP-Za-km-z]{44,46}\b/) || [])[0],
   }));
   return { browser, page, logs, ident, name };

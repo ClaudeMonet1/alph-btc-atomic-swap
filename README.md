@@ -192,6 +192,19 @@ Two deployment modes share the same crypto core:
 | `src/btc-swap.js` | Bitcoin taproot: P2TR output, key-path spend, refund via script-path |
 | `src/alph-swap.js` | Alephium contract: compile, deploy, claim, refund, verify state + bytecode |
 
+### Tests
+
+| Command | What it checks |
+|---|---|
+| `npm run test:bip327` | BIP327 vectors and the adaptor round trip (also run in the browser by `smoke:web`) |
+| `npm run test:keys` | Key derivation: deterministic, three distinct keys, Alephium key in group 1 |
+| `npm run test:petri` | The protocol net: every reachable marking, and the document block matches |
+| `npm run vendor:check` | Vendored bundles match their checksums |
+| `npm run smoke:web` | Headless load of the page: modules, identity, relays, BIP327 self-test, contract artifact |
+| `npm run test:vault` | Passphrase vault: set, reload, wrong and right passphrase, remove |
+| `npm run e2e:local` | A complete two-browser swap on regtest (Esplora shim, 15 s blocks), devnet and a local relay, in about a minute |
+| `npm run e2e:live` | The same harness against the published page, signet and the Alephium testnet (needs funded keys) |
+
 ### Static Web App (`docs/`)
 
 | File | What it does |
