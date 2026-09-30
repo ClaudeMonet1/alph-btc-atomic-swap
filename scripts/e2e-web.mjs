@@ -23,6 +23,14 @@ async function open(name) {
   const browser = await puppeteer.launch({ executablePath, headless: true, userDataDir: `${profileDir}/${name}`, args: ['--no-sandbox', '--disable-gpu'] });
   const page = await browser.newPage();
   await page.setCacheEnabled(false); // Pages sends max-age=600: a reused profile would run a stale build
+  // in-page modals (modal.js): confirm and alert are accepted, prompts cancelled
+  await page.evaluateOnNewDocument(() => {
+    new MutationObserver(() => {
+      const m = document.getElementById('modal'); if (!m || m.dataset.answered) return; m.dataset.answered = '1';
+      console.log('MODAL: ' + (m.querySelector('#modal-msg')?.textContent || '').slice(0, 80));
+      setTimeout(() => (m.querySelector('#modal-input') ? m.querySelector('#modal-cancel') : m.querySelector('#modal-ok')).click(), 50);
+    }).observe(document, { childList: true, subtree: true });
+  });
   if (seededKeys?.[name]?.nsecHex) await page.evaluateOnNewDocument((hex) => { try { if (!localStorage.getItem('btc-alph-swap-nsec')) localStorage.setItem('btc-alph-swap-nsec', hex); } catch {} }, seededKeys[name].nsecHex);
   const logs = [];
   page.on('console', (m) => logs.push(`${m.type()}: ${m.text()}`));
