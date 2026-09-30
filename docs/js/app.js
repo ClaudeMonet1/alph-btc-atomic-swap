@@ -17,6 +17,7 @@ import { getP2TRAddress } from './btc.js';
 import { BUILD } from './build.js';
 import { deriveKeys, legacyKeys } from './keys.js';
 import { deriveVaultKey, newSalt, sealString, openString, saltOf } from './vault.js';
+import { modalAlert, modalConfirm, modalPrompt } from './modal.js';
 
 // GitHub Pages caches every file for ten minutes: a tab opened before a deploy
 // runs the old modules. Compare the module build id with version.json fetched
@@ -52,6 +53,7 @@ const state = {
   nsecBech32: null,
   network: 'testnet',
   startedAt: Math.floor(Date.now() / 1000), // page load; older accepts are history, not a swap to start
+  lastEventAt: 0, lastPeerEventAt: 0, lastSwapEvent: null,
   // Relays
   relays: [],
   seenEvents: new Set(),
@@ -115,6 +117,10 @@ function setupRelayReconnect(relay) {
         resubscribeRelay(relay);
         updateRelayStatus();
         addLogMsg('system', `Reconnected to ${relay.url.replace('wss://', '')}`, 'System');
+        // the peer may have missed our last message while this relay was down
+        if (state.activeSwap && state.lastSwapEvent) {
+          try { relay.ws.send(JSON.stringify(['EVENT', state.lastSwapEvent])); addLogMsg('system', 'Republished the last swap message', 'System'); } catch {}
+        }
       } catch {
         reconnect();  // retry on failure
       }
@@ -133,6 +139,7 @@ function resubscribeRelay(relay) {
           const event = msg[2];
           if (state.seenEvents.has(event.id)) return;
           state.seenEvents.add(event.id);
+          state.lastEventAt = Date.now();
           try { onEvent(event); }
           catch (err) { console.error('event handler failed', subId, event.kind, err); addLogMsg('error', `Handling a kind ${event.kind} event failed: ${err.message}`, 'Error'); }
         }
@@ -156,7 +163,24 @@ async function signEvent(template) {
   return event;
 }
 
-function nostrPublish(event) {
+// Publish with retries (2 s, 4 s, ... up to a minute): a relay hiccup must not
+// abort a swap step. Swap messages are remembered so a reconnect can republish
+// the last one (replaceable events make that idempotent).
+async function nostrPublish(event) {
+  if (event.kind >= SWAP_SETUP_KIND && event.kind <= SWAP_CLAIM_KIND) state.lastSwapEvent = event;
+  let delay = 2000, lastErr;
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    try { return await publishOnce(event); }
+    catch (e) {
+      lastErr = e;
+      addLogMsg('system', `Publish failed (${e.message}); retry ${attempt}/6 in ${delay / 1000} s`, 'System');
+      await new Promise((r) => setTimeout(r, delay)); delay = Math.min(delay * 2, 30000);
+    }
+  }
+  throw lastErr;
+}
+
+function publishOnce(event) {
   return new Promise((resolve, reject) => {
     let resolved = false;
     let errors = 0;
@@ -198,6 +222,7 @@ function subscribe(subId, filters, onEvent) {
           const event = msg[2];
           if (state.seenEvents.has(event.id)) return;
           state.seenEvents.add(event.id);
+          state.lastEventAt = Date.now();
           onEvent(event);
         }
       } catch {}
@@ -222,6 +247,9 @@ const swapEventWaiters = [];
 // Waits that span the peer's on-chain confirmation wait (lock and claim phases)
 // get CHAIN_WAIT_MS; the timelocks are the real deadline, and the user can abort.
 const CHAIN_WAIT_MS = 6 * 3600 * 1000;
+const BTC_BLOCK_HINT = BTC_NETWORK_NAME === 'signet' ? 'a signet block takes 10 to 20 min' : 'about 10 min per block';
+const ALPH_BLOCK_HINT = 'about 16 s per block';
+const fmtRemaining = (ms) => { if (ms <= 0) return 'now'; const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000); return h ? `${h} h ${m} min` : `${m} min`; };
 function waitForSwapEvent(kind, sessionId, fromPub, predicate = null, timeoutMs = 3600_000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -469,6 +497,9 @@ function renderSwapActions() {
       html += '<button class="danger sm" id="refund-btc-btn">Refund BTC</button>';
     }
   }
+  if (state.activeSwap.role === 'bob' && state.engine.btcLockTxid && !lockDone && state.engine.lockBumpable()) {
+    html += '<button class="sm" id="bump-lock-btn" title="Child pays for parent: spend the lock\'s change at the current fee rate">Bump lock fee</button>';
+  }
 
   // Always show abort button during an active swap
   html += '<button class="sm" id="abort-swap-btn" style="margin-left:auto">Abort Swap</button>';
@@ -479,6 +510,8 @@ function renderSwapActions() {
   if (refundAlphBtn) refundAlphBtn.addEventListener('click', refundAlph);
   const refundBtcBtn = document.getElementById('refund-btc-btn');
   if (refundBtcBtn) refundBtcBtn.addEventListener('click', refundBtc);
+  const bumpLockBtn = document.getElementById('bump-lock-btn');
+  if (bumpLockBtn) bumpLockBtn.addEventListener('click', bumpLockNow);
   document.getElementById('abort-swap-btn').addEventListener('click', abortSwap);
 }
 
@@ -978,13 +1011,13 @@ async function acceptOffer(offerId) {
   const offer = state.offers.get(offerId);
   if (!offer) return;
   const groupProblem = peerGroupProblem(offer.keys);
-  if (groupProblem) { alert(`Cannot take this offer: ${groupProblem}.`); return; }
+  if (groupProblem) { await modalAlert(`Cannot take this offer: ${groupProblem}.`); return; }
 
   // Acceptor role: sell_alph offer → acceptor is bob; buy_alph offer → acceptor is alice
   const role = offer.direction === 'sell_alph' ? 'bob' : 'alice';
   const { ok, warnings } = await validateBalanceForSwap(role, offer.alphAmount, offer.btcSat);
   if (!ok) {
-    const proceed = confirm('Balance warnings:\n\n' + warnings.join('\n') + '\n\nProceed anyway?');
+    const proceed = await modalConfirm('Balance warnings:\n\n' + warnings.join('\n') + '\n\nProceed anyway?', 'Proceed');
     if (!proceed) return;
   }
 
@@ -1011,7 +1044,7 @@ async function acceptCounter(offerId, counterIndex) {
   const role = offer.direction === 'sell_alph' ? 'alice' : 'bob';
   const { ok, warnings } = await validateBalanceForSwap(role, counter.alphAmount, counter.btcSat);
   if (!ok) {
-    const proceed = confirm('Balance warnings:\n\n' + warnings.join('\n') + '\n\nProceed anyway?');
+    const proceed = await modalConfirm('Balance warnings:\n\n' + warnings.join('\n') + '\n\nProceed anyway?', 'Proceed');
     if (!proceed) return;
   }
 
@@ -1176,6 +1209,7 @@ function subscribeToSwap(sessionId, peerPubHex) {
   }], async (event) => {
     const isMine = event.pubkey === state.pubKeyHex;
     const authorLabel = isMine ? 'You' : event.pubkey.slice(0, 8) + '...';
+    if (!isMine) state.lastPeerEventAt = Date.now();
 
     // Decrypt the NIP-44 content; anything else from the peer is ignored (no plaintext fallback)
     let decryptedContent;
@@ -1350,7 +1384,7 @@ async function executeSetupAlice() {
 
     if (btcLocked.btcLocktime === undefined) throw new Error('Peer runs an old version without the BTC locktime: refusing to lock');
     const { confirmations } = await state.engine.verifyBtc(btcLocked.txid, btcLocked.vout, btcLocked.btcLocktime,
-      (have, need) => updateStep('setup', { info: `BTC lock ${btcLocked.txid.slice(0, 16)}...: ${have}/${need} confirmations (not locking ALPH before that)` }));
+      (have, need) => updateStep('setup', { info: `BTC lock ${btcLocked.txid.slice(0, 16)}...: ${have}/${need} confirmations (not locking ALPH before that; ${BTC_BLOCK_HINT})` }));
 
     updateStep('setup', { info: `BTC locked: ${btcLocked.txid.slice(0, 16)}... verified with ${confirmations} confirmation(s)` });
   } catch (e) {
@@ -1406,6 +1440,35 @@ function watchClaimFee(claimTxid) {
     } catch (e) { addLogMsg('claim', `Fee bump check failed: ${e.message}`, 'Error'); }
   }, 60_000);
   return () => clearInterval(timer);
+}
+
+// Bob's lock, like Alice's claim, is bumped (child pays for parent from the
+// change output) when it sits unconfirmed under the fee floor.
+function watchLockFee(lockTxid) {
+  const started = Date.now();
+  const timer = setInterval(async () => {
+    try {
+      if (Date.now() - started < 5 * 60_000) return;
+      if (await state.engine.getLockConfirmations() > 0) { clearInterval(timer); return; }
+      if (!state.engine.lockBumpable()) return;
+      const need = await estimateFeeRate();
+      const have = state.engine.lockFeeRate();
+      if (need <= have) return;
+      const r = await state.engine.bumpLockFee();
+      addLogMsg('lock', `Lock ${lockTxid.slice(0, 12)}... paid ${have.toFixed(1)} sat/vB, the floor is ${need}: bumped with child ${r.txid.slice(0, 16)}... (${r.childFee} sat, ${r.feeRate} sat/vB)`, 'You');
+      updateStep('lock', { info: `BTC locked: ${lockTxid.slice(0, 16)}... (fee bumped to ${r.feeRate} sat/vB)\nWaiting for Alice to deploy ALPH (${BTC_BLOCK_HINT}).` });
+      saveSwapState();
+    } catch (e) { addLogMsg('lock', `Lock fee bump check failed: ${e.message}`, 'Error'); }
+  }, 60_000);
+  return () => clearInterval(timer);
+}
+
+async function bumpLockNow() {
+  try {
+    const r = await state.engine.bumpLockFee();
+    addLogMsg('lock', `Lock bumped with child ${r.txid.slice(0, 16)}... (${r.childFee} sat, ${r.feeRate} sat/vB)`, 'You');
+    saveSwapState();
+  } catch (e) { await modalAlert(`Cannot bump the lock: ${e.message}`); }
 }
 
 async function executeClaimAlice() {
@@ -1480,14 +1543,19 @@ async function executeLockBob() {
     await nostrPublish(event);
 
     const lockDepth = btcConfirmationsFor(state.activeSwap.btcSat, BTC_NETWORK_NAME);
-    updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}...\nWaiting for Alice to deploy ALPH. She first waits for ${lockDepth} confirmation(s) of this lock (signet blocks come every 10 to 20 minutes), so this step takes a while.` });
-    const alphDeployedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
-      (e) => JSON.parse(e.content).type === 'alph_deployed', CHAIN_WAIT_MS);
+    updateStep('lock', { info: `BTC locked: ${lockResult.txid.slice(0, 16)}...\nWaiting for Alice to deploy ALPH. She first waits for ${lockDepth} confirmation(s) of this lock (${BTC_BLOCK_HINT}), so this step takes a while.` });
+    renderSwapActions(); // the bump button appears once a lock exists
+    const stopLockWatch = watchLockFee(lockResult.txid);
+    let alphDeployedEvent;
+    try {
+      alphDeployedEvent = await waitForSwapEvent(SWAP_SETUP_KIND, sessionId, peerPubHex,
+        (e) => JSON.parse(e.content).type === 'alph_deployed', CHAIN_WAIT_MS);
+    } finally { stopLockWatch(); }
     const alphDeployed = JSON.parse(alphDeployedEvent.content);
 
     if (alphDeployed.claimFeeSat === undefined || !alphDeployed.deployTxId) throw new Error('Peer runs an old version without the claim fee or the deployment txid: refusing to continue');
     await state.engine.verifyAlph(alphDeployed.contractId, alphDeployed.contractAddress, alphDeployed.claimFeeSat, alphDeployed.deployTxId,
-      (have, need) => updateStep('lock', { info: `ALPH contract ${alphDeployed.contractAddress.slice(0, 16)}...: deployment ${have}/${need} confirmations` }));
+      (have, need) => updateStep('lock', { info: `ALPH contract ${alphDeployed.contractAddress.slice(0, 16)}...: deployment ${have}/${need} confirmations (${ALPH_BLOCK_HINT})` }));
 
     const verifiedEvent = await createSwapSetup({
       sessionId, recipientPubHex: peerPubHex, msgType: 'verified',
@@ -1506,17 +1574,26 @@ async function executeClaimBob() {
   const { sessionId, peerPubHex } = state.activeSwap;
 
   try {
-    updateStep('claim', { info: 'Waiting for Alice to claim BTC...' });
-    const btcClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
-      (e) => JSON.parse(e.content).type === 'btc_claimed', CHAIN_WAIT_MS);
-    const btcClaimed = JSON.parse(btcClaimedEvent.content);
+    // Bob must claim before T_alph (12 h after his own refund opens): show the slack
+    let base = 'Waiting for Alice to claim BTC...';
+    const tAlphLine = () => state.engine.alphTimeoutMs ? `\nYour ALPH claim must be in before T_alph: ${fmtRemaining(state.engine.alphTimeoutMs - Date.now())} left` : '';
+    const setInfo = (text) => { base = text; updateStep('claim', { info: base + tAlphLine() }); };
+    setInfo(base);
+    const countdown = setInterval(() => setInfo(base), 30000);
+    let btcClaimed, result;
+    try {
+      const btcClaimedEvent = await waitForSwapEvent(SWAP_CLAIM_KIND, sessionId, peerPubHex,
+        (e) => JSON.parse(e.content).type === 'btc_claimed', CHAIN_WAIT_MS);
+      btcClaimed = JSON.parse(btcClaimedEvent.content);
 
-    state.engine.btcClaimTxid = btcClaimed.txid;
-    saveSwapState();
-    updateStep('claim', { info: `Alice claimed BTC: ${btcClaimed.txid.slice(0, 16)}...\nExtracting secret and claiming ALPH...`, btcClaimTxid: btcClaimed.txid });
+      state.engine.btcClaimTxid = btcClaimed.txid;
+      saveSwapState();
+      setInfo(`Alice claimed BTC: ${btcClaimed.txid.slice(0, 16)}...\nExtracting secret and claiming ALPH...`);
+      updateStep('claim', { btcClaimTxid: btcClaimed.txid });
 
-    const result = await state.engine.claimAlph(btcClaimed.txid,
-      (have, need) => updateStep('claim', { info: `Alice's BTC claim ${btcClaimed.txid.slice(0, 16)}...: ${have}/${need} confirmations before claiming ALPH` }));
+      result = await state.engine.claimAlph(btcClaimed.txid,
+        (have, need) => setInfo(`Alice's BTC claim ${btcClaimed.txid.slice(0, 16)}...: ${have}/${need} confirmations before claiming ALPH (${BTC_BLOCK_HINT})`));
+    } finally { clearInterval(countdown); }
 
     const event = await createSwapClaim({
       sessionId, recipientPubHex: peerPubHex, claimType: 'alph_claimed',
@@ -1748,7 +1825,7 @@ async function abortSwap() {
   } else {
     msg += '\n\nNo funds have been locked yet. Safe to abort.';
   }
-  if (!confirm(msg)) return;
+  if (!await modalConfirm(msg, 'Abort')) return;
 
   markOfferProcessed(state.activeSwap.offerId);
   const offer = state.offers.get(state.activeSwap.offerId);
@@ -1830,7 +1907,7 @@ async function loadOrCreateNsec(statusEl) {
   if (encRaw) {
     const record = JSON.parse(encRaw);
     for (;;) {
-      const pass = prompt('This wallet is protected by a passphrase. Enter it to unlock (Cancel keeps the page locked):');
+      const pass = await modalPrompt('This wallet is protected by a passphrase. Enter it to unlock (Cancel keeps the page locked).', { password: true, placeholder: 'passphrase' });
       if (pass === null) throw new Error('Wallet locked: reload and enter the passphrase to use it.');
       if (statusEl) statusEl.textContent = 'Unlocking...';
       try {
@@ -1841,7 +1918,7 @@ async function loadOrCreateNsec(statusEl) {
         vaultKey = key; vaultSalt = salt;
         localStorage.removeItem(STORAGE_KEY); // a plaintext copy has no business next to the vault
         return hex;
-      } catch { alert('Wrong passphrase.'); }
+      } catch { await modalAlert('Wrong passphrase.'); }
     }
   }
   const hex = localStorage.getItem(STORAGE_KEY);
@@ -1857,18 +1934,18 @@ async function loadOrCreateNsec(statusEl) {
 // Set, change or remove the passphrase. The secret and the current swap state are re-sealed.
 async function setPassphrase() {
   if (hasPassphrase()) {
-    if (!confirm('A passphrase is set. Remove it and store the key in clear again?')) return;
+    if (!await modalConfirm('A passphrase is set. Remove it and store the key in clear again?', 'Remove')) return;
     localStorage.setItem(STORAGE_KEY, bytesToHex(state.secBytes));
     localStorage.removeItem(STORAGE_KEY_ENC);
     vaultKey = null; vaultSalt = null;
     saveSwapState();
     addLogMsg('system', 'Passphrase removed: the key is stored in clear in this browser.', 'System');
   } else {
-    const p1 = prompt('Choose a passphrase (at least 8 characters). It encrypts your key and swap state in this browser. Losing it means losing access unless you have backed up the nsec.');
+    const p1 = await modalPrompt('Choose a passphrase (at least 8 characters). It encrypts your key and swap state in this browser. Losing it means losing access unless you have backed up the nsec.', { password: true, placeholder: 'passphrase' });
     if (p1 === null) return;
-    if (p1.length < 8) { alert('At least 8 characters.'); return; }
-    const p2 = prompt('Repeat the passphrase:');
-    if (p2 !== p1) { alert('The passphrases differ.'); return; }
+    if (p1.length < 8) { await modalAlert('At least 8 characters.'); return; }
+    const p2 = await modalPrompt('Repeat the passphrase:', { password: true, placeholder: 'passphrase again' });
+    if (p2 !== p1) { await modalAlert('The passphrases differ.'); return; }
     const salt = newSalt();
     const key = await deriveVaultKey(p1, salt);
     const record = await sealString(key, salt, bytesToHex(state.secBytes));
@@ -2134,6 +2211,7 @@ function renderRecoveryActions(checkpoint) {
     html += `<span style="color:#8b949e; font-size:12px">Swap interrupted before anything was locked. Resume continues from the first unfinished step (peer must be online).</span> `;
   } else if (checkpoint === 'btc_locked') {
     html += `<button class="sm primary" id="recovery-resume-btn">Resume Swap</button> `;
+    if (state.engine.lockBumpable()) html += `<button class="sm" id="recovery-bump-lock-btn">Bump lock fee</button> `;
     html += `<span style="color:#8b949e; font-size:12px">BTC locked; Alice had not deployed yet. Resume waits for her contract (peer must be online).</span> `;
     html += `<button class="sm danger" id="recovery-refund-btc-btn" disabled>Refund BTC</button> `;
   } else if (checkpoint === 'locked') {
@@ -2176,6 +2254,8 @@ function renderRecoveryActions(checkpoint) {
   // Bind handlers
   const resumeBtn = document.getElementById('recovery-resume-btn');
   if (resumeBtn) resumeBtn.addEventListener('click', resumeSwapFromLocked);
+  const bumpLockBtn = document.getElementById('recovery-bump-lock-btn');
+  if (bumpLockBtn) bumpLockBtn.addEventListener('click', bumpLockNow);
 
   const claimBtcBtn = document.getElementById('recovery-claim-btc-btn');
   if (claimBtcBtn) claimBtcBtn.addEventListener('click', recoveryClaimBtc);
@@ -2203,8 +2283,8 @@ function renderRecoveryActions(checkpoint) {
   if (refundBtcBtn) refundBtcBtn.addEventListener('click', refundBtc);
 
   const clearBtn = document.getElementById('recovery-clear-btn');
-  if (clearBtn) clearBtn.addEventListener('click', () => {
-    if (!confirm('Clear saved swap state?\n\nThis will NOT refund your locked funds. You will need to manually recover them if the swap is incomplete.')) return;
+  if (clearBtn) clearBtn.addEventListener('click', async () => {
+    if (!await modalConfirm('Clear saved swap state?\n\nThis will NOT refund your locked funds. You will need to manually recover them if the swap is incomplete.', 'Clear')) return;
     clearSwapState();
     resetSwap();
   });
@@ -2470,6 +2550,7 @@ async function autoConnect() {
     const relayNames = connected.map(r => r.url.replace('wss://', '')).join(', ');
     updateRelayStatus();
     addLogMsg('system', `Connected via ${connected.length} relays: ${relayNames}`, 'System');
+    setInterval(updateRelayStatus, 10000);
     checkBuild();
     checkLegacyFunds();
 
@@ -2526,7 +2607,11 @@ function updateRelayStatus() {
   const el = document.getElementById('relay-status');
   const alive = state.relays.filter(r => r.ws.readyState === WebSocket.OPEN).length;
   const total = state.relays.length;
-  el.textContent = `${alive}/${total} relays`;
+  const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`; };
+  let text = alive < total ? `${alive}/${total} relays (reconnecting)` : `${alive}/${total} relays`;
+  if (state.activeSwap && state.lastPeerEventAt) text += ` · peer ${ago(state.lastPeerEventAt)} ago`;
+  el.textContent = text;
+  el.title = state.lastEventAt ? `Last relay event ${ago(state.lastEventAt)} ago` : 'Connected Nostr relays';
   el.style.color = alive === 0 ? '#f85149' : alive < total ? '#d29922' : '#2ea043';
 
   // Fallback: trigger reconnect for relays that dropped without onclose firing
@@ -2595,12 +2680,12 @@ async function refreshBalance() {
 document.getElementById('refresh-bal-btn').addEventListener('click', refreshBalance);
 
 // Reset key — strong confirmation
-document.getElementById('reset-key-btn').addEventListener('click', () => {
+document.getElementById('reset-key-btn').addEventListener('click', async () => {
   const msg = 'WARNING: This will permanently delete your current key.\n\n' +
     'All funds (BTC and ALPH) associated with this identity will be LOST ' +
     'unless you have backed up your nsec.\n\n' +
     'Type "RESET" to confirm:';
-  const input = prompt(msg);
+  const input = await modalPrompt(msg, { placeholder: 'RESET' });
   if (input !== 'RESET') return;
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(STORAGE_KEY_ENC);
@@ -2860,11 +2945,11 @@ function initBackupState() {
 
 document.getElementById('passphrase-btn').addEventListener('click', () => { setPassphrase().catch((e) => addLogMsg('system', `Passphrase change failed: ${e.message}`, 'Error')); });
 
-document.getElementById('backup-btn').addEventListener('click', () => {
-  const confirmed = confirm(
+document.getElementById('backup-btn').addEventListener('click', async () => {
+  const confirmed = await modalConfirm(
     'Have you saved your nsec (private key) somewhere safe?\n\n' +
     'Without this key, all BTC and ALPH funds in this wallet will be permanently lost.\n\n' +
-    'Click OK to confirm you have backed it up.'
+    'Click OK to confirm you have backed it up.', 'I backed it up'
   );
   if (!confirmed) return;
   localStorage.setItem(BACKUP_CONFIRMED_KEY, 'true');
