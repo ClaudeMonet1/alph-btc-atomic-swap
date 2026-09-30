@@ -134,6 +134,7 @@
     color: #e6edf3; border-color: #58a6ff; background: transparent;
   }
   .faucet-btn { color: #bb8009; border-color: #9e6a03; text-decoration: none; }
+  body.no-faucet .faucet-btn { display: none; }
   .faucet-btn:hover { color: #f7931a; border-color: #f7931a; }
 
   /* Key Section */
@@ -476,6 +477,7 @@
       <span class="alph-bal" id="bal-alph">-- ALPH</span>
       <button id="refresh-bal-btn" style="padding:4px 8px; font-size:10px">Refresh</button>
       <span id="relay-status" style="font-size:10px; color:#8b949e" title="Connected Nostr relays"></span>
+      <button id="settings-btn" style="padding:4px 8px; font-size:10px" title="Endpoints and networks in use">Settings</button>
       <button id="help-btn" style="padding:4px 8px; font-size:10px" title="How it works">Help</button>
     </div>
   </div>

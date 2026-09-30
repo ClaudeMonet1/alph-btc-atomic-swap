@@ -9,8 +9,9 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { sha256 } from '@noble/hashes/sha256';
 import { verifyUnsignedTx } from './alph-verify.js';
 
-const ALPH_NODE_URL = 'https://node.testnet.alephium.org';
-export const ALPH_NETWORK = 'testnet';
+import { CONFIG } from './config.js';
+const ALPH_NODE_URL = CONFIG.alphNode;
+export const ALPH_NETWORK = CONFIG.alphNetwork;
 web3.setCurrentNodeProvider(ALPH_NODE_URL);
 
 // Extract 32-byte contract ID hex from base58-encoded contract address
