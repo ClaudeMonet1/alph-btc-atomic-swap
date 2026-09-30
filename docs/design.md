@@ -94,6 +94,12 @@ The claim is pre-signed, so its fee is fixed before either party signs: Alice pr
 
 The key and the swap state live in `localStorage`, readable by anything that can read the browser profile (audit W3). "Set passphrase" in the identity panel seals both with WebCrypto (`vault.js`): PBKDF2-SHA256 with 600,000 iterations and a random salt derives an AES-256-GCM key, each record gets its own IV, and the derived key stays in memory for the session only. On load the page asks for the passphrase; a wrong one fails authentication, Cancel leaves the page locked and deletes nothing. The passphrase can be removed again. It protects against someone reading the storage, not against a compromised browser or page, and losing it means losing access unless the nsec was backed up. `scripts/vault-test.mjs` exercises set, reload, wrong and right passphrase, remove.
 
+## Stuck transactions and lost relays
+
+Both parties' transactions can sit under the fee floor (signet's floor moves and the estimate lags): Alice's claim and Bob's lock are each watched by the page and bumped once with a child that spends their own output (the claim's output, the lock's change) when they are unconfirmed after five minutes with the floor above their rate; a "Bump" button does the same by hand, also from the recovery panel. A lock without a change output cannot be bumped, which the button says.
+
+Relay publishes retry with backoff for up to a minute before a step fails, the last swap message is remembered and republished on a relay that reconnects (replaceable events make this idempotent), and the relay indicator shows reconnection and how long ago the peer last spoke. Every dialog is an in-page modal (`modal.js`): native dialogs blocked the page while a peer's message could arrive.
+
 ## State Persistence and Recovery
 
 The swap orchestrator saves state at three checkpoints:

@@ -108,6 +108,8 @@ export class SwapEngine {
     this.peerAdaptorPoint = null;
     this.btcLockTxid = null;
     this.btcLockVout = null;
+    this.btcLockPackage = null;
+    this.btcLockChange = null;
     this.contractId = null;
     this.contractAddress = null;
     this.compiled = null;
@@ -320,6 +322,9 @@ export class SwapEngine {
     } else if (change < 0) {
       throw new Error(`Insufficient UTXO: need ${this.btcSat + fee} sat, have ${totalInput} sat`);
     }
+    // for a later child-pays-for-parent bump: the lock's fee, size and change output
+    this.btcLockPackage = { vbytes: 43 + inputs.length * 58 + (change >= DUST_LIMIT ? 86 : 43), feeSat: fee };
+    this.btcLockChange = change >= DUST_LIMIT ? { txid: null, vout: 1, value: change } : null; // txid filled after broadcast
 
     // Sign each input
     const bobTweakedKey = computeTweakedPrivateKey(this.btcKey.sec, this.btcKey.pub);
@@ -341,6 +346,7 @@ export class SwapEngine {
 
     this.btcLockTxid = fundTxid;
     this.btcLockVout = fundVout;
+    if (this.btcLockChange) this.btcLockChange.txid = fundTxid;
 
     return { txid: fundTxid, vout: fundVout, amountSat: this.btcSat, btcLocktime: this.btcLocktime };
   }
@@ -437,11 +443,12 @@ export class SwapEngine {
     // The contract's timeout must open after Bob's own BTC refund plus the margin,
     // otherwise Alice could refund her ALPH and then claim the BTC.
     const bounds = alphTimeoutBounds(this.btcLocktime);
-    await verifyContractState(
+    const verified = await verifyContractState(
       contractAddress, bytesToHex(aggPubkey),
       this.alphAddress, aliceAlphAddress,
       this.alphAmount, bounds.maxTimeout, compiled, bounds.minTimeout,
     );
+    this.alphTimeoutMs = Number(verified.timeout); // Bob's deadline for the ALPH claim
 
     return { valid: true };
   }
@@ -600,6 +607,25 @@ export class SwapEngine {
   // The claim's output is Alice's own P2TR: a child spending it pays for the parent.
 
   async getClaimConfirmations() { return this.btcClaimTxid ? getConfirmations(this.btcClaimTxid) : 0; }
+  async getLockConfirmations() { return this.btcLockTxid ? getConfirmations(this.btcLockTxid) : 0; }
+  lockBumpable() { return !!(this.btcLockTxid && this.btcLockChange && this.btcLockChange.value >= 330 + 111); }
+  lockFeeRate() { return this.btcLockPackage ? this.btcLockPackage.feeSat / this.btcLockPackage.vbytes : 0; }
+
+  // Child pays for parent from the lock's change output (or from the previous
+  // child's output on a second bump); the package fee and size accumulate.
+  async bumpLockFee() {
+    if (!this.btcLockTxid) throw new Error('no lock to bump');
+    if (!this.btcLockChange) throw new Error('the lock has no change output to spend (all coins went into it)');
+    if (await getConfirmations(this.btcLockTxid) > 0) throw new Error('lock already confirmed');
+    const feeRate = Math.ceil((await estimateFeeRate()) * 1.5);
+    const { txid: parentTxid, vout, value } = this.btcLockChange;
+    const { psbt, sighash, childFee } = buildCpfpChild(parentTxid, vout, value, this.btcKey.pub, feeRate, this.btcLockPackage.vbytes, this.btcLockPackage.feeSat);
+    const sig = schnorr.sign(sighash, computeTweakedPrivateKey(this.btcKey.sec, this.btcKey.pub));
+    const txid = await broadcastTx(finalizeKeyPathSpend(psbt, sig));
+    this.btcLockPackage = { vbytes: this.btcLockPackage.vbytes + 111, feeSat: this.btcLockPackage.feeSat + childFee };
+    this.btcLockChange = { txid, vout: 0, value: value - childFee };
+    return { txid, childFee, feeRate };
+  }
 
   async bumpClaimFee() {
     if (!this.btcClaimTxid) throw new Error('no claim to bump');
@@ -777,6 +803,8 @@ export class SwapEngine {
       peerAdaptorPoint: this.peerAdaptorPoint ? hex(pointToBytes(this.peerAdaptorPoint)) : null,
       btcLockTxid: this.btcLockTxid,
       btcLockVout: this.btcLockVout,
+      btcLockPackage: this.btcLockPackage || null,
+      btcLockChange: this.btcLockChange || null,
       contractId: this.contractId,
       contractAddress: this.contractAddress,
       compiled: compiledData,
@@ -821,6 +849,8 @@ export class SwapEngine {
     this.peerAdaptorPoint = point(data.peerAdaptorPoint);
     this.btcLockTxid = data.btcLockTxid;
     this.btcLockVout = data.btcLockVout;
+    this.btcLockPackage = data.btcLockPackage || null;
+    this.btcLockChange = data.btcLockChange || null;
     this.contractId = data.contractId;
     this.contractAddress = data.contractAddress;
     this.btcNonce = nonceFromJSON(data.btcNonce);

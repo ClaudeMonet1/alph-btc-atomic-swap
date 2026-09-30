@@ -225,6 +225,12 @@
   }
   .send-modal-status.hidden { display: none; }
 
+  /* In-page dialogs (modal.js) */
+  .modal-overlay { position: fixed; inset: 0; background: #000000aa; display: flex; align-items: center; justify-content: center; z-index: 10000; padding: 16px; }
+  .modal-box { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; max-width: 460px; width: 100%; font-size: 13px; color: #e6edf3; }
+  .modal-msg { white-space: pre-wrap; line-height: 1.5; margin-bottom: 12px; }
+  .modal-input { width: 100%; box-sizing: border-box; margin-bottom: 12px; font-size: 14px; padding: 8px; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
   /* Help Modal */
   .help-modal {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
