@@ -10,7 +10,7 @@ import { SwapEngine } from './swap-engine.js';
 import { encryptTo as nip44EncryptTo, decryptFrom as nip44DecryptFrom } from './nip44.js';
 import { getMedianTimePast, estimateFeeRate } from './btc.js';
 import { CLAIM_VBYTES } from './timelocks.js';
-import { groupOfAddress, addressFromPublicKey } from './alph.js';
+import { groupOfAddress, addressFromPublicKey, getBalance } from './alph.js';
 import { btcConfirmationsFor } from './timelocks.js';
 import { BTC_NETWORK_NAME } from './btc.js';
 import { getP2TRAddress } from './btc.js';
@@ -18,10 +18,32 @@ import { BUILD } from './build.js';
 import { deriveKeys, legacyKeys } from './keys.js';
 import { deriveVaultKey, newSalt, sealString, openString, saltOf } from './vault.js';
 import { modalAlert, modalConfirm, modalPrompt } from './modal.js';
+import { CONFIG, DEFAULTS as CONFIG_DEFAULTS, resetConfig } from './config.js';
 
 // GitHub Pages caches every file for ten minutes: a tab opened before a deploy
 // runs the old modules. Compare the module build id with version.json fetched
 // uncached and say so; two peers on different builds cannot swap.
+// Settings: shows the endpoints in use and how to change them (URL parameters, config.js).
+async function showSettings() {
+  const lines = [
+    `Bitcoin: ${CONFIG.btcNetwork} via ${CONFIG.btcApi}`,
+    `Alephium: ${CONFIG.alphNetwork} via ${CONFIG.alphNode}`,
+    `Relays: ${CONFIG.relays.join(', ')}`,
+    '',
+    'Change them with URL parameters, remembered in this browser:',
+    '?btcNetwork=regtest&btcApi=http://host:port&alphNetwork=devnet&alphNode=http://host:port&relays=ws://host:port',
+    '?resetConfig restores the defaults.',
+  ];
+  if (CONFIG.isDefault) { await modalAlert(lines.join('\n')); return; }
+  if (await modalConfirm(lines.join('\n') + '\n\nReset to the default signet/testnet services and reload?', 'Reset and reload')) { resetConfig(); location.href = location.pathname; }
+}
+function applyNetworkUi() {
+  const label = document.querySelector('.network-badge');
+  if (label) label.textContent = `${CONFIG.btcNetwork.toUpperCase()} / ALPH ${CONFIG.alphNetwork.toUpperCase()}`;
+  if (CONFIG.btcNetwork !== 'signet' || CONFIG.alphNetwork !== 'testnet') document.body.classList.add('no-faucet');
+  if (!CONFIG.isDefault) addLogMsg('system', `Custom endpoints: BTC ${CONFIG.btcNetwork} ${CONFIG.btcApi}; ALPH ${CONFIG.alphNetwork} ${CONFIG.alphNode}; relays ${CONFIG.relays.join(', ')}`, 'System');
+}
+
 async function checkBuild() {
   try {
     const res = await fetch(new URL('../version.json', import.meta.url), { cache: 'no-store' });
@@ -73,11 +95,7 @@ const state = {
 // Multi-Relay Nostr Client
 // ============================================================
 
-const DEFAULT_RELAYS = [
-  'wss://relay.damus.io',
-  'wss://nos.lol',
-  'wss://relay.primal.net',
-];
+const DEFAULT_RELAYS = CONFIG.relays;
 
 function connectRelay(url) {
   return new Promise((resolve, reject) => {
@@ -713,9 +731,9 @@ function getP2TRAddressFromPub(pubkeyHex) {
 
 function explorerLink(chain, address, text) {
   if (chain === 'btc') {
-    return `<a href="https://mempool.space/signet/address/${address}" target="_blank" title="${address}" class="amount-link">${text}</a>`;
+    return `<a href="${CONFIG.btcExplorer}/address/${address}" target="_blank" title="${address}" class="amount-link">${text}</a>`;
   }
-  return `<a href="https://testnet.alephium.org/addresses/${address}" target="_blank" title="${address}" class="amount-link">${text}</a>`;
+  return `<a href="${CONFIG.alphExplorer}/addresses/${address}" target="_blank" title="${address}" class="amount-link">${text}</a>`;
 }
 
 function renderOffersList() {
@@ -1783,10 +1801,10 @@ function showSwapComplete() {
   const btcLabel = `${formatSat(btcSat)} sat`;
   const alphLabel = `${formatAlph(alphAmount)} ALPH`;
   const btcHtml = btcTxid
-    ? `<a href="https://mempool.space/signet/tx/${btcTxid}" target="_blank" class="amount-link" style="color:#f7931a">${btcLabel}</a>`
+    ? `<a href="${CONFIG.btcExplorer}/tx/${btcTxid}" target="_blank" class="amount-link" style="color:#f7931a">${btcLabel}</a>`
     : `<span style="color:#f7931a">${btcLabel}</span>`;
   const alphHtml = alphTxid
-    ? `<a href="https://testnet.alephium.org/transactions/${alphTxid}" target="_blank" class="amount-link" style="color:#00d4aa">${alphLabel}</a>`
+    ? `<a href="${CONFIG.alphExplorer}/transactions/${alphTxid}" target="_blank" class="amount-link" style="color:#00d4aa">${alphLabel}</a>`
     : `<span style="color:#00d4aa">${alphLabel}</span>`;
   const actionsEl = document.getElementById('swap-actions');
   actionsEl.innerHTML = `
@@ -2178,19 +2196,15 @@ async function checkOnChainState(checkpoint) {
     // Check ALPH contract balance
     if (state.engine?.contractAddress) {
       try {
-        const balResp = await fetch(`https://node.testnet.alephium.org/addresses/${state.engine.contractAddress}/balance`);
-        if (balResp.ok) {
-          const bal = await balResp.json();
-          const alphBalance = BigInt(bal.balance || '0');
-          if (alphBalance === 0n) {
-            state.stepData._alphContractEmpty = true;
-            addLogMsg('system', 'ALPH contract is empty (already refunded or claimed)', 'System');
-          }
-        } else {
-          // 404 or 500 = contract destroyed (node returns 500 for destroyed contracts)
+        const bal = await getBalance(state.engine.contractAddress);
+        if (BigInt(bal.balance || 0n) === 0n) {
           state.stepData._alphContractEmpty = true;
+          addLogMsg('system', 'ALPH contract is empty (already refunded or claimed)', 'System');
         }
-      } catch {}
+      } catch {
+        // 404 or 500 = contract destroyed (the node answers 500 for a destroyed contract)
+        state.stepData._alphContractEmpty = true;
+      }
     }
   } catch (e) {
     console.warn('On-chain state check error:', e);
@@ -2551,6 +2565,7 @@ async function autoConnect() {
     updateRelayStatus();
     addLogMsg('system', `Connected via ${connected.length} relays: ${relayNames}`, 'System');
     setInterval(updateRelayStatus, 10000);
+    applyNetworkUi();
     checkBuild();
     checkLegacyFunds();
 
@@ -2943,6 +2958,7 @@ function initBackupState() {
   }
 }
 
+document.getElementById('settings-btn').addEventListener('click', () => { showSettings().catch(() => {}); });
 document.getElementById('passphrase-btn').addEventListener('click', () => { setPassphrase().catch((e) => addLogMsg('system', `Passphrase change failed: ${e.message}`, 'Error')); });
 
 document.getElementById('backup-btn').addEventListener('click', async () => {
