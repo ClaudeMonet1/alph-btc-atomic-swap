@@ -3,7 +3,7 @@
 // the cache as the fallback so the page opens offline; the whole build is
 // precached on install and old caches are dropped on activate. Cross-origin
 // requests (nodes, Esplora, relays, price API) are never cached.
-const BUILD = '20261001T010058-c8b4b94';
+const BUILD = '20261001T115521-6b302ed';
 const CACHE = 'btc-alph-swap-' + BUILD;
 const ASSETS = [
   "./contracts/atomic-swap.json",
@@ -26,6 +26,7 @@ const ASSETS = [
   "./js/nip44.js",
   "./js/petri-net.js",
   "./js/petri-viewer.js",
+  "./js/qrscan.js",
   "./js/swap-engine.js",
   "./js/taproot-utils.js",
   "./js/timelocks.js",
@@ -43,6 +44,7 @@ const ASSETS = [
   "./vendor/bech32.js",
   "./vendor/bitcoinjs-lib.js",
   "./vendor/buffer.js",
+  "./vendor/jsqr.js",
   "./vendor/noble-ciphers-chacha.js",
   "./vendor/noble-curves-secp256k1.js",
   "./vendor/noble-curves-utils.js",
