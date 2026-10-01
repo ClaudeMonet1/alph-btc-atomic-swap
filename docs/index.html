@@ -23,7 +23,8 @@
     "tiny-secp256k1": "./vendor/tiny-secp256k1.js",
     "@alephium/web3": "./vendor/alephium-web3.js",
     "bech32": "./vendor/bech32.js",
-    "qrcode-generator": "./vendor/qrcode-generator.js"
+    "qrcode-generator": "./vendor/qrcode-generator.js",
+    "jsqr": "./vendor/jsqr.js"
   },
   "integrity": {
     "./vendor/noble-curves-secp256k1.js": "sha384-Vlr0KrR8D0/qMg9XZCOTnn83Zt9u1vKRZAng2/VIQMXa2wS9fEPzMHepxT0DIUVN",
@@ -38,7 +39,8 @@
     "./vendor/tiny-secp256k1.js": "sha384-+ruffMNb1RO5IqHurvo2Q1RfOz2AqaBLOKDvxgYeKdxkLZUTQLJAMP7yTo3fSNuH",
     "./vendor/alephium-web3.js": "sha384-3SUzOjrkmAejJ1xOR9aSEXk+vH8+YWpnVmga3i+R1f9z2ntfUVuZ2eH0qqo3I5d4",
     "./vendor/bech32.js": "sha384-+2LZ9pUgU5XhYETXtj1SiGuM8Z5VZbd8g9+fHyeCUsli7Z+wW6470sCwpkPa+g/E",
-    "./vendor/qrcode-generator.js": "sha384-iioIpgL6RpZLKaCbfja/AcIeL0YcInhXyA7SMb/2BBcYYHngbdul2Ls07H4y0NWE"
+    "./vendor/qrcode-generator.js": "sha384-iioIpgL6RpZLKaCbfja/AcIeL0YcInhXyA7SMb/2BBcYYHngbdul2Ls07H4y0NWE",
+    "./vendor/jsqr.js": "sha384-bua1zxlZhclCsIfl9vVZ9IDSjH+Mu3RSNuvOaNuAhJ8ayZJN1oQTCcnyBtcBFE+j"
   }
 }
 </script>
@@ -513,7 +515,7 @@
         <a class="faucet-btn" href="https://signet.dcorral.com/" target="_blank" title="BTC Signet Faucet">Faucet</a>
         <button class="copy-btn" data-copy="btc" title="Copy BTC address">copy</button>
         <button class="recv-btn" data-recv="btc" title="Receive BTC">Receive</button>
-        <button class="send-btn" data-send="btc" title="Send BTC">Send</button>
+        <button class="send-btn" data-send="btc" title="Withdraw all BTC to an address">Withdraw</button>
       </span>
     </div>
     <div class="addr-line">
@@ -523,7 +525,7 @@
         <button class="faucet-btn" id="alph-faucet-btn" title="ALPH Testnet Faucet">Faucet</button>
         <button class="copy-btn" data-copy="alph" title="Copy ALPH address">copy</button>
         <button class="recv-btn" data-recv="alph" title="Receive ALPH">Receive</button>
-        <button class="send-btn" data-send="alph" title="Send ALPH">Send</button>
+        <button class="send-btn" data-send="alph" title="Withdraw all ALPH to an address">Withdraw</button>
       </span>
     </div>
   </div>
@@ -555,12 +557,20 @@
   <!-- Send Modal -->
   <div class="send-modal hidden" id="send-modal">
     <div class="send-modal-inner">
-      <h3 id="send-modal-title">Send BTC</h3>
+      <h3 id="send-modal-title">Withdraw BTC</h3>
       <div class="send-modal-balance" id="send-modal-balance"></div>
-      <input type="text" id="send-dest-addr" placeholder="Destination address">
+      <div style="display:flex; gap:6px; align-items:center">
+        <input type="text" id="send-dest-addr" placeholder="Destination address" autocomplete="off" spellcheck="false" style="flex:1">
+        <button class="sm" id="send-scan-btn" title="Scan a QR code with the camera">Scan QR</button>
+      </div>
+      <div id="send-scan-area" class="hidden" style="margin-top:8px">
+        <video id="send-qr-video" muted playsinline style="width:100%; max-height:260px; background:#000; border-radius:6px"></video>
+        <button class="sm" id="send-scan-stop" style="margin-top:4px">Stop camera</button>
+      </div>
+      <div class="send-modal-check" id="send-addr-check" style="font-size:11px; margin-top:6px; min-height:14px; color:#8b949e"></div>
       <div class="send-modal-error hidden" id="send-modal-error"></div>
       <div class="send-modal-actions">
-        <button class="danger" id="send-confirm-btn">Sweep All</button>
+        <button class="danger" id="send-confirm-btn" disabled>Withdraw all</button>
         <button id="send-cancel-btn">Cancel</button>
       </div>
       <div class="send-modal-status hidden" id="send-modal-status"></div>
