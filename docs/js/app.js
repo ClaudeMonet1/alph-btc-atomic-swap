@@ -2425,6 +2425,8 @@ function renderSwapInfo(activeSwap) {
 async function recoverSwap(saved) {
   try {
     state.engine.restoreFromJSON(saved.engine);
+    // states saved by builds before 2026-10-02 carry no session id in the engine
+    if (!state.engine.sessionId && saved.activeSwap?.sessionId) state.engine.sessionId = saved.activeSwap.sessionId;
     await state.engine.rehydrate();
   } catch (e) {
     addLogMsg('system', `Recovery failed: ${e.message}. Clearing state.`, 'Error');
