@@ -25,8 +25,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function open(name) {
   mkdirSync(`${profileDir}/${name}`, { recursive: true });
-  const browser = await puppeteer.launch({ executablePath, headless: true, userDataDir: `${profileDir}/${name}`, args: ['--no-sandbox', '--disable-gpu'] });
+  // E2E_DUMPIO=1 copies the browser's own stderr into this log (why a browser died)
+  const browser = await puppeteer.launch({ executablePath, headless: true, userDataDir: `${profileDir}/${name}`, args: ['--no-sandbox', '--disable-gpu'], dumpio: !!process.env.E2E_DUMPIO });
+  browser.on('disconnected', () => console.log(`${name}: BROWSER DISCONNECTED at ${new Date().toISOString()}`));
   const page = await browser.newPage();
+  page.on('close', () => console.log(`${name}: PAGE CLOSED at ${new Date().toISOString()}`));
   await page.setCacheEnabled(false); // Pages sends max-age=600: a reused profile would run a stale build
   // in-page modals (modal.js): confirm and alert are accepted, prompts cancelled
   await page.evaluateOnNewDocument(() => {
@@ -74,6 +77,9 @@ console.log('A balances after sweep:', await balances(A.page)); console.log('B b
 // E2E_SWEEP_ONLY=1 stops here (let the swept coins confirm before swapping)
 if (process.env.E2E_SWEEP_ONLY) { await A.browser.close(); await B.browser.close(); process.exit(0); }
 
+// E2E_RESUME=1: the pages hold a swap in progress (saved checkpoints); watch it to the end without publishing anything
+let offerId = null, accepted = null;
+if (!process.env.E2E_RESUME) {
 // A publishes an offer
 await A.page.evaluate(({ dir, alph, sat, minAlph }) => { document.querySelector(`#direction-toggle button[data-dir="${dir}"]`).click(); document.getElementById('offer-alph').value = alph; document.getElementById('offer-btc-sat').value = sat; const mn = document.getElementById('offer-min-alph'); if (mn) mn.value = minAlph; }, { dir, alph: process.env.E2E_ALPH || '0.5', sat: process.env.E2E_SAT || '5000', minAlph: mode === 'partial' ? (process.env.E2E_MIN_ALPH || '0.1') : '' });
 await A.page.click('#publish-offer-btn');
@@ -83,12 +89,12 @@ console.log('A offer buttons:', await A.page.evaluate(() => [...document.querySe
 console.log('A identity row npub prefix vs offer author:', await A.page.evaluate(() => (document.body.innerText.match(/npub1[a-z0-9]{20,}/) || [])[0]?.slice(0, 16)));
 
 // A's own offer id, from the Cancel button on its card
-const offerId = await A.page.evaluate(async () => {
+offerId = await A.page.evaluate(async () => {
   for (let i = 0; i < 30; i++) { const b = document.querySelector('.cancel-offer-btn'); if (b) return b.dataset.offer; await new Promise((r) => setTimeout(r, 1000)); }
   return null;
 });
 console.log('A offer id:', offerId);
-let accepted;
+
 if (mode === 'counter') {
   // B counter-offers a smaller amount; A (the maker) accepts the counter
   const countered = await B.page.evaluate(async (id, alph, sat) => {
@@ -161,13 +167,23 @@ if (mode === 'counter') {
   }, offerId);
 }
 console.log('B accepted offer', accepted);
+} else console.log('resuming the swap held by the saved profiles');
 
 // Poll both sides; stop early when both have claimed or either side shows an error.
 let lastA = '', lastB = '', aborted = false;
 const pollMs = mode === 'refund' ? 1000 : 15000; // the refund drill must catch the lock before Alice deploys
 for (let t = pollMs / 1000; t <= seconds; t += pollMs / 1000) {
   await sleep(pollMs);
-  const a = await steps(A.page), b = await steps(B.page);
+  // a page or browser that died is reopened on its profile: the app resumes the swap from its saved checkpoint
+  const safeSteps = async (P) => {
+    try { return await steps(P.page); } catch (e) {
+      console.log(`\n===== ${P.name}: ${e.message.slice(0, 120)} (browser ${P.browser.connected ? 'connected' : 'gone'}); reopening the page on its profile`);
+      try { if (P.browser.connected) await P.browser.close(); } catch {}
+      const fresh = await open(P.name); const oldLogs = P.logs; Object.assign(P, fresh); P.logs = oldLogs.concat(['--- reopened ---'], fresh.logs);
+      return await steps(P.page);
+    }
+  };
+  const a = await safeSteps(A), b = await safeSteps(B);
   if (a !== lastA || b !== lastB) {
     console.log(`\n===== t=${t}s (${new Date().toISOString()})\n--- A (${dir === 'buy_alph' ? 'Bob' : 'Alice'}) steps:\n${a.replace(/\n\s*\n/g, '\n')}\n--- B (${dir === 'buy_alph' ? 'Alice' : 'Bob'}) steps:\n${b.replace(/\n\s*\n/g, '\n')}`);
     lastA = a; lastB = b;
