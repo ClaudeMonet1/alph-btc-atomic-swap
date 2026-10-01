@@ -34,6 +34,7 @@ const BUNDLES = [
   { spec: '@alephium/web3', entry: '@alephium/web3', file: 'alephium-web3.js', cjs: true },
   { spec: 'bech32', entry: 'bech32', file: 'bech32.js', cjs: true },
   { spec: 'qrcode-generator', entry: 'qrcode-generator', file: 'qrcode-generator.js', cjs: true },
+  { spec: 'jsqr', entry: 'jsqr', file: 'jsqr.js', cjs: true },
 ];
 
 import { createRequire } from 'node:module';

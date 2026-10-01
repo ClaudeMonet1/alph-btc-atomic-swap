@@ -184,8 +184,8 @@ The static version is hardcoded to Bitcoin signet + Alephium testnet. Devnet req
 The identity panel displays three address lines — npub, BTC (signet), and ALPH (testnet) — each with contextual action buttons:
 
 - **npub**: `[copy] [QR]` — QR shows a receive popup with canvas-rendered QR code (click to copy as image) and address text (click to copy).
-- **BTC**: `[Faucet] [copy] [Receive] [Send]` — Faucet links to signetfaucet.com. Receive shows QR popup. Send opens a sweep-all modal.
-- **ALPH**: `[Faucet] [copy] [Receive] [Send]` — Faucet calls the Alephium testnet faucet API. Send sweeps all ALPH minus gas reserve.
+- **BTC**: `[Faucet] [copy] [Receive] [Withdraw]` — Faucet links to signetfaucet.com. Receive shows a QR popup. Withdraw opens a modal that sends the whole balance to a destination typed or scanned from a QR code (camera, `qrscan.js`: BarcodeDetector when the browser has it, otherwise jsQR on video frames; `bitcoin:`/`alephium:` URIs are reduced to the address), validated for the active network as it is typed and again before signing, with a confirmation naming the address.
+- **ALPH**: `[Faucet] [copy] [Receive] [Withdraw]` — Faucet calls the Alephium testnet faucet API. Withdraw sends all ALPH minus a gas reserve, with the same scan and validation.
 
 The **private key** (nsec) is masked by default (`••••••••`) with a `[show]` toggle to reveal the bech32-encoded nsec. The key row blinks when backup has not been confirmed. The `[Backed Up]` button requires an explicit confirmation dialog before dismissing the warning.
 

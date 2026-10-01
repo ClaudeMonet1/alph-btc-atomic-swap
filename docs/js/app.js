@@ -18,6 +18,7 @@ import { BUILD } from './build.js';
 import { deriveKeys, legacyKeys } from './keys.js';
 import { deriveVaultKey, newSalt, sealString, openString, saltOf } from './vault.js';
 import { modalAlert, modalConfirm, modalPrompt } from './modal.js';
+import { addressFromQrText, scanWithCamera } from './qrscan.js';
 import { CONFIG, DEFAULTS as CONFIG_DEFAULTS, resetConfig } from './config.js';
 
 // GitHub Pages caches every file for ten minutes: a tab opened before a deploy
@@ -3075,20 +3076,64 @@ function showSendModal(chain) {
   const statusEl = document.getElementById('send-modal-status');
   const confirmBtn = document.getElementById('send-confirm-btn');
 
-  titleEl.textContent = chain === 'btc' ? 'Send BTC' : 'Send ALPH';
+  titleEl.textContent = chain === 'btc' ? 'Withdraw BTC' : 'Withdraw ALPH';
   balEl.textContent = chain === 'btc'
     ? `Balance: ${document.getElementById('bal-btc').textContent}`
     : `Balance: ${document.getElementById('bal-alph').textContent}`;
   inputEl.value = '';
-  inputEl.placeholder = chain === 'btc' ? 'tb1... destination address' : 'ALPH destination address';
+  inputEl.placeholder = chain === 'btc' ? `${BTC_NETWORK_NAME} Bitcoin address` : 'Alephium address';
   errorEl.textContent = '';
   errorEl.classList.add('hidden');
   statusEl.textContent = '';
   statusEl.classList.add('hidden');
-  confirmBtn.disabled = false;
-  confirmBtn.textContent = 'Sweep All';
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Withdraw all';
+  document.getElementById('send-addr-check').textContent = '';
+  stopQrScan();
   modal.classList.remove('hidden');
   inputEl.focus();
+}
+
+// Validation of the destination as it is typed or scanned; the button stays off until it passes.
+function checkDestination() {
+  const input = document.getElementById('send-dest-addr');
+  const checkEl = document.getElementById('send-addr-check');
+  const confirmBtn = document.getElementById('send-confirm-btn');
+  const addr = input.value.trim();
+  const own = sendChain === 'btc' ? state.btcAddress : state.alphAddress;
+  let ok = false, msg = '';
+  if (!addr) msg = '';
+  else if (addr === own) msg = 'That is this wallet\'s own address.';
+  else if (sendChain === 'btc') {
+    ok = SwapEngine.validateBtcAddress(addr);
+    msg = ok ? `Valid ${BTC_NETWORK_NAME} Bitcoin address` : `Not a valid ${BTC_NETWORK_NAME} Bitcoin address${/^(bc1|1|3)/.test(addr) ? ' (this looks like a mainnet address)' : ''}`;
+  } else {
+    ok = SwapEngine.validateAlphAddress(addr);
+    msg = ok ? `Valid Alephium address (group ${groupOfAddress(addr)})` : 'Not a valid Alephium address';
+  }
+  checkEl.textContent = msg;
+  checkEl.style.color = ok ? '#2ea043' : addr ? '#f85149' : '#8b949e';
+  confirmBtn.disabled = !ok || confirmBtn.textContent === 'Sending...';
+  return ok;
+}
+
+let qrStop = null;
+function stopQrScan() {
+  if (qrStop) { try { qrStop(); } catch {} qrStop = null; }
+  document.getElementById('send-scan-area').classList.add('hidden');
+}
+async function startQrScan() {
+  const errorEl = document.getElementById('send-modal-error');
+  errorEl.classList.add('hidden');
+  if (!navigator.mediaDevices?.getUserMedia) { errorEl.textContent = 'This browser cannot open the camera here (a secure context is required).'; errorEl.classList.remove('hidden'); return; }
+  document.getElementById('send-scan-area').classList.remove('hidden');
+  const video = document.getElementById('send-qr-video');
+  qrStop = await scanWithCamera(video, (text) => {
+    qrStop = null; document.getElementById('send-scan-area').classList.add('hidden');
+    const addr = addressFromQrText(text);
+    document.getElementById('send-dest-addr').value = addr;
+    if (!checkDestination()) { errorEl.textContent = `The QR code contains "${text.slice(0, 60)}", which is not a valid ${sendChain === 'btc' ? 'Bitcoin' : 'Alephium'} address for this network.`; errorEl.classList.remove('hidden'); }
+  }, (message) => { errorEl.textContent = message; errorEl.classList.remove('hidden'); stopQrScan(); });
 }
 
 async function executeSend() {
@@ -3097,26 +3142,14 @@ async function executeSend() {
   const statusEl = document.getElementById('send-modal-status');
   const confirmBtn = document.getElementById('send-confirm-btn');
 
-  if (!destAddress) {
-    errorEl.textContent = 'Please enter a destination address';
+  // Validated again right before signing, whatever the button state
+  if (!checkDestination()) {
+    errorEl.textContent = destAddress ? `Not a valid ${sendChain === 'btc' ? BTC_NETWORK_NAME + ' Bitcoin' : 'Alephium'} address` : 'Enter or scan a destination address';
     errorEl.classList.remove('hidden');
     return;
   }
-
-  // Validate address
-  if (sendChain === 'btc') {
-    if (!SwapEngine.validateBtcAddress(destAddress)) {
-      errorEl.textContent = 'Invalid BTC address for signet/testnet';
-      errorEl.classList.remove('hidden');
-      return;
-    }
-  } else {
-    if (!SwapEngine.validateAlphAddress(destAddress)) {
-      errorEl.textContent = 'Invalid ALPH address';
-      errorEl.classList.remove('hidden');
-      return;
-    }
-  }
+  const chainName = sendChain === 'btc' ? 'BTC' : 'ALPH';
+  if (!await modalConfirm(`Withdraw all ${chainName} to\n${destAddress}\n\nThis sends the whole balance; it cannot be undone.`, 'Withdraw')) return;
 
   errorEl.classList.add('hidden');
   confirmBtn.disabled = true;
@@ -3131,16 +3164,16 @@ async function executeSend() {
     } else {
       txid = await state.engine.sweepAlph(destAddress);
     }
-    statusEl.textContent = `Sent! txid: ${txid}`;
+    statusEl.textContent = `Withdrawn. txid: ${txid}`;
     confirmBtn.textContent = 'Done';
-    addLogMsg('system', `${sendChain.toUpperCase()} sweep to ${destAddress.slice(0, 16)}...: ${txid}`, 'You');
+    addLogMsg('system', `${sendChain.toUpperCase()} withdrawn to ${destAddress.slice(0, 16)}...: ${txid}`, 'You');
     setTimeout(() => refreshBalance(), 3000);
   } catch (e) {
     errorEl.textContent = e.message;
     errorEl.classList.remove('hidden');
     statusEl.classList.add('hidden');
-    confirmBtn.disabled = false;
-    confirmBtn.textContent = 'Sweep All';
+    confirmBtn.textContent = 'Withdraw all';
+    checkDestination();
   }
 }
 
@@ -3152,11 +3185,16 @@ document.querySelectorAll('.send-btn').forEach(btn => {
 });
 
 document.getElementById('send-confirm-btn').addEventListener('click', executeSend);
+document.getElementById('send-dest-addr').addEventListener('input', checkDestination);
+document.getElementById('send-scan-btn').addEventListener('click', () => { startQrScan().catch((e) => addLogMsg('system', `QR scan failed: ${e.message}`, 'Error')); });
+document.getElementById('send-scan-stop').addEventListener('click', stopQrScan);
 document.getElementById('send-cancel-btn').addEventListener('click', () => {
+  stopQrScan();
   document.getElementById('send-modal').classList.add('hidden');
 });
 document.getElementById('send-modal').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) {
+    stopQrScan();
     document.getElementById('send-modal').classList.add('hidden');
   }
 });
