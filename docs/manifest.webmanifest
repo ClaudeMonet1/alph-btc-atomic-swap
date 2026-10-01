@@ -1,0 +1,14 @@
+{
+  "name": "BTC-ALPH Atomic Swap",
+  "short_name": "BTC-ALPH Swap",
+  "description": "Peer-to-peer atomic swaps between Bitcoin and Alephium with MuSig2 adaptor signatures, coordinated over Nostr.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
