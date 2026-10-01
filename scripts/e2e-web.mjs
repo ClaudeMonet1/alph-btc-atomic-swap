@@ -62,11 +62,17 @@ await sleep(8000); // relays
 console.log('A balances:', await balances(A.page)); console.log('B balances:', await balances(B.page));
 // Funds left on the pre-2026-09-27 single-key addresses: move them to the derived addresses first
 for (const P of [A, B]) {
-  const moved = await P.page.evaluate(async () => { const b = document.getElementById('legacy-sweep-btn'); if (!b) return false; b.click(); await new Promise((r) => setTimeout(r, 12000)); return document.getElementById('app-log')?.textContent.match(/Legacy [A-Z]+ swept in [0-9a-f]+/g) || ['clicked, no sweep line yet']; });
+  const moved = await P.page.evaluate(async () => {
+    const b = document.getElementById('legacy-sweep-btn'); if (!b) return false; b.click();
+    for (let i = 0; i < 30; i++) { await new Promise((r) => setTimeout(r, 2000)); if (b.disabled === false || !document.body.contains(b) || b.textContent !== 'Moving...') break; }
+    return document.getElementById('app-log')?.textContent.match(/Legacy [A-Z]+ \([a-z-]+\) (?:swept in [0-9a-f]+|failed: [^\n]*)/g) || ['clicked, no sweep line yet'];
+  });
   if (moved) console.log(P.name, 'legacy funds:', moved);
 }
 await sleep(3000);
 console.log('A balances after sweep:', await balances(A.page)); console.log('B balances after sweep:', await balances(B.page));
+// E2E_SWEEP_ONLY=1 stops here (let the swept coins confirm before swapping)
+if (process.env.E2E_SWEEP_ONLY) { await A.browser.close(); await B.browser.close(); process.exit(0); }
 
 // A publishes an offer
 await A.page.evaluate(({ dir, alph, sat, minAlph }) => { document.querySelector(`#direction-toggle button[data-dir="${dir}"]`).click(); document.getElementById('offer-alph').value = alph; document.getElementById('offer-btc-sat').value = sat; const mn = document.getElementById('offer-min-alph'); if (mn) mn.value = minAlph; }, { dir, alph: process.env.E2E_ALPH || '0.5', sat: process.env.E2E_SAT || '5000', minAlph: mode === 'partial' ? (process.env.E2E_MIN_ALPH || '0.1') : '' });
