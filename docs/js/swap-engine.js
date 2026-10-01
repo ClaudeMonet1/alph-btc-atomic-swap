@@ -247,6 +247,16 @@ export class SwapEngine {
 
   // Called by Bob after receiving Alice's adaptor point
   setAdaptorPoint(adaptorPointHex) {
+    // A peer that recovered its session may send a point again; the same one is harmless,
+    // a different one invalidates every signature made for the old one.
+    if (this.peerAdaptorPoint && bytesToHex(pointToBytes(this.peerAdaptorPoint)) !== adaptorPointHex.toLowerCase()) {
+      if (this.myBtcPresig || this.peerBtcPresig || this.btcAdaptorAgg)
+        throw new Error('The peer sent a different adaptor point after pre-signatures were exchanged: this session cannot complete. Abort and refund once the timeout opens.');
+      this.btcNonce = null; this.alphNonce = null; // nonces were committed for the old point
+      this.btcAggNonce = null; this.alphAggNonce = null;
+      this.peerBtcPubNonce = null; this.peerAlphPubNonce = null;
+      this.peerBtcNonceHash = null; this.peerAlphNonceHash = null;
+    }
     this.peerAdaptorPoint = lift_x(bytesToNum(hexToBytes(adaptorPointHex)));
   }
 
@@ -790,6 +800,7 @@ export class SwapEngine {
 
     return {
       version: 5,
+      sessionId: this.sessionId, // without it a recovered Alice would mint a second adaptor secret
       role: this.role,
       peerPubHex: this.peerPubHex,
       peer: this.peer,
@@ -845,6 +856,7 @@ export class SwapEngine {
     this.btcLocktime = data.btcLocktime;
     this.alphTimeoutMs = data.alphTimeoutMs;
     this.claimFeeSat = data.claimFeeSat;
+    this.sessionId = data.sessionId || null;
     this.adaptorSecret = bytes(data.adaptorSecret);
     this.adaptorPoint = point(data.adaptorPoint);
     this.peerAdaptorPoint = point(data.peerAdaptorPoint);
