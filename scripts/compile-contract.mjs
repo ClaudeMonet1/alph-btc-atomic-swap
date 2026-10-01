@@ -22,5 +22,6 @@ const artifact = {
   refundScript: { name: compiled.refundScript.name, bytecodeTemplate: compiled.refundScript.bytecodeTemplate, fields: compiled.refundScript.fields },
   structs: compiled.structs || [],
 };
-writeFileSync(new URL('../docs/contracts/atomic-swap.json', import.meta.url), JSON.stringify(artifact, null, 2) + '\n');
+const suffix = process.env.ARTIFACT_NETWORK ? `.${process.env.ARTIFACT_NETWORK}` : ''; // ARTIFACT_NETWORK=mainnet writes atomic-swap.mainnet.json
+writeFileSync(new URL(`../docs/contracts/atomic-swap${suffix}.json`, import.meta.url), JSON.stringify(artifact, null, 2) + '\n');
 console.log(`docs/contracts/atomic-swap.json written: codeHash ${artifact.contract.codeHash}, compiler ${artifact.nodeVersion}, source sha256 ${artifact.sourceSha256.slice(0, 16)}...`);

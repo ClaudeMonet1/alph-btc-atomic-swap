@@ -70,7 +70,7 @@ if (sw.startsWith('registered')) {
 failed.length = failedBeforeOffline; // cross-origin requests fail offline by design
 await browser.close();
 const npub = (state.text.match(/npub1[a-z0-9]{20,}/) || [])[0];
-const btc = (state.text.match(/tb1p[a-z0-9]{20,}/) || [])[0];
+const btc = (state.text.match(/(?:tb1p|bcrt1p|bc1p)[a-z0-9]{20,}/) || [])[0];
 const alph = (state.text.match(/\b[1-9A-HJ-NP-Za-km-z]{44,46}\b/) || [])[0];
 console.log('page errors      :', errors.length ? errors : 'none');
 console.log('failed requests  :', failed.length ? failed : 'none');

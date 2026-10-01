@@ -208,6 +208,8 @@ Two deployment modes share the same crypto core:
 | `E2E_MODE=refund npm run e2e:local` | Bob aborts right after his lock; the regtest clock is moved past T_btc and Bob's page refunds itself (reset the regtest chain afterwards) |
 | `npm run e2e:live` | The same harness against the published page, signet and the Alephium testnet (needs funded keys) |
 
+The app icon combines the Bitcoin logo (public domain) and the Alephium logo (Alephium's mark, used to identify the Alephium network); both are in `docs/icons/`.
+
 ### Static Web App (`docs/`)
 
 | File | What it does |
@@ -221,7 +223,7 @@ Two deployment modes share the same crypto core:
 | `docs/js/musig2.js`, `adaptor.js`, `taproot-utils.js`, `bip327-selftest.js` | Byte-identical to the `src/` files |
 | `docs/spec/bip327/` | BIP327 test vectors, served with the page for the browser self-test |
 
-The page is installable (manifest, generated network-first service worker) and can notify when the peer acts while the tab is in the background. Browser dependencies are bundled from the pinned packages into `docs/vendor/` with checksums (`npm run vendor`, `npm run vendor:check`) and mapped by the import map with an integrity block; nothing is fetched from a CDN. The Buffer polyfill is loaded before any modules via top-level `await`. The key and the swap state can be sealed with a passphrase (PBKDF2-SHA256 to AES-256-GCM, `docs/js/vault.js`); by default they are stored in clear.
+Mainnet can be selected in Settings behind a typed confirmation and a persistent warning; it has had no dry run yet. The page is installable (manifest, generated network-first service worker) and can notify when the peer acts while the tab is in the background. Browser dependencies are bundled from the pinned packages into `docs/vendor/` with checksums (`npm run vendor`, `npm run vendor:check`) and mapped by the import map with an integrity block; nothing is fetched from a CDN. The Buffer polyfill is loaded before any modules via top-level `await`. The key and the swap state can be sealed with a passphrase (PBKDF2-SHA256 to AES-256-GCM, `docs/js/vault.js`); by default they are stored in clear.
 
 ### CLI Tests
 
