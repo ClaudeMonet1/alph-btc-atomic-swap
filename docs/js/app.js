@@ -23,6 +23,40 @@ import { CONFIG, DEFAULTS as CONFIG_DEFAULTS, resetConfig } from './config.js';
 // GitHub Pages caches every file for ten minutes: a tab opened before a deploy
 // runs the old modules. Compare the module build id with version.json fetched
 // uncached and say so; two peers on different builds cannot swap.
+// ---- Installable page: service worker (offline load, network first) ----
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.register('./sw.js');
+    reg.addEventListener('updatefound', () => addLogMsg('system', 'A newer build is being fetched; reload when the banner says so', 'System'));
+  } catch (e) { addLogMsg('system', `Offline support unavailable: ${e.message}`, 'System'); }
+}
+
+// ---- Notifications: only when this tab is not in front ----
+function notificationsOn() { return 'Notification' in window && Notification.permission === 'granted' && localStorage.getItem('btc-alph-swap-notify') !== 'off'; }
+function notify(title, body, tag = 'swap') {
+  try {
+    if (!notificationsOn()) return;
+    if (document.visibilityState === 'visible' && document.hasFocus()) return;
+    new Notification(title, { body, tag, icon: 'icons/icon-192.png' });
+  } catch {}
+}
+function initNotifyButton() {
+  const btn = document.getElementById('notify-btn');
+  if (!btn) return;
+  if (!('Notification' in window)) { btn.hidden = true; return; }
+  const on = notificationsOn();
+  btn.textContent = on ? '\u{1F514} Notifications on' : Notification.permission === 'denied' ? 'Notifications blocked' : 'Notifications';
+  btn.disabled = Notification.permission === 'denied';
+}
+async function toggleNotifications() {
+  if (!('Notification' in window)) return;
+  if (notificationsOn()) { localStorage.setItem('btc-alph-swap-notify', 'off'); initNotifyButton(); return; }
+  const perm = await Notification.requestPermission();
+  if (perm === 'granted') { localStorage.setItem('btc-alph-swap-notify', 'on'); addLogMsg('system', 'Notifications on: you will be told when the peer acts or a wait ends while this tab is in the background', 'System'); }
+  initNotifyButton();
+}
+
 // Settings: shows the endpoints in use and how to change them (URL parameters, config.js).
 async function showSettings() {
   const lines = [
@@ -500,8 +534,11 @@ function renderSteps() {
 }
 
 function updateStep(id, updates) {
+  const before = state.stepData[id]?.status;
   state.stepData[id] = { ...state.stepData[id], ...updates };
   renderSteps();
+  if (updates.status === 'error' && before !== 'error') notify('Swap step failed', `${id}: ${updates.error || 'see the page'}`, 'error');
+  if (updates.status === 'done' && before !== 'done' && (id === 'lock' || id === 'presign')) notify('Swap progress', `Step ${id} done`, 'step');
 }
 
 function renderSwapActions() {
@@ -1405,6 +1442,7 @@ function subscribeToSwap(sessionId, peerPubHex) {
     }
 
     addProtocolMsg(event.kind, decryptedContent, authorLabel);
+    if (!isMine) { let t = ''; try { const c = JSON.parse(decryptedContent); t = c.type || c.phase || (c.btcPresig ? 'pre-signatures' : ''); } catch {} notify('Swap: the peer acted', t ? `Received ${t}` : 'New message from the peer', 'peer'); }
 
     const decryptedEvent = { ...event, content: decryptedContent };
     for (let i = swapEventWaiters.length - 1; i >= 0; i--) {
@@ -1956,6 +1994,7 @@ function showRecoveryStatus(msg, type) {
 function showSwapComplete() {
   clearSwapState();
   stopTimeoutMonitor();
+  notify('Swap complete', 'Both sides have claimed', 'done');
   if (state.activeSwap) {
     markOfferProcessed(state.activeSwap.offerId); // prevent auto-restart on refresh
     const offer = state.offers.get(state.activeSwap.offerId);
@@ -2667,6 +2706,7 @@ async function updateTimeoutDisplay() {
   if (alphTimeoutMs) {
     const remaining = alphTimeoutMs - Date.now();
     if (remaining <= 0) {
+      if (!state.stepData._alphRefundNotified) { state.stepData._alphRefundNotified = true; notify('ALPH refund available', 'The contract timeout has passed', 'refund'); }
       lines.push('ALPH refund: <span style="color:#2ea043">AVAILABLE NOW</span>');
       const refundBtn = document.getElementById('recovery-refund-alph-btn');
       if (refundBtn) refundBtn.disabled = false;
@@ -2683,6 +2723,7 @@ async function updateTimeoutDisplay() {
       const mtp = await getMedianTimePast();
       const remaining = state.engine.btcLocktime - mtp;
       if (remaining <= 0) {
+        if (!state.stepData._btcRefundNotified) { state.stepData._btcRefundNotified = true; notify('BTC refund available', 'Median time past reached the locktime', 'refund'); }
         lines.push('BTC refund: <span style="color:#2ea043">AVAILABLE NOW</span> (median time past reached the locktime)');
         const refundBtn = document.getElementById('recovery-refund-btc-btn');
         if (refundBtn) refundBtn.disabled = false;
@@ -2758,6 +2799,8 @@ async function autoConnect() {
     setInterval(updateRelayStatus, 10000);
     applyNetworkUi();
     checkBuild();
+    registerServiceWorker();
+    initNotifyButton();
     checkLegacyFunds();
 
     // Check for saved swap state to recover
@@ -3156,6 +3199,7 @@ function initBackupState() {
 }
 
 document.getElementById('settings-btn').addEventListener('click', () => { showSettings().catch(() => {}); });
+document.getElementById('notify-btn').addEventListener('click', () => { toggleNotifications().catch(() => {}); });
 document.getElementById('passphrase-btn').addEventListener('click', () => { setPassphrase().catch((e) => addLogMsg('system', `Passphrase change failed: ${e.message}`, 'Error')); });
 
 document.getElementById('backup-btn').addEventListener('click', async () => {
