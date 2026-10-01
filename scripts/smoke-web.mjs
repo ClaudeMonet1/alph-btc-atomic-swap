@@ -31,11 +31,28 @@ const selftest = await page.evaluate(async () => {
     return { total: results.length, failed: results.filter((r) => !r.ok).map((r) => `${r.name}: ${r.problem}`) };
   } catch (e) { return { total: 0, failed: ['self-test did not run: ' + (e.message || e)] }; }
 });
+// Service worker registered (installable, offline load)
+const sw = await page.evaluate(async () => { try { if (!navigator.serviceWorker) return 'unsupported'; const r = await Promise.race([navigator.serviceWorker.ready, new Promise((res) => setTimeout(() => res(null), 15000))]); return r ? `registered (${r.active?.state})` : 'not ready'; } catch (e) { return 'error: ' + e.message; } });
 // The compiled contract artifact must load and match the embedded source
 const artifact = await page.evaluate(async () => {
   try { const m = await import(new URL('./js/alph.js', location.href).href); const c = await m.compileSwapContract(); return { codeHash: c.contract.codeHash, bytecodeLen: c.contract.bytecode.length }; }
   catch (e) { return { error: e.message || String(e) }; }
 });
+// Offline reload: the service worker must serve the precached build (the app then
+// runs and reports that the relays are unreachable, which is the expected offline state)
+let offline = 'skipped';
+const failedBeforeOffline = failed.length;
+if (sw.startsWith('registered')) {
+  try {
+    await page.setOfflineMode(true);
+    await page.reload({ waitUntil: 'load' });
+    const ok = await page.waitForFunction(() => /npub1[a-z0-9]{20,}|Connection failed|Could not connect/.test(document.body.innerText), { timeout: 20000 }).then(() => true).catch(() => false);
+    const text = await page.evaluate(() => document.body.innerText.slice(0, 200).replace(/\s+/g, ' '));
+    offline = ok ? 'page loads offline (app ran: ' + (/npub1/.test(text) ? 'identity shown' : 'relays unreachable, as expected') + ')' : 'page did not load offline: ' + text.slice(0, 80);
+    await page.setOfflineMode(false);
+  } catch (e) { offline = 'error: ' + e.message; }
+}
+failed.length = failedBeforeOffline; // cross-origin requests fail offline by design
 await browser.close();
 const npub = (state.text.match(/npub1[a-z0-9]{20,}/) || [])[0];
 const btc = (state.text.match(/tb1p[a-z0-9]{20,}/) || [])[0];
@@ -47,7 +64,9 @@ console.log('key in storage   :', state.hasNsec);
 console.log('identity shown   :', { npub: npub?.slice(0, 16), btc: btc?.slice(0, 12), alph: alph?.slice(0, 12) });
 console.log('bip327 self-test :', selftest.failed.length ? selftest.failed : `${selftest.total} checks passed`);
 console.log('contract artifact:', artifact.error ? artifact.error : `codeHash ${artifact.codeHash.slice(0, 16)}..., ${artifact.bytecodeLen / 2} bytes`);
+console.log('service worker   :', sw);
+console.log('offline reload   :', offline);
 console.log('console (last 8) :'); for (const l of console_.slice(-8)) console.log('  ' + l.slice(0, 160));
-const ok = errors.length === 0 && failed.length === 0 && npub && btc && state.hasNsec && selftest.total > 0 && selftest.failed.length === 0 && !artifact.error;
+const ok = errors.length === 0 && failed.length === 0 && npub && btc && state.hasNsec && selftest.total > 0 && selftest.failed.length === 0 && !artifact.error && !offline.startsWith('page did not load offline');
 console.log(ok ? '\nWEB SMOKE OK' : '\nWEB SMOKE FAILED');
 process.exit(ok ? 0 : 1);

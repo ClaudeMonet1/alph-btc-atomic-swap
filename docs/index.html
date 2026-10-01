@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BTC-ALPH Atomic Swap</title>
+<meta name="theme-color" content="#0d1117">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <script type="importmap">
 {
   "imports": {
@@ -486,6 +490,7 @@
       <span class="alph-bal" id="bal-alph">-- ALPH</span>
       <button id="refresh-bal-btn" style="padding:4px 8px; font-size:10px">Refresh</button>
       <span id="relay-status" style="font-size:10px; color:#8b949e" title="Connected Nostr relays"></span>
+      <button id="notify-btn" style="padding:4px 8px; font-size:10px" title="Notify when the peer acts or a wait ends, even when this tab is in the background">Notifications</button>
       <button id="settings-btn" style="padding:4px 8px; font-size:10px" title="Endpoints and networks in use">Settings</button>
       <button id="help-btn" style="padding:4px 8px; font-size:10px" title="How it works">Help</button>
     </div>
@@ -605,6 +610,7 @@
           <li>Every transaction built by a node is decoded and checked before it is signed; the contract is shipped pre-compiled and its bytecode is verified on chain</li>
           <li>BTC side uses Taproot MuSig2 (BIP327). ALPH side uses a Ralph contract &mdash; asymmetric by design for inspectable state, unilateral locking, and explicit timeouts</li>
           <li>Set a passphrase in the identity panel to encrypt your key and swap state in this browser</li>
+          <li>Install the page (browser menu) and turn on Notifications to be told when the peer acts or a wait ends while the tab is in the background</li>
         </ul>
 
         <h4>Important Notes</h4>

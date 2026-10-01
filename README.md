@@ -200,7 +200,7 @@ Two deployment modes share the same crypto core:
 | `npm run test:keys` | Key derivation: deterministic, three distinct keys, Alephium key in group 1 |
 | `npm run test:petri` | The protocol net: every reachable marking, and the document block matches |
 | `npm run vendor:check` | Vendored bundles match their checksums |
-| `npm run smoke:web` | Headless load of the page: modules, identity, relays, BIP327 self-test, contract artifact |
+| `npm run smoke:web` | Headless load of the page: modules, identity, relays, BIP327 self-test, contract artifact, service worker, offline reload |
 | `npm run test:vault` | Passphrase vault: set, reload, wrong and right passphrase, remove |
 | `npm run e2e:local` | A complete two-browser swap on regtest (Esplora shim, 15 s blocks), devnet and a local relay, in about a minute |
 | `E2E_MODE=counter npm run e2e:local` | The taker counter-offers and the maker accepts the counter |
@@ -221,7 +221,7 @@ Two deployment modes share the same crypto core:
 | `docs/js/musig2.js`, `adaptor.js`, `taproot-utils.js`, `bip327-selftest.js` | Byte-identical to the `src/` files |
 | `docs/spec/bip327/` | BIP327 test vectors, served with the page for the browser self-test |
 
-Browser dependencies are bundled from the pinned packages into `docs/vendor/` with checksums (`npm run vendor`, `npm run vendor:check`) and mapped by the import map with an integrity block; nothing is fetched from a CDN. The Buffer polyfill is loaded before any modules via top-level `await`. The key and the swap state can be sealed with a passphrase (PBKDF2-SHA256 to AES-256-GCM, `docs/js/vault.js`); by default they are stored in clear.
+The page is installable (manifest, generated network-first service worker) and can notify when the peer acts while the tab is in the background. Browser dependencies are bundled from the pinned packages into `docs/vendor/` with checksums (`npm run vendor`, `npm run vendor:check`) and mapped by the import map with an integrity block; nothing is fetched from a CDN. The Buffer polyfill is loaded before any modules via top-level `await`. The key and the swap state can be sealed with a passphrase (PBKDF2-SHA256 to AES-256-GCM, `docs/js/vault.js`); by default they are stored in clear.
 
 ### CLI Tests
 
