@@ -2298,27 +2298,37 @@ const groupOfPub = (pubHex, keyType) => groupOfAddress(addressFromPublicKey(pubH
 // left at those addresses are shown and can be moved to the derived addresses.
 async function checkLegacyFunds() {
   try {
-    // the single-key scheme (before 2026-09-27) and the tagged-hash scheme (until 2026-10-01)
-    const schemes = [new SwapEngine(legacyKeys(state.secBytes)), new SwapEngine(deriveKeysV1(state.secBytes, groupOfPub))];
-    let legacy = null, bal = null;
-    for (const eng of schemes) { const b = await eng.getBalances(); if (b.btcConfirmedSat + b.btcUnconfirmedSat > 0 || Number(b.alph) > 0) { legacy = eng; bal = b; break; } }
-    if (!legacy) return;
-    const btcSat = bal.btcConfirmedSat + bal.btcUnconfirmedSat;
-    const alph = Number(bal.alph);
-    addLogMsg('system', `Funds on the previous single-key addresses: ${btcSat} sat at ${legacy.btcAddress}, ${alph} ALPH at ${legacy.alphAddress}. Use "Move legacy funds" to bring them to the new addresses.`, 'System');
+    // the single-key scheme (before 2026-09-27) and the tagged-hash scheme (until 2026-10-01);
+    // every scheme holding more than dust is listed and swept
+    const schemes = [
+      { name: 'single-key', engine: new SwapEngine(legacyKeys(state.secBytes)) },
+      { name: 'tagged-hash', engine: new SwapEngine(deriveKeysV1(state.secBytes, groupOfPub)) },
+    ];
+    const found = [];
+    for (const s of schemes) {
+      const b = await s.engine.getBalances();
+      const btcSat = b.btcConfirmedSat + b.btcUnconfirmedSat, alph = Number(b.alph);
+      if (btcSat >= 1000 || alph >= 0.02) found.push({ ...s, btcSat, alph });
+    }
+    if (!found.length) return;
+    const summary = found.map((f) => `${f.btcSat} sat at ${f.engine.btcAddress.slice(0, 12)}… and ${f.alph} ALPH at ${f.engine.alphAddress.slice(0, 12)}… (${f.name} scheme)`).join('; ');
+    addLogMsg('system', `Funds on previous addresses: ${summary}. Use "Move legacy funds" to bring them to the current addresses.`, 'System');
     const div = document.createElement('div');
     div.style.cssText = 'background:#1f6feb;color:#fff;padding:8px;font-size:13px;text-align:center';
-    div.innerHTML = `Your keys changed (now standard HD wallet keys). The previous addresses still hold ${btcSat} sat and ${alph} ALPH. <button id="legacy-sweep-btn" class="sm" style="margin-left:8px">Move legacy funds</button>`;
+    div.innerHTML = `Your keys changed (now standard HD wallet keys). Previous addresses still hold ${found.reduce((a, f) => a + f.btcSat, 0)} sat and ${found.reduce((a, f) => a + f.alph, 0).toFixed(3)} ALPH. <button id="legacy-sweep-btn" class="sm" style="margin-left:8px">Move legacy funds</button>`;
     document.body.prepend(div);
     document.getElementById('legacy-sweep-btn').addEventListener('click', async () => {
       const btn = document.getElementById('legacy-sweep-btn'); btn.disabled = true; btn.textContent = 'Moving...';
-      try {
-        if (btcSat > 0) { const txid = await legacy.sweepBtc(state.btcAddress); addLogMsg('system', `Legacy BTC swept in ${txid}`, 'You'); }
-        if (alph > 0.01) { const txId = await legacy.sweepAlph(state.alphAddress); addLogMsg('system', `Legacy ALPH swept in ${txId}`, 'You'); }
-        div.textContent = 'Legacy funds moved; they appear at the new addresses once confirmed.';
-        setTimeout(refreshBalance, 5000);
-        setTimeout(() => { div.remove(); checkLegacyFunds(); }, 8000); // another earlier scheme may hold funds too
-      } catch (e) { addLogMsg('system', `Legacy sweep failed: ${e.message}`, 'Error'); btn.disabled = false; btn.textContent = 'Move legacy funds'; }
+      let failures = 0;
+      for (const f of found) {
+        try {
+          if (f.btcSat >= 1000) { const txid = await f.engine.sweepBtc(state.btcAddress); addLogMsg('system', `Legacy BTC (${f.name}) swept in ${txid}`, 'You'); }
+          if (f.alph >= 0.02) { const txId = await f.engine.sweepAlph(state.alphAddress); addLogMsg('system', `Legacy ALPH (${f.name}) swept in ${txId}`, 'You'); }
+        } catch (e) { failures++; addLogMsg('system', `Legacy sweep (${f.name}) failed: ${e.message}`, 'Error'); }
+      }
+      div.textContent = failures ? 'Some legacy funds could not be moved; see the log.' : 'Legacy funds moved; they appear at the current addresses once confirmed.';
+      setTimeout(refreshBalance, 5000);
+      if (!failures) setTimeout(() => div.remove(), 8000);
     });
   } catch (e) { addLogMsg('system', `Legacy funds check failed: ${e.message}`, 'System'); }
 }
