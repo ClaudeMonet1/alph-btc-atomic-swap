@@ -546,7 +546,7 @@
       <span class="key-icon">&#128273;</span>
       <code class="key-value key-masked" id="key-info-nsec">&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;</code>
       <button class="copy-btn" id="nsec-reveal-btn" title="Show/hide private key">show</button>
-      <button class="copy-btn" data-copy="nsec" title="Copy nsec">copy</button>
+      <button class="copy-btn" data-copy="nsec" title="Copy the backup (recovery words, or the nsec of a 24-word identity)">copy</button>
       <button class="sm" id="backup-btn">Backed Up</button>
       <button class="sm" id="passphrase-btn" title="Encrypt the key and the swap state in this browser with a passphrase">Set passphrase</button>
       <button class="sm danger" id="reset-key-btn">Reset</button>
@@ -626,7 +626,7 @@
         <ul>
           <li>Funds are safe at every step &mdash; if the peer disappears, the recovery panel shows the refund countdown and refunds when it opens</li>
           <li>Swap messages (setup, nonces, pre-signatures, claims) are <strong>NIP-44 encrypted</strong> peer-to-peer; offers are public so anyone on Nostr can find them</li>
-          <li>One secret, standard keys: the nsec is also 24 BIP39 words; the Bitcoin key (BIP86 taproot) and the Alephium account (wallet path, group 1) derive from them and can be imported into Sparrow, Bitcoin Core or the Alephium wallet; no signature is valid on two chains</li>
+          <li>One secret, standard keys: 12 BIP39 words (24 for identities created before 2026-10-01, where the nsec is the secret itself); the Nostr key (NIP-06), the Bitcoin key (BIP86 taproot) and the Alephium account (wallet path, group 1) derive from them and can be imported into Sparrow, Bitcoin Core or the Alephium wallet; no signature is valid on two chains</li>
           <li>Every transaction built by a node is decoded and checked before it is signed; the contract is shipped pre-compiled and its bytecode is verified on chain</li>
           <li>BTC side uses Taproot MuSig2 (BIP327). ALPH side uses a Ralph contract &mdash; asymmetric by design for inspectable state, unilateral locking, and explicit timeouts</li>
           <li>Set a passphrase in the identity panel to encrypt your key and swap state in this browser</li>

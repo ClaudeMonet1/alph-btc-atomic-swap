@@ -9,7 +9,7 @@ import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils.js';
 import * as bitcoin from 'bitcoinjs-lib'; import * as ecc from 'tiny-secp256k1'; bitcoin.initEccLib(ecc);
 import { addressFromPublicKey, groupOfAddress, ONE_ALPH } from '@alephium/web3';
-import { deriveKeys } from '../src/keys.js';
+import { deriveKeys, newMasterSecret } from '../src/keys.js';
 import { setAlphNetwork, fundFromGenesis, waitForTx } from '../src/alph-swap.js';
 import { schnorr } from '@noble/curves/secp256k1.js';
 
@@ -26,7 +26,7 @@ mkdirSync(tmp, { recursive: true });
 // fresh keys for each local run (funded below)
 const g = (p, keyType) => groupOfAddress(addressFromPublicKey(p, keyType || (p.length === 66 ? 'default' : 'bip340-schnorr')));
 const keys = {};
-for (const n of ['A', 'B']) { const sec = schnorr.utils.randomSecretKey(); const d = deriveKeys(sec, g); keys[n] = { nsecHex: bytesToHex(sec), btc: bitcoin.payments.p2tr({ internalPubkey: Buffer.from(d.btc.pub), network: bitcoin.networks.regtest }).address, alph: addressFromPublicKey(d.alph.pubHex, 'default') }; }
+for (const n of ['A', 'B']) { const sec = newMasterSecret(); const d = deriveKeys(sec, g); /* 12-word identities */ keys[n] = { nsecHex: bytesToHex(sec), btc: bitcoin.payments.p2tr({ internalPubkey: Buffer.from(d.btc.pub), network: bitcoin.networks.regtest }).address, alph: addressFromPublicKey(d.alph.pubHex, 'default') }; }
 writeFileSync(`${tmp}/keys.json`, JSON.stringify(keys, null, 2));
 
 const procs = [];
