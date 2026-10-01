@@ -4,7 +4,7 @@
 // verifier, the mnemonic round trip, and the invariants of the key set.
 import { HDKey } from '@scure/bip32';
 import { mnemonicToSeedSync } from '@scure/bip39';
-import { deriveKeys, deriveKeysV1, legacyKeys, mnemonicOf, entropyOf, TARGET_ALPH_GROUP, BTC_PATH, ALPH_PATH, alphKeyTypeOf } from '../src/keys.js';
+import { deriveKeys, deriveKeysV1, legacyKeys, mnemonicOf, entropyOf, newMasterSecret, KEY_DERIVATION_V3, TARGET_ALPH_GROUP, BTC_PATH, ALPH_PATH, alphKeyTypeOf } from '../src/keys.js';
 import { ecdsaSign } from '../src/curve.js';
 import { addressFromPublicKey, groupOfAddress, verifySignature } from '@alephium/web3';
 import { deriveHDWalletPrivateKeyForGroup } from '@alephium/web3-wallet';
@@ -20,6 +20,19 @@ const groupOfPub = (pubHex, keyType) => groupOfAddress(addressFromPublicKey(pubH
   const addr = bitcoin.payments.p2tr({ internalPubkey: Buffer.from(k.publicKey.slice(1)), network: bitcoin.networks.bitcoin }).address;
   check('BIP86 vector: internal key', bytesToHex(k.publicKey.slice(1)) === 'cc8a4bc64d897bddc5fbc2f670f7a8ba0b386779106cf1223c6fc5d7cd6fc115');
   check('BIP86 vector: address', addr === 'bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr', addr);
+}
+// NIP-06 test vector (12 words): Nostr key on m/44'/1237'/0'/0/0
+{
+  const m12 = 'leader monkey parrot ring guide accident before fence cannon height naive bean';
+  const k12 = deriveKeys(entropyOf(m12), groupOfPub);
+  check('NIP-06 vector: Nostr secret', bytesToHex(k12.nostr.sec) === '7f7ff03d123792d6ac594bfa67bf6d0c0ab55b6b1fdb6249303fe861f1ccba9a', bytesToHex(k12.nostr.sec));
+  check('NIP-06 vector: Nostr public key', k12.nostr.pubHex === '17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917');
+  check('12-word identity: derivation tag and three distinct keys', k12.derivation === KEY_DERIVATION_V3 && new Set([k12.nostr.pubHex, k12.btc.pubHex, k12.alph.pubHex.slice(2)]).size === 3);
+  check('12-word mnemonic round trip', mnemonicOf(entropyOf(m12)) === m12);
+  const fresh = newMasterSecret();
+  check('fresh secret is 16 bytes = 12 words', fresh.length === 16 && mnemonicOf(fresh).split(' ').length === 12);
+  const [privHex, index] = deriveHDWalletPrivateKeyForGroup(m12, TARGET_ALPH_GROUP, 'default', 0);
+  check('12-word Alephium key equals the wallet library\'s derivation', bytesToHex(k12.alph.sec) === privHex && k12.alph.index === index);
 }
 const master = hexToBytes('11'.repeat(32));
 const words = mnemonicOf(master);
@@ -37,7 +50,7 @@ const k = deriveKeys(master, groupOfPub);
   const sig = bytesToHex(ecdsaSign(hexToBytes(hash), k.alph.sec));
   check('ECDSA signature verifies with the SDK (default key type)', sig.length === 128 && verifySignature(hash, k.alph.pubHex, sig, 'default'));
 }
-check('Nostr key is the master (npub unchanged)', k.nostr.pubHex === legacyKeys(master).nostr.pubHex);
+check('24-word identity: Nostr key is the master (npub unchanged)', k.nostr.pubHex === legacyKeys(master).nostr.pubHex);
 check('Bitcoin key is x-only on the BIP86 path', k.btc.pubHex.length === 64 && k.btc.path === BTC_PATH(0));
 check('deterministic', deriveKeys(master, groupOfPub).btc.pubHex === k.btc.pubHex && deriveKeys(master, groupOfPub).alph.index === k.alph.index);
 check('three distinct keys', new Set([k.nostr.pubHex, k.btc.pubHex, k.alph.pubHex.slice(2)]).size === 3);
