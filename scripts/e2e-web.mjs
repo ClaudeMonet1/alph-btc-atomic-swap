@@ -59,6 +59,7 @@ const steps = (page) => page.evaluate(() => document.getElementById('steps')?.te
 const balances = (page) => page.evaluate(() => (document.body.innerText.match(/[\d.]+ (?:BTC|ALPH)/g) || []).slice(0, 4).join(' | '));
 
 const A = await open('A'); const B = await open('B');
+const aliceP = () => (dir === 'buy_alph' ? B : A), bobP = () => (dir === 'buy_alph' ? A : B); // dir is A's side
 process.on('uncaughtException', (e) => { console.log('HARNESS ERROR:', e.message); console.log('--- A console:'); for (const l of A.logs.slice(-25)) console.log('  ' + l.slice(0, 200)); console.log('--- B console:'); for (const l of B.logs.slice(-25)) console.log('  ' + l.slice(0, 200)); process.exit(1); });
 console.log('A', A.ident, '\nB', B.ident);
 await sleep(8000); // relays
@@ -76,6 +77,21 @@ await sleep(3000);
 console.log('A balances after sweep:', await balances(A.page)); console.log('B balances after sweep:', await balances(B.page));
 // E2E_SWEEP_ONLY=1 stops here (let the swept coins confirm before swapping)
 if (process.env.E2E_SWEEP_ONLY) { await A.browser.close(); await B.browser.close(); process.exit(0); }
+
+// A reloaded page recovers its swap but waits for a human to press Resume (it never
+// re-locks or re-deploys on its own): the harness presses it.
+const resumeIfOffered = async (P, tries = 20) => {
+  const clicked = await P.page.evaluate(async (n) => {
+    for (let i = 0; i < n; i++) {
+      const b = document.getElementById('recovery-resume-btn');
+      if (b) { b.click(); return true; }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return false;
+  }, tries).catch((e) => `error: ${e.message.slice(0, 60)}`);
+  console.log(`${P.name}: resume button ${clicked === true ? 'clicked' : clicked || 'not offered'}`);
+  return clicked === true;
+};
 
 // E2E_RESUME=1: the pages hold a swap in progress (saved checkpoints); watch it to the end without publishing anything
 let offerId = null, accepted = null;
@@ -167,11 +183,17 @@ if (mode === 'counter') {
   }, offerId);
 }
 console.log('B accepted offer', accepted);
-} else console.log('resuming the swap held by the saved profiles');
+} else {
+  console.log('resuming the swap held by the saved profiles');
+  // Alice first: she must be waiting before Bob republishes his lock message, which a
+  // subscription that is already open delivers but one opened afterwards would not replay to a waiter
+  await resumeIfOffered(aliceP()); await sleep(5000); await resumeIfOffered(bobP());
+}
 
 // Poll both sides; stop early when both have claimed or either side shows an error.
 let lastA = '', lastB = '', aborted = false;
-const pollMs = mode === 'refund' ? 1000 : 15000; // the refund drill must catch the lock before Alice deploys
+const pollMs = mode === 'refund' || mode === 'resume' ? 1000 : 15000; // both drills must catch the lock before Alice deploys
+let reloaded = false;
 for (let t = pollMs / 1000; t <= seconds; t += pollMs / 1000) {
   await sleep(pollMs);
   // a page or browser that died is reopened on its profile: the app resumes the swap from its saved checkpoint
@@ -180,6 +202,7 @@ for (let t = pollMs / 1000; t <= seconds; t += pollMs / 1000) {
       console.log(`\n===== ${P.name}: ${e.message.slice(0, 120)} (browser ${P.browser.connected ? 'connected' : 'gone'}); reopening the page on its profile`);
       try { if (P.browser.connected) await P.browser.close(); } catch {}
       const fresh = await open(P.name); const oldLogs = P.logs; Object.assign(P, fresh); P.logs = oldLogs.concat(['--- reopened ---'], fresh.logs);
+      await resumeIfOffered(P, 25); // the reopened page recovers its swap but waits for Resume
       return await steps(P.page);
     }
   };
@@ -189,6 +212,15 @@ for (let t = pollMs / 1000; t <= seconds; t += pollMs / 1000) {
     lastA = a; lastB = b;
   }
   const done = (x) => /5\. Claim\s*✓ Done/.test(x);
+  // reload both pages mid-protocol, then press Resume: the swap must finish from the saved checkpoints
+  if (mode === 'resume' && !reloaded && /BTC locked: [0-9a-f]{16}/.test(dir === 'buy_alph' ? a : b)) {
+    reloaded = true;
+    console.log('\n===== Bob has locked: reloading both pages, then pressing Resume (Alice first)');
+    await Promise.all([A.page.reload({ waitUntil: 'load' }), B.page.reload({ waitUntil: 'load' })]);
+    await sleep(5000);
+    await resumeIfOffered(aliceP()); await sleep(3000); await resumeIfOffered(bobP());
+    continue;
+  }
   if (mode === 'refund') {
     // abort as soon as Bob's lock is out and before Alice deploys: Bob's refund is the only way back
     const bobLocked = (x) => /BTC locked: [0-9a-f]{16}/.test(x);
