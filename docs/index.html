@@ -106,6 +106,10 @@
     font-weight: 700; text-transform: uppercase;
   }
   .network-badge.testnet { background: #9e6a0333; color: #bb8009; }
+  .network-badge.mainnet { background: #f8514933; color: #f85149; font-weight: 700; }
+  .mainnet-banner { background: #b62324; color: #fff; padding: 8px 12px; font-size: 13px; text-align: center; }
+  .settings-form label { display: block; font-size: 11px; color: #8b949e; margin-top: 8px; }
+  .settings-form input, .settings-form select { width: 100%; box-sizing: border-box; font-size: 12px; padding: 6px; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px; }
   .copy-btn {
     padding: 2px 6px; font-size: 10px; cursor: pointer;
     background: transparent; border: 1px solid #30363d; color: #8b949e; border-radius: 3px;
@@ -621,6 +625,7 @@
           <li>BTC side uses Taproot MuSig2 (BIP327). ALPH side uses a Ralph contract &mdash; asymmetric by design for inspectable state, unilateral locking, and explicit timeouts</li>
           <li>Set a passphrase in the identity panel to encrypt your key and swap state in this browser</li>
           <li>Install the page (browser menu) and turn on Notifications to be told when the peer acts or a wait ends while the tab is in the background</li>
+          <li>Settings lets you point the page at your own Esplora, Alephium node and relays, or switch networks; mainnet needs a typed confirmation, shows a red banner and asks again before every offer, and has had no dry run yet</li>
         </ul>
 
         <h4>Important Notes</h4>

@@ -19,7 +19,7 @@ import { deriveKeys, legacyKeys } from './keys.js';
 import { deriveVaultKey, newSalt, sealString, openString, saltOf } from './vault.js';
 import { modalAlert, modalConfirm, modalPrompt } from './modal.js';
 import { addressFromQrText, scanWithCamera } from './qrscan.js';
-import { CONFIG, DEFAULTS as CONFIG_DEFAULTS, resetConfig } from './config.js';
+import { CONFIG, DEFAULTS as CONFIG_DEFAULTS, NETWORK_DEFAULTS, resetConfig, saveConfig } from './config.js';
 
 // GitHub Pages caches every file for ten minutes: a tab opened before a deploy
 // runs the old modules. Compare the module build id with version.json fetched
@@ -58,24 +58,65 @@ async function toggleNotifications() {
   initNotifyButton();
 }
 
-// Settings: shows the endpoints in use and how to change them (URL parameters, config.js).
+// Settings: a form for the networks and endpoints (also settable by URL parameters, config.js).
+const MAINNET_WARNING = 'MAINNET: real bitcoin and real ALPH.\n\n' +
+  '- Bob\'s lock stays locked for 24 h if the swap does not complete; Alice\'s contract for 36 h.\n' +
+  '- Confirmation depth scales with the amount (up to 6 Bitcoin blocks).\n' +
+  '- This software has been exercised on signet, testnet, regtest and devnet; it has had no mainnet dry run yet.\n' +
+  '- Keep amounts small and back up your nsec first.';
+function settingsForm() {
+  const v = CONFIG;
+  const opt = (sel, list) => list.map((n) => `<option value="${n}" ${sel === n ? 'selected' : ''}>${n}</option>`).join('');
+  return `<div class="settings-form">
+    <label>Bitcoin network</label><select id="cfg-btcNetwork">${opt(v.btcNetwork, ['signet', 'regtest', 'mainnet'])}</select>
+    <label>Bitcoin API (Esplora shape)</label><input id="cfg-btcApi" value="${v.btcApi}">
+    <label>Bitcoin explorer</label><input id="cfg-btcExplorer" value="${v.btcExplorer}">
+    <label>Alephium network</label><select id="cfg-alphNetwork">${opt(v.alphNetwork, ['testnet', 'devnet', 'mainnet'])}</select>
+    <label>Alephium node</label><input id="cfg-alphNode" value="${v.alphNode}">
+    <label>Alephium explorer</label><input id="cfg-alphExplorer" value="${v.alphExplorer}">
+    <label>Relays (comma separated)</label><input id="cfg-relays" value="${v.relays.join(', ')}">
+    <div style="font-size:11px; color:#8b949e; margin-top:8px">Choosing a network fills its public services; edit them for a self-hosted stack. Saving reloads the page. The same values can be given as URL parameters (?btcNetwork=…&btcApi=…&relays=…; ?resetConfig restores the defaults).</div>
+  </div>`;
+}
 async function showSettings() {
-  const lines = [
-    `Bitcoin: ${CONFIG.btcNetwork} via ${CONFIG.btcApi}`,
-    `Alephium: ${CONFIG.alphNetwork} via ${CONFIG.alphNode}`,
-    `Relays: ${CONFIG.relays.join(', ')}`,
-    '',
-    'Change them with URL parameters, remembered in this browser:',
-    '?btcNetwork=regtest&btcApi=http://host:port&alphNetwork=devnet&alphNode=http://host:port&relays=ws://host:port',
-    '?resetConfig restores the defaults.',
-  ];
-  if (CONFIG.isDefault) { await modalAlert(lines.join('\n')); return; }
-  if (await modalConfirm(lines.join('\n') + '\n\nReset to the default signet/testnet services and reload?', 'Reset and reload')) { resetConfig(); location.href = location.pathname; }
+  const overlay = document.createElement('div'); overlay.className = 'modal-overlay'; overlay.id = 'modal';
+  overlay.innerHTML = `<div class="modal-box"><div id="modal-msg" class="modal-msg"><strong>Settings</strong></div>${settingsForm()}
+    <div class="modal-actions"><button class="sm" id="cfg-reset">Defaults</button><button class="sm" id="modal-cancel">Cancel</button><button class="sm primary" id="modal-ok">Save and reload</button></div></div>`;
+  document.body.appendChild(overlay);
+  const fill = (chain) => { const net = overlay.querySelector(chain === 'btc' ? '#cfg-btcNetwork' : '#cfg-alphNetwork').value; const d = NETWORK_DEFAULTS[chain][net]; if (!d) return; for (const [k, val] of Object.entries(d)) overlay.querySelector(`#cfg-${k}`).value = val; };
+  overlay.querySelector('#cfg-btcNetwork').addEventListener('change', () => fill('btc'));
+  overlay.querySelector('#cfg-alphNetwork').addEventListener('change', () => fill('alph'));
+  overlay.querySelector('#modal-cancel').addEventListener('click', () => overlay.remove());
+  overlay.querySelector('#cfg-reset').addEventListener('click', () => { overlay.remove(); resetConfig(); location.href = location.pathname; });
+  overlay.querySelector('#modal-ok').addEventListener('click', async () => {
+    const values = {};
+    for (const k of ['btcNetwork', 'btcApi', 'btcExplorer', 'alphNetwork', 'alphNode', 'alphExplorer']) values[k] = overlay.querySelector(`#cfg-${k}`).value.trim().replace(/\/+$/, '');
+    values.relays = overlay.querySelector('#cfg-relays').value.split(',').map((x) => x.trim()).filter(Boolean);
+    if (!values.relays.length) { await modalAlert('At least one relay is needed.'); return; }
+    if (values.btcNetwork === 'mainnet' || values.alphNetwork === 'mainnet') {
+      overlay.remove();
+      const typed = await modalPrompt(MAINNET_WARNING + '\n\nType MAINNET to switch:', { placeholder: 'MAINNET' });
+      if (typed !== 'MAINNET') { addLogMsg('system', 'Mainnet not enabled', 'System'); return; }
+    } else overlay.remove();
+    saveConfig(values);
+    location.href = location.pathname;
+  });
+}
+// Mainnet: a persistent banner and a confirmation before any swap is published or taken.
+async function confirmMainnet(action) {
+  if (!CONFIG.isMainnet) return true;
+  return modalConfirm(`${MAINNET_WARNING}\n\nProceed to ${action}?`, 'Proceed on mainnet');
 }
 function applyNetworkUi() {
   const label = document.querySelector('.network-badge');
-  if (label) label.textContent = `${CONFIG.btcNetwork.toUpperCase()} / ALPH ${CONFIG.alphNetwork.toUpperCase()}`;
+  if (label) { label.textContent = `${CONFIG.btcNetwork.toUpperCase()} / ALPH ${CONFIG.alphNetwork.toUpperCase()}`; if (CONFIG.isMainnet) { label.classList.remove('testnet'); label.classList.add('mainnet'); } }
   if (CONFIG.btcNetwork !== 'signet' || CONFIG.alphNetwork !== 'testnet') document.body.classList.add('no-faucet');
+  if (CONFIG.isMainnet) {
+    const div = document.createElement('div'); div.className = 'mainnet-banner'; div.id = 'mainnet-banner';
+    div.textContent = `MAINNET: real funds (BTC ${CONFIG.btcNetwork}, ALPH ${CONFIG.alphNetwork}). Locks last 24 h, confirmations scale with the amount, no mainnet dry run has been done yet. Keep amounts small.`;
+    document.body.prepend(div);
+    addLogMsg('system', 'MAINNET configuration active: real funds', 'Warning');
+  }
   if (!CONFIG.isDefault) addLogMsg('system', `Custom endpoints: BTC ${CONFIG.btcNetwork} ${CONFIG.btcApi}; ALPH ${CONFIG.alphNetwork} ${CONFIG.alphNode}; relays ${CONFIG.relays.join(', ')}`, 'System');
 }
 
@@ -1144,6 +1185,7 @@ function clearOfferWarning() {
 
 async function publishOffer() {
   const btn = document.getElementById('publish-offer-btn');
+  if (!await confirmMainnet('publish this offer')) return;
   btn.disabled = true; btn.textContent = 'Publishing...';
   clearOfferWarning();
 
@@ -1242,6 +1284,7 @@ function showAcceptForm(offerId) {
 async function acceptOffer(offerId, fillAmount = null) {
   const offer = state.offers.get(offerId);
   if (!offer) return;
+  if (!await confirmMainnet('take this offer')) return;
   const groupProblem = peerGroupProblem(offer.keys);
   if (groupProblem) { await modalAlert(`Cannot take this offer: ${groupProblem}.`); return; }
 
