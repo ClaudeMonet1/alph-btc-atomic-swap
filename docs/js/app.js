@@ -15,7 +15,7 @@ import { btcConfirmationsFor } from './timelocks.js';
 import { BTC_NETWORK_NAME } from './btc.js';
 import { getP2TRAddress } from './btc.js';
 import { BUILD } from './build.js';
-import { deriveKeys, deriveKeysV1, legacyKeys, mnemonicOf, entropyOf, alphKeyTypeOf } from './keys.js';
+import { deriveKeys, deriveKeysV1, legacyKeys, mnemonicOf, entropyOf, alphKeyTypeOf, newMasterSecret, isMasterSecret } from './keys.js';
 import { deriveVaultKey, newSalt, sealString, openString, saltOf } from './vault.js';
 import { modalAlert, modalConfirm, modalPrompt } from './modal.js';
 import { addressFromQrText, scanWithCamera } from './qrscan.js';
@@ -29,7 +29,7 @@ async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   try {
     const reg = await navigator.serviceWorker.register('./sw.js');
-    reg.addEventListener('updatefound', () => addLogMsg('system', 'A newer build is being fetched; reload when the banner says so', 'System'));
+    reg.addEventListener('updatefound', () => { if (reg.active) addLogMsg('system', 'A newer build is being fetched; reload when the banner says so', 'System'); }); // not on the first install
   } catch (e) { addLogMsg('system', `Offline support unavailable: ${e.message}`, 'System'); }
 }
 
@@ -63,7 +63,7 @@ const MAINNET_WARNING = 'MAINNET: real bitcoin and real ALPH.\n\n' +
   '- Bob\'s lock stays locked for 24 h if the swap does not complete; Alice\'s contract for 36 h.\n' +
   '- Confirmation depth scales with the amount (up to 6 Bitcoin blocks).\n' +
   '- This software has been exercised on signet, testnet, regtest and devnet; it has had no mainnet dry run yet.\n' +
-  '- Keep amounts small and back up your nsec first.';
+  '- Keep amounts small and back up your recovery words first.';
 function settingsForm() {
   const v = CONFIG;
   const opt = (sel, list) => list.map((n) => `<option value="${n}" ${sel === n ? 'selected' : ''}>${n}</option>`).join('');
@@ -257,7 +257,7 @@ async function signEvent(template) {
   const serialized = new TextEncoder().encode(nostrSerialize(event));
   const id = bytesToHex(sha256(serialized));
   event.id = id;
-  event.sig = bytesToHex(schnorr.sign(hexToBytes(id), state.secBytes));
+  event.sig = bytesToHex(schnorr.sign(hexToBytes(id), state.keys.nostr.sec));
   return event;
 }
 
@@ -374,11 +374,11 @@ const SWAP_CLAIM_KIND = 38393;
 // ============================================================
 
 async function nip04Encrypt(plaintext, peerPubHex) {
-  return nip44EncryptTo(state.secBytes, peerPubHex, plaintext);
+  return nip44EncryptTo(state.keys.nostr.sec, peerPubHex, plaintext);
 }
 
 async function nip04Decrypt(ciphertext, peerPubHex) {
-  return nip44DecryptFrom(state.secBytes, peerPubHex, ciphertext);
+  return nip44DecryptFrom(state.keys.nostr.sec, peerPubHex, ciphertext);
 }
 
 function generateUUID() {
@@ -2243,7 +2243,7 @@ async function loadOrCreateNsec(statusEl) {
         const salt = saltOf(record);
         const key = await deriveVaultKey(pass, salt);
         const hex = await openString(key, record);
-        if (hex.length !== 64) throw new Error('bad record');
+        if (!isMasterSecret(hexToBytes(hex))) throw new Error('bad record');
         vaultKey = key; vaultSalt = salt;
         localStorage.removeItem(STORAGE_KEY); // a plaintext copy has no business next to the vault
         return hex;
@@ -2251,11 +2251,9 @@ async function loadOrCreateNsec(statusEl) {
     }
   }
   const hex = localStorage.getItem(STORAGE_KEY);
-  if (hex && hex.length === 64) return hex;
-  // Any secret works: the Alephium key is derived from it into the target group (keys.js).
-  const sec = new Uint8Array(32);
-  crypto.getRandomValues(sec);
-  const fresh = bytesToHex(sec);
+  if (hex && (hex.length === 32 || hex.length === 64)) return hex; // 12-word (16 bytes) or 24-word / nsec (32 bytes)
+  // A fresh identity is 16 bytes of entropy: 12 words, every key derived from them (keys.js).
+  const fresh = bytesToHex(newMasterSecret());
   localStorage.setItem(STORAGE_KEY, fresh);
   return fresh;
 }
@@ -2270,7 +2268,7 @@ async function setPassphrase() {
     saveSwapState();
     addLogMsg('system', 'Passphrase removed: the key is stored in clear in this browser.', 'System');
   } else {
-    const p1 = await modalPrompt('Choose a passphrase (at least 8 characters). It encrypts your key and swap state in this browser. Losing it means losing access unless you have backed up the nsec.', { password: true, placeholder: 'passphrase' });
+    const p1 = await modalPrompt('Choose a passphrase (at least 8 characters). It encrypts your key and swap state in this browser. Losing it means losing access unless you have backed up your recovery words.', { password: true, placeholder: 'passphrase' });
     if (p1 === null) return;
     if (p1.length < 8) { await modalAlert('At least 8 characters.'); return; }
     const p2 = await modalPrompt('Repeat the passphrase:', { password: true, placeholder: 'passphrase again' });
@@ -2297,6 +2295,7 @@ const groupOfPub = (pubHex, keyType) => groupOfAddress(addressFromPublicKey(pubH
 // Until 2026-09-27 the Nostr key was also the Bitcoin and Alephium key. Funds
 // left at those addresses are shown and can be moved to the derived addresses.
 async function checkLegacyFunds() {
+  if (state.secBytes.length !== 32) return; // 12-word identities never had earlier schemes
   try {
     // the single-key scheme (before 2026-09-27) and the tagged-hash scheme (until 2026-10-01);
     // every scheme holding more than dust is listed and swept
@@ -2848,13 +2847,13 @@ async function autoConnect() {
   errorEl.classList.add('hidden');
 
   try {
-    const nsecHex = await loadOrCreateNsec(statusEl);
-    state.secBytes = hexToBytes(nsecHex);
+    const masterHex = await loadOrCreateNsec(statusEl);
+    state.secBytes = hexToBytes(masterHex);
     initPassphraseButton();
 
     statusEl.textContent = 'Deriving identity...';
-    // One secret, three keys: Nostr identity = the secret; Bitcoin and Alephium
-    // keys derived with domain separation, the Alephium one in the target group.
+    // One secret (12 or 24 words), three keys: Nostr (NIP-06, or the secret itself for
+    // 24-word identities), Bitcoin on BIP86 and Alephium on the wallet path in the target group.
     state.keys = deriveKeys(state.secBytes, groupOfPub);
     state.pubKeyHex = state.keys.nostr.pubHex;
     state.npub = npubEncode(state.pubKeyHex);
@@ -2876,7 +2875,9 @@ async function autoConnect() {
     document.getElementById('info-alph').textContent = state.alphAddress;
 
     // nsec in bech32 (stored in state, shown only when revealed)
-    state.nsecBech32 = nsecEncode(nsecHex);
+    state.nsecBech32 = nsecEncode(bytesToHex(state.keys.nostr.sec));
+    state.mnemonic = mnemonicOf(state.secBytes);
+    state.wordCount = state.mnemonic.split(' ').length;
 
     const badge = document.getElementById('network-badge');
     badge.textContent = 'testnet';
@@ -3033,17 +3034,17 @@ document.getElementById('refresh-bal-btn').addEventListener('click', refreshBala
 document.getElementById('reset-key-btn').addEventListener('click', async () => {
   const msg = 'WARNING: This replaces your current key.\n\n' +
     'All funds (BTC and ALPH) associated with this identity will be LOST ' +
-    'unless you have backed up your nsec or 24 words.\n\n' +
-    'Type RESET for a new random key, or paste an nsec (nsec1... or 64 hex) or 24 BIP39 words to import one:';
-  const input = (await modalPrompt(msg, { placeholder: 'RESET, nsec1..., or 24 words' }) || '').trim();
+    'unless you have backed up your recovery words (or, for a 24-word identity, the nsec).\n\n' +
+    'Type RESET for a new 12-word identity, or paste 12 or 24 BIP39 words, or an nsec (nsec1... or 64 hex) to import one:';
+  const input = (await modalPrompt(msg, { placeholder: 'RESET, 12 or 24 words, or nsec1...' }) || '').trim();
   if (!input) return;
   let importedHex = null;
   if (input !== 'RESET') {
     try {
       if (/^nsec1[a-z0-9]+$/i.test(input)) { const { words } = bech32.decode(input.toLowerCase(), 90); importedHex = bytesToHex(new Uint8Array(bech32.fromWords(words))); }
       else if (/^[0-9a-f]{64}$/i.test(input)) importedHex = input.toLowerCase();
-      else if (input.split(/\s+/).length === 24) importedHex = bytesToHex(entropyOf(input));
-      else throw new Error('not an nsec, 64 hex characters or 24 words');
+      else if ([12, 24].includes(input.split(/\s+/).length)) importedHex = bytesToHex(entropyOf(input));
+      else throw new Error('not 12 or 24 words, an nsec or 64 hex characters');
     } catch (e) { await modalAlert(`Cannot import: ${e.message}`); return; }
   }
   localStorage.removeItem(STORAGE_KEY);
@@ -3063,7 +3064,7 @@ document.querySelectorAll('.copy-btn').forEach(btn => {
     if (which === 'btc') text = state.btcAddress;
     else if (which === 'alph') text = state.alphAddress;
     else if (which === 'npub') text = state.npub;
-    else if (which === 'nsec') text = state.nsecBech32;
+    else if (which === 'nsec') text = state.wordCount === 12 ? state.mnemonic : state.nsecBech32; // the backup that restores everything
     if (text) {
       navigator.clipboard.writeText(text).then(() => {
         btn.textContent = 'ok!';
@@ -3310,7 +3311,9 @@ document.getElementById('nsec-reveal-btn').addEventListener('click', () => {
   const btn = document.getElementById('nsec-reveal-btn');
   nsecRevealed = !nsecRevealed;
   if (nsecRevealed) {
-    el.textContent = `${state.nsecBech32 || ''}\n24 words: ${mnemonicOf(state.secBytes)}`;
+    el.textContent = state.wordCount === 12
+      ? `${state.wordCount} words (your backup): ${state.mnemonic}\nnsec (Nostr key only, derived from the words): ${state.nsecBech32 || ''}`
+      : `${state.nsecBech32 || ''}\n${state.wordCount} words: ${state.mnemonic}`;
     el.style.whiteSpace = 'pre-wrap';
     el.classList.remove('key-masked');
     btn.textContent = 'hide';
@@ -3347,7 +3350,7 @@ document.getElementById('passphrase-btn').addEventListener('click', () => { setP
 
 document.getElementById('backup-btn').addEventListener('click', async () => {
   const confirmed = await modalConfirm(
-    'Have you saved your nsec (private key) somewhere safe?\n\n' +
+    'Have you saved your recovery words (or nsec) somewhere safe?\n\n' +
     'Without this key, all BTC and ALPH funds in this wallet will be permanently lost.\n\n' +
     'Click OK to confirm you have backed it up.', 'I backed it up'
   );

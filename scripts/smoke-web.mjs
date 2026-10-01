@@ -37,6 +37,8 @@ const hd = await page.evaluate(async () => {
     const [keys, alph] = await Promise.all([import(new URL('./js/keys.js', location.href).href), import(new URL('./js/alph.js', location.href).href)]);
     const master = new Uint8Array(32).fill(0x11);
     const k = keys.deriveKeys(master, (p, t) => alph.groupOfAddress(alph.addressFromPublicKey(p, t || 'default')));
+    const k12 = keys.deriveKeys(keys.entropyOf('leader monkey parrot ring guide accident before fence cannon height naive bean'), (p, t) => alph.groupOfAddress(alph.addressFromPublicKey(p, t || 'default')));
+    if (k12.nostr.pubHex !== '17162c921dc4d2518f9a101db33695df1afb56ab82f5ff3e5da6eec3ca5cd917') return `nip06 mismatch ${k12.nostr.pubHex.slice(0, 16)}`;
     return k.btc.pubHex.startsWith('3bd7f4dbaa9eb124') && k.alph.pubHex.startsWith('0322e222404f66f5') && k.alph.index === 0 ? 'ok' : `mismatch ${k.btc.pubHex.slice(0, 16)} ${k.alph.pubHex.slice(0, 16)}`;
   } catch (e) { return 'error: ' + (e.message || e); }
 });
