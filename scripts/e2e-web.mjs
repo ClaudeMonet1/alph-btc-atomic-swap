@@ -119,7 +119,7 @@ if (mode === 'counter') {
       const { deriveKeys } = await import('../src/keys.js');
       const { addressFromPublicKey, groupOfAddress } = await import('@alephium/web3');
       const sec = crypto.getRandomValues(new Uint8Array(32));
-      const hk = deriveKeys(sec, (p) => groupOfAddress(addressFromPublicKey(p, 'bip340-schnorr')));
+      const hk = deriveKeys(sec, (p, keyType) => groupOfAddress(addressFromPublicKey(p, keyType || 'default')));
       const content = { action: 'accept', offerId, alphAmount: (10n * 10n ** 18n).toString(), btcSat: 100, keys: { btc: hk.btc.pubHex, alph: hk.alph.pubHex } };
       const ev = finalizeEvent({ kind: 38389, created_at: Math.floor(Date.now() / 1000), tags: [['t', 'atomicswap'], ['t', 'accept'], ['p', A.ident.npub], ['d', `${offerId}:accept`]], content: JSON.stringify(content) }, sec);
       await new Promise((resolve) => { const ws = new WebSocket(relayUrl); ws.on('open', () => { ws.send(JSON.stringify(['EVENT', ev])); setTimeout(() => { ws.close(); resolve(); }, 500); }); ws.on('error', resolve); });

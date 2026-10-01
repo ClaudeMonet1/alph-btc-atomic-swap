@@ -21,7 +21,7 @@ import {
   web3, ONE_ALPH, addressFromPublicKey, groupOfAddress,
 } from './alph.js';
 import { computeTweakedPrivateKey } from './taproot-utils.js';
-import { deriveKeys, legacyKeys } from './keys.js';
+import { deriveKeys, legacyKeys, alphKeyTypeOf } from './keys.js';
 import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, btcConfirmationsFor, alphConfirmationsFor, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, CLAIM_VBYTES, REFUND_VBYTES } from './timelocks.js';
 
 // ============================================================
@@ -86,7 +86,7 @@ export class SwapEngine {
     this.btcAddress = getP2TRAddress(keys.btc.pub);
     // Alephium: account that deploys/claims/refunds the contract
     this.alphKey = keys.alph;
-    this.alphAddress = addressFromPublicKey(keys.alph.pubHex, 'bip340-schnorr');
+    this.alphAddress = addressFromPublicKey(keys.alph.pubHex, alphKeyTypeOf(keys.alph.pubHex));
     this.group = groupOfAddress(this.alphAddress);
 
     // Swap state
@@ -152,9 +152,10 @@ export class SwapEngine {
   // A bare Nostr key means a legacy single-key peer (all three roles).
   static normalizePeer(peer) {
     if (typeof peer === 'string') return { nostrPubHex: peer, btcPubHex: peer, alphPubHex: peer, alphAddress: addressFromPublicKey(peer, 'bip340-schnorr') };
-    if (!peer || !/^[0-9a-f]{64}$/i.test(peer.nostrPubHex || '') || !/^[0-9a-f]{64}$/i.test(peer.btcPubHex || '') || !/^[0-9a-f]{64}$/i.test(peer.alphPubHex || ''))
+    // the Alephium key is 33 bytes (ECDSA, HD wallets) or 32 (Schnorr, earlier builds)
+    if (!peer || !/^[0-9a-f]{64}$/i.test(peer.nostrPubHex || '') || !/^[0-9a-f]{64}$/i.test(peer.btcPubHex || '') || !/^(?:[0-9a-f]{64}|0[23][0-9a-f]{64})$/i.test(peer.alphPubHex || ''))
       throw new Error('peer keys missing or malformed (the peer may run an old build)');
-    return { ...peer, alphAddress: addressFromPublicKey(peer.alphPubHex, 'bip340-schnorr') };
+    return { ...peer, alphAddress: addressFromPublicKey(peer.alphPubHex, alphKeyTypeOf(peer.alphPubHex)) };
   }
   get peerBtcPub() { return hexToBytes(this.peer.btcPubHex); }
 

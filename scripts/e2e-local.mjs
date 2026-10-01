@@ -24,9 +24,9 @@ rmSync(`${tmp}/profiles`, { recursive: true, force: true }); // fresh browsers e
 mkdirSync(tmp, { recursive: true });
 
 // fresh keys for each local run (funded below)
-const g = (p) => groupOfAddress(addressFromPublicKey(p, 'bip340-schnorr'));
+const g = (p, keyType) => groupOfAddress(addressFromPublicKey(p, keyType || (p.length === 66 ? 'default' : 'bip340-schnorr')));
 const keys = {};
-for (const n of ['A', 'B']) { const sec = schnorr.utils.randomSecretKey(); const d = deriveKeys(sec, g); keys[n] = { nsecHex: bytesToHex(sec), btc: bitcoin.payments.p2tr({ internalPubkey: Buffer.from(d.btc.pub), network: bitcoin.networks.regtest }).address, alph: addressFromPublicKey(d.alph.pubHex, 'bip340-schnorr') }; }
+for (const n of ['A', 'B']) { const sec = schnorr.utils.randomSecretKey(); const d = deriveKeys(sec, g); keys[n] = { nsecHex: bytesToHex(sec), btc: bitcoin.payments.p2tr({ internalPubkey: Buffer.from(d.btc.pub), network: bitcoin.networks.regtest }).address, alph: addressFromPublicKey(d.alph.pubHex, 'default') }; }
 writeFileSync(`${tmp}/keys.json`, JSON.stringify(keys, null, 2));
 
 const procs = [];

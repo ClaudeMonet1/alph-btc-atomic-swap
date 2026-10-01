@@ -31,6 +31,15 @@ const selftest = await page.evaluate(async () => {
     return { total: results.length, failed: results.filter((r) => !r.ok).map((r) => `${r.name}: ${r.problem}`) };
   } catch (e) { return { total: 0, failed: ['self-test did not run: ' + (e.message || e)] }; }
 });
+// HD derivation in the browser build must match the Node test (BIP86 and the Alephium wallet path)
+const hd = await page.evaluate(async () => {
+  try {
+    const [keys, alph] = await Promise.all([import(new URL('./js/keys.js', location.href).href), import(new URL('./js/alph.js', location.href).href)]);
+    const master = new Uint8Array(32).fill(0x11);
+    const k = keys.deriveKeys(master, (p, t) => alph.groupOfAddress(alph.addressFromPublicKey(p, t || 'default')));
+    return k.btc.pubHex.startsWith('3bd7f4dbaa9eb124') && k.alph.pubHex.startsWith('0322e222404f66f5') && k.alph.index === 0 ? 'ok' : `mismatch ${k.btc.pubHex.slice(0, 16)} ${k.alph.pubHex.slice(0, 16)}`;
+  } catch (e) { return 'error: ' + (e.message || e); }
+});
 // QR decoding: a code generated in the page must decode back to the address
 const qr = await page.evaluate(async () => {
   try {
@@ -79,10 +88,11 @@ console.log('key in storage   :', state.hasNsec);
 console.log('identity shown   :', { npub: npub?.slice(0, 16), btc: btc?.slice(0, 12), alph: alph?.slice(0, 12) });
 console.log('bip327 self-test :', selftest.failed.length ? selftest.failed : `${selftest.total} checks passed`);
 console.log('contract artifact:', artifact.error ? artifact.error : `codeHash ${artifact.codeHash.slice(0, 16)}..., ${artifact.bytecodeLen / 2} bytes`);
+console.log('hd keys          :', hd);
 console.log('qr decode        :', qr);
 console.log('service worker   :', sw);
 console.log('offline reload   :', offline);
 console.log('console (last 8) :'); for (const l of console_.slice(-8)) console.log('  ' + l.slice(0, 160));
-const ok = errors.length === 0 && failed.length === 0 && npub && btc && state.hasNsec && selftest.total > 0 && selftest.failed.length === 0 && !artifact.error && !offline.startsWith('page did not load offline') && qr === 'ok';
+const ok = errors.length === 0 && failed.length === 0 && npub && btc && state.hasNsec && selftest.total > 0 && selftest.failed.length === 0 && !artifact.error && !offline.startsWith('page did not load offline') && qr === 'ok' && hd === 'ok';
 console.log(ok ? '\nWEB SMOKE OK' : '\nWEB SMOKE FAILED');
 process.exit(ok ? 0 : 1);

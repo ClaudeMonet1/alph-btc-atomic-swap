@@ -35,6 +35,9 @@ const BUNDLES = [
   { spec: 'bech32', entry: 'bech32', file: 'bech32.js', cjs: true },
   { spec: 'qrcode-generator', entry: 'qrcode-generator', file: 'qrcode-generator.js', cjs: true },
   { spec: 'jsqr', entry: 'jsqr', file: 'jsqr.js', cjs: true },
+  { spec: '@scure/bip32', entry: '@scure/bip32', file: 'scure-bip32.js' },
+  { spec: '@scure/bip39', entry: '@scure/bip39', file: 'scure-bip39.js' },
+  { spec: '@scure/bip39/wordlists/english', entry: '@scure/bip39/wordlists/english', file: 'scure-bip39-english.js' },
 ];
 
 import { createRequire } from 'node:module';

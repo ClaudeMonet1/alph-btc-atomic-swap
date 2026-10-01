@@ -1,14 +1,15 @@
 // Bundled by scripts/vendor.mjs from the pinned package in node_modules. Do not edit; rebuild with `npm run vendor`.
-// @noble/hashes/hmac 1.7.1
+// @noble/hashes/hmac 1.8.0
 
 
-// node_modules/noble-hashes-1/esm/_assert.js
+// node_modules/noble-hashes-1/esm/utils.js
+/*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+function isBytes(a) {
+  return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
+}
 function anumber(n) {
   if (!Number.isSafeInteger(n) || n < 0)
     throw new Error("positive integer expected, got " + n);
-}
-function isBytes(a) {
-  return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
 function abytes(b, ...lengths) {
   if (!isBytes(b))
@@ -18,7 +19,7 @@ function abytes(b, ...lengths) {
 }
 function ahash(h) {
   if (typeof h !== "function" || typeof h.create !== "function")
-    throw new Error("Hash should be wrapped by utils.wrapConstructor");
+    throw new Error("Hash should be wrapped by utils.createHasher");
   anumber(h.outputLen);
   anumber(h.blockLen);
 }
@@ -28,12 +29,14 @@ function aexists(instance, checkFinished = true) {
   if (checkFinished && instance.finished)
     throw new Error("Hash#digest() has already been called");
 }
-
-// node_modules/noble-hashes-1/esm/utils.js
-/*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+function clean(...arrays) {
+  for (let i = 0; i < arrays.length; i++) {
+    arrays[i].fill(0);
+  }
+}
 function utf8ToBytes(str) {
   if (typeof str !== "string")
-    throw new Error("utf8ToBytes expected string, got " + typeof str);
+    throw new Error("string expected");
   return new Uint8Array(new TextEncoder().encode(str));
 }
 function toBytes(data) {
@@ -43,10 +46,6 @@ function toBytes(data) {
   return data;
 }
 var Hash = class {
-  // Safe version that clones internal state
-  clone() {
-    return this._cloneInto();
-  }
 };
 
 // node_modules/noble-hashes-1/esm/hmac.js
@@ -72,7 +71,7 @@ var HMAC = class extends Hash {
     for (let i = 0; i < pad.length; i++)
       pad[i] ^= 54 ^ 92;
     this.oHash.update(pad);
-    pad.fill(0);
+    clean(pad);
   }
   update(buf) {
     aexists(this);
@@ -104,6 +103,9 @@ var HMAC = class extends Hash {
     to.oHash = oHash._cloneInto(to.oHash);
     to.iHash = iHash._cloneInto(to.iHash);
     return to;
+  }
+  clone() {
+    return this._cloneInto();
   }
   destroy() {
     this.destroyed = true;

@@ -1,13 +1,18 @@
 // Bundled by scripts/vendor.mjs from the pinned package in node_modules. Do not edit; rebuild with `npm run vendor`.
-// @noble/hashes/utils 1.7.1
+// @noble/hashes/utils 1.8.0
 
 
 // node_modules/noble-hashes-1/esm/crypto.js
 var crypto = typeof globalThis === "object" && "crypto" in globalThis ? globalThis.crypto : void 0;
 
-// node_modules/noble-hashes-1/esm/_assert.js
+// node_modules/noble-hashes-1/esm/utils.js
+/*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
+}
+function anumber(n) {
+  if (!Number.isSafeInteger(n) || n < 0)
+    throw new Error("positive integer expected, got " + n);
 }
 function abytes(b, ...lengths) {
   if (!isBytes(b))
@@ -15,17 +20,35 @@ function abytes(b, ...lengths) {
   if (lengths.length > 0 && !lengths.includes(b.length))
     throw new Error("Uint8Array expected of length " + lengths + ", got length=" + b.length);
 }
-
-// node_modules/noble-hashes-1/esm/utils.js
-/*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
-function isBytes2(a) {
-  return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
+function ahash(h) {
+  if (typeof h !== "function" || typeof h.create !== "function")
+    throw new Error("Hash should be wrapped by utils.createHasher");
+  anumber(h.outputLen);
+  anumber(h.blockLen);
+}
+function aexists(instance, checkFinished = true) {
+  if (instance.destroyed)
+    throw new Error("Hash instance has been destroyed");
+  if (checkFinished && instance.finished)
+    throw new Error("Hash#digest() has already been called");
+}
+function aoutput(out, instance) {
+  abytes(out);
+  const min = instance.outputLen;
+  if (out.length < min) {
+    throw new Error("digestInto() expects output buffer of length at least " + min);
+  }
 }
 function u8(arr) {
   return new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength);
 }
 function u32(arr) {
   return new Uint32Array(arr.buffer, arr.byteOffset, Math.floor(arr.byteLength / 4));
+}
+function clean(...arrays) {
+  for (let i = 0; i < arrays.length; i++) {
+    arrays[i].fill(0);
+  }
 }
 function createView(arr) {
   return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
@@ -40,15 +63,24 @@ var isLE = /* @__PURE__ */ (() => new Uint8Array(new Uint32Array([287454020]).bu
 function byteSwap(word) {
   return word << 24 & 4278190080 | word << 8 & 16711680 | word >>> 8 & 65280 | word >>> 24 & 255;
 }
-var byteSwapIfBE = isLE ? (n) => n : (n) => byteSwap(n);
+var swap8IfBE = isLE ? (n) => n : (n) => byteSwap(n);
+var byteSwapIfBE = swap8IfBE;
 function byteSwap32(arr) {
   for (let i = 0; i < arr.length; i++) {
     arr[i] = byteSwap(arr[i]);
   }
+  return arr;
 }
+var swap32IfBE = isLE ? (u) => u : byteSwap32;
+var hasHexBuiltin = /* @__PURE__ */ (() => (
+  // @ts-ignore
+  typeof Uint8Array.from([]).toHex === "function" && typeof Uint8Array.fromHex === "function"
+))();
 var hexes = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
 function bytesToHex(bytes) {
   abytes(bytes);
+  if (hasHexBuiltin)
+    return bytes.toHex();
   let hex = "";
   for (let i = 0; i < bytes.length; i++) {
     hex += hexes[bytes[i]];
@@ -68,6 +100,8 @@ function asciiToBase16(ch) {
 function hexToBytes(hex) {
   if (typeof hex !== "string")
     throw new Error("hex string expected, got " + typeof hex);
+  if (hasHexBuiltin)
+    return Uint8Array.fromHex(hex);
   const hl = hex.length;
   const al = hl / 2;
   if (hl % 2)
@@ -99,10 +133,19 @@ async function asyncLoop(iters, tick, cb) {
 }
 function utf8ToBytes(str) {
   if (typeof str !== "string")
-    throw new Error("utf8ToBytes expected string, got " + typeof str);
+    throw new Error("string expected");
   return new Uint8Array(new TextEncoder().encode(str));
 }
+function bytesToUtf8(bytes) {
+  return new TextDecoder().decode(bytes);
+}
 function toBytes(data) {
+  if (typeof data === "string")
+    data = utf8ToBytes(data);
+  abytes(data);
+  return data;
+}
+function kdfInputToBytes(data) {
   if (typeof data === "string")
     data = utf8ToBytes(data);
   abytes(data);
@@ -123,19 +166,15 @@ function concatBytes(...arrays) {
   }
   return res;
 }
-var Hash = class {
-  // Safe version that clones internal state
-  clone() {
-    return this._cloneInto();
-  }
-};
 function checkOpts(defaults, opts) {
   if (opts !== void 0 && {}.toString.call(opts) !== "[object Object]")
-    throw new Error("Options should be object or undefined");
+    throw new Error("options should be object or undefined");
   const merged = Object.assign(defaults, opts);
   return merged;
 }
-function wrapConstructor(hashCons) {
+var Hash = class {
+};
+function createHasher(hashCons) {
   const hashC = (msg) => hashCons().update(toBytes(msg)).digest();
   const tmp = hashCons();
   hashC.outputLen = tmp.outputLen;
@@ -143,7 +182,7 @@ function wrapConstructor(hashCons) {
   hashC.create = () => hashCons();
   return hashC;
 }
-function wrapConstructorWithOpts(hashCons) {
+function createOptHasher(hashCons) {
   const hashC = (msg, opts) => hashCons(opts).update(toBytes(msg)).digest();
   const tmp = hashCons({});
   hashC.outputLen = tmp.outputLen;
@@ -151,7 +190,7 @@ function wrapConstructorWithOpts(hashCons) {
   hashC.create = (opts) => hashCons(opts);
   return hashC;
 }
-function wrapXOFConstructorWithOpts(hashCons) {
+function createXOFer(hashCons) {
   const hashC = (msg, opts) => hashCons(opts).update(toBytes(msg)).digest();
   const tmp = hashCons({});
   hashC.outputLen = tmp.outputLen;
@@ -159,32 +198,48 @@ function wrapXOFConstructorWithOpts(hashCons) {
   hashC.create = (opts) => hashCons(opts);
   return hashC;
 }
+var wrapConstructor = createHasher;
+var wrapConstructorWithOpts = createOptHasher;
+var wrapXOFConstructorWithOpts = createXOFer;
 function randomBytes(bytesLength = 32) {
   if (crypto && typeof crypto.getRandomValues === "function") {
     return crypto.getRandomValues(new Uint8Array(bytesLength));
   }
   if (crypto && typeof crypto.randomBytes === "function") {
-    return crypto.randomBytes(bytesLength);
+    return Uint8Array.from(crypto.randomBytes(bytesLength));
   }
   throw new Error("crypto.getRandomValues must be defined");
 }
 export {
   Hash,
+  abytes,
+  aexists,
+  ahash,
+  anumber,
+  aoutput,
   asyncLoop,
   byteSwap,
   byteSwap32,
   byteSwapIfBE,
   bytesToHex,
+  bytesToUtf8,
   checkOpts,
+  clean,
   concatBytes,
+  createHasher,
+  createOptHasher,
   createView,
+  createXOFer,
   hexToBytes,
-  isBytes2 as isBytes,
+  isBytes,
   isLE,
+  kdfInputToBytes,
   nextTick,
   randomBytes,
   rotl,
   rotr,
+  swap32IfBE,
+  swap8IfBE,
   toBytes,
   u32,
   u8,

@@ -7,6 +7,8 @@ const { web3, ONE_ALPH, DUST_AMOUNT, addressFromPublicKey, groupOfAddress, build
 import { schnorr } from '@noble/curves/secp256k1';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { sha256 } from '@noble/hashes/sha256';
+import { ecdsaSign } from './curve.js';
+import { alphKeyTypeOf } from './keys.js';
 import { verifyUnsignedTx } from './alph-verify.js';
 
 import { CONFIG } from './config.js';
@@ -48,10 +50,12 @@ async function nodeApi(path, method = 'GET', body = null) {
 
 // Build through the node, verify what came back against what was asked
 // (alph-verify.js), and only then sign the transaction id.
+// Signs with the key type of the public key given (33 bytes: ECDSA 'default',
+// the HD wallet key; 32 bytes: Schnorr, the earlier schemes).
 async function signAndSubmit(buildPath, buildParams, secBytes, expect) {
   const result = await nodeApi(buildPath, 'POST', buildParams);
   verifyUnsignedTx(result.unsignedTx, result.txId, expect);
-  const sig = schnorr.sign(hexToBytes(result.txId), secBytes);
+  const sig = buildParams.fromPublicKeyType === 'default' ? ecdsaSign(hexToBytes(result.txId), secBytes) : schnorr.sign(hexToBytes(result.txId), secBytes);
   await nodeApi('/transactions/submit', 'POST', {
     unsignedTx: result.unsignedTx,
     signature: bytesToHex(sig),
@@ -134,11 +138,11 @@ export async function deploySwapContract(pubKeyHex, secBytes, swapKeyHex, claimA
 
   const result = await signAndSubmit('/contracts/unsigned-tx/deploy-contract', {
     fromPublicKey: pubKeyHex,
-    fromPublicKeyType: 'bip340-schnorr',
+    fromPublicKeyType: alphKeyTypeOf(pubKeyHex),
     bytecode,
     initialAttoAlphAmount: alphAmount.toString(),
     gasAmount: 100000,
-  }, secBytes, { kind: 'deploy', address: addressFromPublicKey(pubKeyHex, 'bip340-schnorr'), bytecode, initialAttoAlphAmount: alphAmount, gasAmount: 100000 });
+  }, secBytes, { kind: 'deploy', address: addressFromPublicKey(pubKeyHex, alphKeyTypeOf(pubKeyHex)), bytecode, initialAttoAlphAmount: alphAmount, gasAmount: 100000 });
 
   return {
     contractAddress: result.contractAddress,
@@ -165,11 +169,11 @@ export async function claimSwap(pubKeyHex, secBytes, contractId, musig2Signature
 
   const result = await signAndSubmit('/contracts/unsigned-tx/execute-script', {
     fromPublicKey: pubKeyHex,
-    fromPublicKeyType: 'bip340-schnorr',
+    fromPublicKeyType: alphKeyTypeOf(pubKeyHex),
     bytecode,
     attoAlphAmount: DUST_AMOUNT.toString(),
     gasAmount: 100000,
-  }, secBytes, { kind: 'execute', address: addressFromPublicKey(pubKeyHex, 'bip340-schnorr'), bytecode, gasAmount: 100000 });
+  }, secBytes, { kind: 'execute', address: addressFromPublicKey(pubKeyHex, alphKeyTypeOf(pubKeyHex)), bytecode, gasAmount: 100000 });
 
   return { txId: result.txId };
 }
@@ -190,11 +194,11 @@ export async function refundSwap(pubKeyHex, secBytes, contractId, compiled) {
 
   const result = await signAndSubmit('/contracts/unsigned-tx/execute-script', {
     fromPublicKey: pubKeyHex,
-    fromPublicKeyType: 'bip340-schnorr',
+    fromPublicKeyType: alphKeyTypeOf(pubKeyHex),
     bytecode,
     attoAlphAmount: DUST_AMOUNT.toString(),
     gasAmount: 100000,
-  }, secBytes, { kind: 'execute', address: addressFromPublicKey(pubKeyHex, 'bip340-schnorr'), bytecode, gasAmount: 100000 });
+  }, secBytes, { kind: 'execute', address: addressFromPublicKey(pubKeyHex, alphKeyTypeOf(pubKeyHex)), bytecode, gasAmount: 100000 });
 
   return { txId: result.txId };
 }
@@ -287,11 +291,11 @@ export async function waitForTx(txId, maxRetries = 60, intervalMs = 2000) {
 export async function transferAlph(pubKeyHex, secBytes, destAddress, attoAlphAmount) {
   const result = await signAndSubmit('/transactions/build', {
     fromPublicKey: pubKeyHex,
-    fromPublicKeyType: 'bip340-schnorr',
+    fromPublicKeyType: alphKeyTypeOf(pubKeyHex),
     destinations: [{ address: destAddress, attoAlphAmount: attoAlphAmount.toString() }],
     gasAmount: 20000,
     gasPrice: '100000000000',
-  }, secBytes, { kind: 'transfer', address: addressFromPublicKey(pubKeyHex, 'bip340-schnorr'), destinations: [{ address: destAddress, attoAlphAmount }], gasAmount: 20000 });
+  }, secBytes, { kind: 'transfer', address: addressFromPublicKey(pubKeyHex, alphKeyTypeOf(pubKeyHex)), destinations: [{ address: destAddress, attoAlphAmount }], gasAmount: 20000 });
   return result.txId;
 }
 

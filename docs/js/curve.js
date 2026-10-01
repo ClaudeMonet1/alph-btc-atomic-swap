@@ -20,6 +20,8 @@ export const lift_x = schnorr.utils.lift_x;
 export const schnorrVerify = (sig, msg, pk) => schnorr.verify(sig, msg, pk);
 export const schnorrGetPublicKey = (sk) => schnorr.getPublicKey(sk);
 export const randomSecretKey = () => schnorr.utils.randomPrivateKey();
+export const ecdsaSign = (msgHash, sec) => secp256k1.sign(msgHash, sec, { lowS: true }).toCompactRawBytes(); // 64-byte compact r||s
+export const ecdsaPublicKey = (sec) => secp256k1.getPublicKey(sec, true); // 33-byte compressed
 export function pointFromBytes(b) { return Point.fromHex(b); } // throws on invalid encodings
 export function cbytes(P) { return P.toRawBytes(true); }
 export function xbytes(P) { return P.toRawBytes(true).slice(1); }
