@@ -4,6 +4,7 @@
 // console output. Usage: node scripts/e2e-web.mjs [url] [seconds] [dir]
 // dir = buy_alph (A is Bob, the BTC side; default) or sell_alph (A is Alice).
 // E2E_MODE=swap (default) | counter (B counter-offers, A accepts the counter) |
+// partial (A offers a range with E2E_MIN_ALPH, B fills E2E_FILL_ALPH of it) |
 // refund (A aborts once both locks are done; with BTC_RPC_URL set, the harness
 // moves the regtest clock past T_btc and expects Bob's page to refund itself).
 // Profiles persist under E2E_PROFILE_DIR so funded test keys can be reused.
@@ -68,7 +69,7 @@ await sleep(3000);
 console.log('A balances after sweep:', await balances(A.page)); console.log('B balances after sweep:', await balances(B.page));
 
 // A publishes an offer
-await A.page.evaluate(({ dir, alph, sat }) => { document.querySelector(`#direction-toggle button[data-dir="${dir}"]`).click(); document.getElementById('offer-alph').value = alph; document.getElementById('offer-btc-sat').value = sat; }, { dir, alph: process.env.E2E_ALPH || '0.5', sat: process.env.E2E_SAT || '5000' });
+await A.page.evaluate(({ dir, alph, sat, minAlph }) => { document.querySelector(`#direction-toggle button[data-dir="${dir}"]`).click(); document.getElementById('offer-alph').value = alph; document.getElementById('offer-btc-sat').value = sat; const mn = document.getElementById('offer-min-alph'); if (mn) mn.value = minAlph; }, { dir, alph: process.env.E2E_ALPH || '0.5', sat: process.env.E2E_SAT || '5000', minAlph: mode === 'partial' ? (process.env.E2E_MIN_ALPH || '0.1') : '' });
 await A.page.click('#publish-offer-btn');
 console.log('A published a', dir, 'offer');
 await sleep(4000);
@@ -107,6 +108,41 @@ if (mode === 'counter') {
     return null;
   }, offerId);
   console.log('A accepted the counter on', accepted);
+} else if (mode === 'partial') {
+  // first a hostile accept from a third key with amounts the offer never quoted: the maker must ignore it
+  try {
+    const { finalizeEvent, getPublicKey } = await import('nostr-tools/pure');
+    const WebSocket = (await import('ws')).default;
+    const relayUrl = new URL(url).searchParams.get('relays')?.split(',')[0];
+    if (relayUrl) {
+      // a hostile taker with properly derived keys (Alephium key in group 1), so that only the amounts are wrong
+      const { deriveKeys } = await import('../src/keys.js');
+      const { addressFromPublicKey, groupOfAddress } = await import('@alephium/web3');
+      const sec = crypto.getRandomValues(new Uint8Array(32));
+      const hk = deriveKeys(sec, (p) => groupOfAddress(addressFromPublicKey(p, 'bip340-schnorr')));
+      const content = { action: 'accept', offerId, alphAmount: (10n * 10n ** 18n).toString(), btcSat: 100, keys: { btc: hk.btc.pubHex, alph: hk.alph.pubHex } };
+      const ev = finalizeEvent({ kind: 38389, created_at: Math.floor(Date.now() / 1000), tags: [['t', 'atomicswap'], ['t', 'accept'], ['p', A.ident.npub], ['d', `${offerId}:accept`]], content: JSON.stringify(content) }, sec);
+      await new Promise((resolve) => { const ws = new WebSocket(relayUrl); ws.on('open', () => { ws.send(JSON.stringify(['EVENT', ev])); setTimeout(() => { ws.close(); resolve(); }, 500); }); ws.on('error', resolve); });
+      await sleep(2500);
+      const ignored = await A.page.evaluate(() => (document.getElementById('app-log')?.textContent || '').includes('Ignoring accept'));
+      const started = await A.page.evaluate(() => (document.getElementById('app-log')?.textContent || '').includes('Swap started'));
+      console.log('hostile accept (10 ALPH for 100 sat) ignored by the maker:', ignored && !started ? 'yes' : 'NO');
+    }
+  } catch (e) { console.log('hostile accept check skipped:', e.message); }
+  // B fills part of A's range offer through the inline form
+  accepted = await B.page.evaluate(async (id, fill) => {
+    for (let i = 0; i < 60; i++) {
+      const btn = document.querySelector(`.accept-offer-btn[data-offer="${id}"]`);
+      if (btn) {
+        btn.click(); await new Promise((r) => setTimeout(r, 300));
+        const form = btn.closest('.offer-card').querySelector('.accept-form'); if (!form) return 'no fill form';
+        form.querySelector('.fill-alph').value = fill; form.querySelector('.fill-alph').dispatchEvent(new Event('input'));
+        form.querySelector('.submit-fill-btn').click(); return `${id} fill ${fill}`;
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return null;
+  }, offerId, process.env.E2E_FILL_ALPH || '0.3');
 } else {
   // B accepts exactly that offer (never a stranger's)
   accepted = await B.page.evaluate(async (id) => {
