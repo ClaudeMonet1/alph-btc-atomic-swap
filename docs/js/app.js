@@ -76,6 +76,10 @@ const state = {
   network: 'testnet',
   startedAt: Math.floor(Date.now() / 1000), // page load; older accepts are history, not a swap to start
   lastEventAt: 0, lastPeerEventAt: 0, lastSwapEvent: null,
+  swapRun: null, // token of the step chain in progress; replaced on reset, abort or recovery
+  offerFilter: { dir: 'all', sort: 'newest', hideMine: false },
+  market: null, // { satPerAlph, at } reference rate from CoinGecko, when reachable
+  history: new Map(), // pubkey -> { completed: Set(attester), started: Set(attester) } from public attestations
   // Relays
   relays: [],
   seenEvents: new Set(),
@@ -305,7 +309,7 @@ function generateUUID() {
   return crypto.randomUUID ? crypto.randomUUID() : bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
 }
 
-async function createOfferEvent({ offerId, direction, alphAmount, btcSat, expiresAt }) {
+async function createOfferEvent({ offerId, direction, alphAmount, btcSat, expiresAt, minAlph }) {
   return signEvent({
     kind: SWAP_OFFER_KIND,
     created_at: Math.floor(Date.now() / 1000),
@@ -319,6 +323,7 @@ async function createOfferEvent({ offerId, direction, alphAmount, btcSat, expire
       network: state.network,
       expiresAt,
       keys: { btc: state.keys.btc.pubHex, alph: state.keys.alph.pubHex },
+      ...(minAlph ? { minAlph: String(minAlph) } : {}), // partial fills allowed down to minAlph, at the same rate
     }),
   });
 }
@@ -546,6 +551,7 @@ function handleOfferEvent(event) {
   if (content.network && content.network !== state.network) return;
 
   const action = content.action;
+  if (action === 'completed' || action === 'started') return handleAttestationEvent(event, content);
   if (action === 'offer') {
     handleNewOffer(event, content);
   } else if (content.offerId && !state.offers.has(content.offerId)) {
@@ -555,6 +561,9 @@ function handleOfferEvent(event) {
   } else if (action === 'counter') handleCounter(event, content);
   else if (action === 'accept') handleAcceptEvent(event, content);
   else if (action === 'cancel') handleCancelEvent(event, content);
+}
+function handleAttestationEvent(event, content) {
+  if (content.action === 'completed' || content.action === 'started') { recordAttestation(event, content); renderOffersList(); }
 }
 
 function handleNewOffer(event, content) {
@@ -576,6 +585,7 @@ function handleNewOffer(event, content) {
     acceptEvent: null,
     isMine: event.pubkey === state.pubKeyHex,
     keys: content.keys || null, // creator's { btc, alph } x-only keys; absent on an old build
+    minAlph: content.minAlph && BigInt(content.minAlph) > 0n && BigInt(content.minAlph) < BigInt(content.alphAmount) ? content.minAlph : null, // partial fills
   };
 
   state.offers.set(offerId, offer);
@@ -627,22 +637,34 @@ function handleAcceptEvent(event, content) {
   if (!offer) return;
   if (offer.status === 'accepted' || offer.status === 'cancelled') return;
 
+  const isMine = event.pubkey === state.pubKeyHex;
+  const myCounterAccepted = content.counterparty && content.counterparty === state.pubKeyHex;
+  const involvesUs = offer.isMine || isMine || myCounterAccepted;
+  if (!involvesUs) {
+    // Someone else's accept: for us the offer stays open until the creator's
+    // taken signal (otherwise anyone could hide every offer by "accepting" it
+    // with garbage amounts the maker will reject).
+    offer.pendingAccepts = (offer.pendingAccepts || 0) + 1;
+    renderOffersList();
+    return;
+  }
+
   if (offer.isMine) {
     const acceptor = content.counterparty || event.pubkey;
     const groupProblem = acceptor === state.pubKeyHex ? null : peerGroupProblem(peerKeysFor(offer, event, content));
     if (groupProblem) { addLogMsg('system', `Ignoring accept of ${content.offerId.slice(0, 8)}... : ${groupProblem}`, 'System'); return; }
+    // The accept's amounts must be the offer's (or, for a partial fill, within the
+    // range at the offer's rate): the taker chooses the fill, never the price.
+    if (!content.counterparty) {
+      const problem = acceptAmountsProblem(offer, content);
+      if (problem) { addLogMsg('system', `Ignoring accept of ${content.offerId.slice(0, 8)}... from ${event.pubkey.slice(0, 8)}...: ${problem}`, 'Error'); return; }
+    }
   }
 
   offer.status = 'accepted';
   offer.acceptEvent = event;
-
-  const isMine = event.pubkey === state.pubKeyHex;
   addLogMsg('system', `Offer ${content.offerId.slice(0, 8)}... accepted!`, isMine ? 'You' : event.pubkey.slice(0, 8) + '...');
   renderOffersList();
-
-  const myCounterAccepted = content.counterparty && content.counterparty === state.pubKeyHex;
-  const involvesUs = offer.isMine || isMine || myCounterAccepted;
-  if (!involvesUs) return;
   // Relays replay the last two days of events on every page load. An accept made
   // before this page was opened belongs to an earlier attempt: starting a swap
   // from it would put this side in a session the peer is no longer in (both then
@@ -667,6 +689,12 @@ function handleCancelEvent(event, content) {
   // Post-match cancel (has matchedPub): this is a "taken" signal, NOT a real cancel.
   // Only affects losing acceptors — never changes offer status to cancelled.
   if (content.matchedPub) {
+    // the creator confirms a match: the offer is taken for everyone else
+    if (offer.status !== 'accepted' && !offer.isMine && content.matchedPub !== state.pubKeyHex) {
+      offer.status = 'accepted';
+      renderOffersList();
+      return;
+    }
     if (offer.status === 'accepted') {
       const iAmMatchedAcceptor = content.matchedPub === state.pubKeyHex;
       if (state.activeSwap?.offerId === offer.id && !offer.isMine && !iAmMatchedAcceptor) {
@@ -729,6 +757,65 @@ function getP2TRAddressFromPub(pubkeyHex) {
   try { return getP2TRAddress(hexToBytes(pubkeyHex)); } catch { return null; }
 }
 
+// ---- Rates ----
+// Offers quote btcSat for alphAmount (atto): the rate in sat per ALPH is btcSat * 1e18 / alphAmount.
+function satPerAlph(alphAmount, btcSat) { const a = BigInt(alphAmount); return a > 0n ? Number(BigInt(btcSat) * 10n ** 18n * 1000n / a) / 1000 : 0; }
+function btcSatFor(alphAmount, offer) { return Number(BigInt(alphAmount) * BigInt(offer.btcSat) / BigInt(offer.alphAmount)); }
+function fmtRate(spa) { return `${spa.toLocaleString(undefined, { maximumFractionDigits: 2 })} sat/ALPH · ${Math.round(1e8 / spa).toLocaleString()} ALPH/BTC`; }
+// deviation of an offer's rate from the market reference, from the point of view of the taker of `direction`
+function rateDeviation(spa) {
+  if (!state.market?.satPerAlph) return null;
+  return (spa - state.market.satPerAlph) / state.market.satPerAlph; // > 0: ALPH priced above market
+}
+function rateLine(spa, direction) {
+  const dev = rateDeviation(spa);
+  if (dev === null) return `<div class="rate-line">${fmtRate(spa)}</div>`;
+  const pct = Math.round(Math.abs(dev) * 100);
+  const cls = pct >= 30 ? 'far' : pct >= 10 ? 'off' : '';
+  const side = dev > 0 ? 'above' : 'below';
+  return `<div class="rate-line">${fmtRate(spa)} <span class="${cls}">(${pct}% ${side} market)</span></div>`;
+}
+async function refreshMarketRate() {
+  try {
+    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=alephium,bitcoin&vs_currencies=usd', { cache: 'no-store' });
+    const j = await r.json();
+    const spa = j.bitcoin.usd > 0 ? j.alephium.usd / j.bitcoin.usd * 1e8 : 0;
+    if (spa > 0) { state.market = { satPerAlph: spa, at: Date.now() }; renderOffersList(); updateRateDisplay(); }
+  } catch { /* no reference: rates are shown without a comparison */ }
+}
+
+// ---- Counterparty history (public attestations, a hint and not a proof: anyone can publish them) ----
+function historyOf(pubkey) {
+  const h = state.history.get(pubkey);
+  if (!h) return null;
+  return { completed: h.completed.size, started: h.started.size };
+}
+function historyBadge(pubkey) {
+  const h = historyOf(pubkey);
+  if (!h) return '';
+  return `<span class="peer-history" title="Attested by counterparties on the relays (anyone can publish such notes: a hint, not a proof)">${h.completed} completed · ${h.started} started</span>`;
+}
+function recordAttestation(event, content) {
+  const subject = content.peer;
+  if (!subject || !/^[0-9a-f]{64}$/.test(subject) || subject === event.pubkey) return;
+  if (!state.history.has(subject)) state.history.set(subject, { completed: new Set(), started: new Set() });
+  const h = state.history.get(subject);
+  if (content.action === 'completed') h.completed.add(event.pubkey + ':' + content.offerId);
+  if (content.action === 'started') h.started.add(event.pubkey + ':' + content.offerId);
+}
+async function publishAttestation(action) {
+  if (!state.activeSwap) return;
+  const { offerId, peerPubHex, sessionId } = state.activeSwap;
+  try {
+    const ev = await signEvent({
+      kind: SWAP_OFFER_KIND, created_at: Math.floor(Date.now() / 1000),
+      tags: [['t', 'atomicswap'], ['t', action], ['p', peerPubHex], ['d', `${offerId}:${action}:${state.pubKeyHex.slice(0, 16)}`]],
+      content: JSON.stringify({ action, offerId, peer: peerPubHex, session: sessionId.slice(0, 16), network: state.network }),
+    });
+    await nostrPublish(ev);
+  } catch (e) { addLogMsg('system', `Could not publish the ${action} note: ${e.message}`, 'System'); }
+}
+
 function explorerLink(chain, address, text) {
   if (chain === 'btc') {
     return `<a href="${CONFIG.btcExplorer}/address/${address}" target="_blank" title="${address}" class="amount-link">${text}</a>`;
@@ -756,7 +843,14 @@ function renderOffersList() {
     return;
   }
 
-  const activeOffers = sorted.filter(o => o.status === 'open' || o.status === 'countered');
+  const f = state.offerFilter;
+  let activeOffers = sorted.filter(o => (o.status === 'open' || o.status === 'countered') && (f.dir === 'all' || o.direction === f.dir) && !(f.hideMine && o.isMine));
+  if (f.sort === 'rate') {
+    // best for me: cheapest ALPH when I would buy (sell_alph offers), dearest when I would sell (buy_alph offers)
+    activeOffers.sort((a, b) => { const ra = satPerAlph(a.alphAmount, a.btcSat), rb = satPerAlph(b.alphAmount, b.btcSat); return a.direction === 'sell_alph' ? ra - rb : rb - ra; });
+  } else if (f.sort === 'size') {
+    activeOffers.sort((a, b) => (BigInt(b.alphAmount) > BigInt(a.alphAmount) ? 1 : -1));
+  }
   const inactiveOffers = sorted.filter(o => o.status !== 'open' && o.status !== 'countered');
 
   listEl.innerHTML = '';
@@ -843,8 +937,8 @@ function renderOfferCard(offer) {
     }
   }
 
-  let alphAmountHtml = `<span class="alph">${formatAlph(offer.alphAmount)} ALPH</span>`;
-  let btcAmountHtml = `<span class="btc">${formatSat(offer.btcSat)} sat</span>`;
+  let alphAmountHtml = `<span class="alph">${offer.minAlph ? `${formatAlph(offer.minAlph)} to ` : ''}${formatAlph(offer.alphAmount)} ALPH</span>`;
+  let btcAmountHtml = `<span class="btc">${offer.minAlph ? 'up to ' : ''}${formatSat(offer.btcSat)} sat</span>`;
 
   const hasAcceptData = (offer.status === 'accepted' || offer.status === 'completed' || offer.status === 'aborted_locked') && offer.acceptEvent;
   if (hasAcceptData) {
@@ -878,8 +972,9 @@ function renderOfferCard(offer) {
       </span>
       ${statusBadge}
     </div>
+    ${rateLine(satPerAlph(offer.alphAmount, offer.btcSat), offer.direction)}
     <div class="card-body">
-      <span class="peer">by ${peerLabel}</span>
+      <span class="peer">by ${peerLabel}${offer.isMine ? '' : historyBadge(offer.pubkey)}${offer.pendingAccepts && isActive ? ` <span class="peer-history" title="Someone sent an accept; the maker has not confirmed the match">${offer.pendingAccepts} accept pending</span>` : ''}</span>
       <span class="card-actions">${actionsHtml}</span>
     </div>`;
 
@@ -981,6 +1076,14 @@ async function publishOffer() {
     const alphVal = parseFloat(document.getElementById('offer-alph').value) || 1;
     const btcSat = parseInt(document.getElementById('offer-btc-sat').value) || 5000;
     const alphAmount = BigInt(Math.round(alphVal * 1e18));
+    const minVal = parseFloat(document.getElementById('offer-min-alph').value) || 0;
+    const minAlph = minVal > 0 && minVal < alphVal ? BigInt(Math.round(minVal * 1e18)) : null;
+    if (minVal > 0 && minVal >= alphVal) { showOfferWarning('The minimum must be below the amount.'); btn.disabled = false; btn.textContent = 'Publish Offer'; return; }
+    const dev = rateDeviation(satPerAlph(alphAmount, btcSat));
+    if (dev !== null && Math.abs(dev) >= 0.3) {
+      const ok = await modalConfirm(`Your rate is ${fmtRate(satPerAlph(alphAmount, btcSat))}, ${Math.round(Math.abs(dev) * 100)}% ${dev > 0 ? 'above' : 'below'} the market reference (${fmtRate(state.market.satPerAlph)}). Publish anyway?`, 'Publish');
+      if (!ok) { btn.disabled = false; btn.textContent = 'Publish Offer'; return; }
+    }
 
     // Balance check (non-blocking warning)
     const role = direction === 'sell_alph' ? 'alice' : 'bob';
@@ -992,13 +1095,13 @@ async function publishOffer() {
     const offerId = generateUUID();
     const expiresAt = Math.floor(Date.now() / 1000) + 86400;
 
-    const event = await createOfferEvent({ offerId, direction, alphAmount, btcSat, expiresAt });
+    const event = await createOfferEvent({ offerId, direction, alphAmount, btcSat, expiresAt, minAlph });
     await nostrPublish(event);
 
     const note = await createOfferNote(event, { direction, alphAmount: String(alphAmount), btcSat });
     await nostrPublish(note).catch(() => {}); // best-effort
 
-    addLogMsg('system', `Published offer: ${direction === 'sell_alph' ? 'Sell' : 'Buy'} ${alphVal} ALPH for ${btcSat} sat (expires in 24h)`, 'You');
+    addLogMsg('system', `Published offer: ${direction === 'sell_alph' ? 'Sell' : 'Buy'} ${alphVal} ALPH for ${btcSat} sat${minAlph ? ` (partial fills from ${minVal} ALPH)` : ''} (expires in 24h)`, 'You');
   } catch (e) {
     addLogMsg('system', `Publish error: ${e.message}`, 'Error');
   }
@@ -1015,6 +1118,22 @@ function peerGroupProblem(peerKeys) {
   try { theirs = groupOfPub(peerKeys.alph); } catch { return "peer's Alephium key is malformed"; }
   return theirs === mine ? null : `peer's Alephium address is in group ${theirs}, yours in group ${mine}`;
 }
+// Returns why an accept's amounts do not match an offer, or null when they do.
+function acceptAmountsProblem(offer, content) {
+  let alph, sat;
+  try { alph = BigInt(content.alphAmount); sat = BigInt(content.btcSat); } catch { return 'amounts are not numbers'; }
+  if (alph <= 0n || sat <= 0n) return 'amounts must be positive';
+  if (!offer.minAlph) {
+    if (alph !== BigInt(offer.alphAmount) || sat !== BigInt(offer.btcSat)) return `amounts ${formatAlph(content.alphAmount)} ALPH / ${content.btcSat} sat differ from the offer (${formatAlph(offer.alphAmount)} ALPH / ${offer.btcSat} sat)`;
+    return null;
+  }
+  if (alph < BigInt(offer.minAlph) || alph > BigInt(offer.alphAmount)) return `fill ${formatAlph(content.alphAmount)} ALPH is outside the offer's range`;
+  const expected = BigInt(btcSatFor(content.alphAmount, offer));
+  if (sat < expected - 1n || sat > expected + 1n) return `${content.btcSat} sat is not the offer's rate for ${formatAlph(content.alphAmount)} ALPH (expected ${expected} sat)`;
+  if (sat < 1000n) return 'fill below 1000 sat';
+  return null;
+}
+
 // The peer's keys for a swap: the creator's from the offer, the acceptor's from
 // the accept (or from its counter-offer when the creator accepted a counter).
 function peerKeysFor(offer, acceptEvent, acceptContent) {
@@ -1025,15 +1144,49 @@ function peerKeysFor(offer, acceptEvent, acceptContent) {
   return offer.keys || null;
 }
 
-async function acceptOffer(offerId) {
+// Inline amount form for an offer that allows partial fills.
+function showAcceptForm(offerId) {
+  const offer = state.offers.get(offerId);
+  const btn = document.querySelector(`.accept-offer-btn[data-offer="${offerId}"]`);
+  if (!offer || !btn) return;
+  const card = btn.closest('.offer-card');
+  if (card.querySelector('.accept-form')) return;
+  const form = document.createElement('div');
+  form.className = 'accept-form';
+  form.innerHTML = `<label>ALPH</label><input type="text" class="fill-alph" value="${formatAlph(offer.alphAmount)}"> <span class="fill-sat">= ${formatSat(offer.btcSat)} sat</span> <button class="sm primary submit-fill-btn">Accept</button> <button class="sm cancel-fill-btn">X</button>
+    <span style="color:#8b949e">range ${formatAlph(offer.minAlph)} to ${formatAlph(offer.alphAmount)} ALPH at ${fmtRate(satPerAlph(offer.alphAmount, offer.btcSat))}</span>`;
+  card.appendChild(form);
+  const input = form.querySelector('.fill-alph');
+  const update = () => { const v = parseFloat(input.value) || 0; form.querySelector('.fill-sat').textContent = `= ${formatSat(btcSatFor(BigInt(Math.round(v * 1e18)).toString(), offer))} sat`; };
+  input.addEventListener('input', update);
+  form.querySelector('.cancel-fill-btn').addEventListener('click', () => form.remove());
+  form.querySelector('.submit-fill-btn').addEventListener('click', () => { const v = parseFloat(input.value) || 0; acceptOffer(offerId, BigInt(Math.round(v * 1e18))); });
+}
+
+async function acceptOffer(offerId, fillAmount = null) {
   const offer = state.offers.get(offerId);
   if (!offer) return;
   const groupProblem = peerGroupProblem(offer.keys);
   if (groupProblem) { await modalAlert(`Cannot take this offer: ${groupProblem}.`); return; }
 
+  // partial fill: the amount comes from the card's form, at the offer's rate
+  let alphAmount = offer.alphAmount, btcSat = offer.btcSat;
+  if (offer.minAlph) {
+    if (fillAmount === null) return showAcceptForm(offerId);
+    alphAmount = String(fillAmount);
+    btcSat = btcSatFor(alphAmount, offer);
+    const problem = acceptAmountsProblem(offer, { alphAmount, btcSat });
+    if (problem) { await modalAlert(problem); return; }
+  }
+  const dev = rateDeviation(satPerAlph(alphAmount, btcSat));
+  if (dev !== null && Math.abs(dev) >= 0.3) {
+    const ok = await modalConfirm(`This offer's rate is ${fmtRate(satPerAlph(alphAmount, btcSat))}, ${Math.round(Math.abs(dev) * 100)}% ${dev > 0 ? 'above' : 'below'} the market reference (${fmtRate(state.market.satPerAlph)}). Take it anyway?`, 'Take it');
+    if (!ok) return;
+  }
+
   // Acceptor role: sell_alph offer → acceptor is bob; buy_alph offer → acceptor is alice
   const role = offer.direction === 'sell_alph' ? 'bob' : 'alice';
-  const { ok, warnings } = await validateBalanceForSwap(role, offer.alphAmount, offer.btcSat);
+  const { ok, warnings } = await validateBalanceForSwap(role, alphAmount, btcSat);
   if (!ok) {
     const proceed = await modalConfirm('Balance warnings:\n\n' + warnings.join('\n') + '\n\nProceed anyway?', 'Proceed');
     if (!proceed) return;
@@ -1044,8 +1197,8 @@ async function acceptOffer(offerId) {
       offerId,
       offerEventId: offer.eventId,
       offerCreator: offer.pubkey,
-      alphAmount: offer.alphAmount,
-      btcSat: offer.btcSat,
+      alphAmount,
+      btcSat,
     });
     await nostrPublish(event);
   } catch (e) {
@@ -1183,6 +1336,7 @@ function startSwapFromAccept(offer, acceptEvent, acceptContent) {
   };
 
   state.stepData = {};
+  publishAttestation('started');
   addLogMsg('system', `Swap started: you are ${role === 'alice' ? 'Alice (ALPH side)' : 'Bob (BTC side)'}, session ${sessionId.slice(0, 12)}..., peer ${peerPubHex.slice(0, 12)}.... Both pages must show this same session.`, 'System');
 
   document.getElementById('swap-placeholder').classList.add('hidden');
@@ -1277,7 +1431,7 @@ async function handlePeerAbort() {
   swapEventWaiters.length = 0;
 
   markOfferProcessed(state.activeSwap.offerId);
-  const lockDone = state.stepData.lock?.status === 'done';
+  const lockDone = state.stepData.lock?.status === 'done' || ownFundsOnChain();
   const offer = state.offers.get(state.activeSwap.offerId);
   if (offer) offer.status = lockDone ? 'aborted_locked' : 'aborted';
 
@@ -1294,9 +1448,15 @@ async function handlePeerAbort() {
 // Auto-Execute Swap
 // ============================================================
 
+// Every step checks that the swap it started for is still the active one: an
+// abort, a peer abort or a reset ends the chain (a step that was awaiting a
+// confirmation must not go on to deploy or lock).
+function stepGuard(run) { return () => { if (state.swapRun !== run) throw new Error('Swap aborted'); }; }
+
 async function autoExecuteSwap() {
   if (!state.activeSwap) return;
   const { role } = state.activeSwap;
+  const run = state.swapRun = {}; const check = stepGuard(run);
 
   try {
     updateStep('setup', { status: 'active' });
@@ -1305,6 +1465,7 @@ async function autoExecuteSwap() {
     } else {
       await executeSetupBob();
     }
+    check();
     updateStep('setup', { status: 'done' });
 
     if (state.stepData.lock?.status !== 'done') {
@@ -1314,16 +1475,17 @@ async function autoExecuteSwap() {
       } else {
         await executeLockBob();
       }
+      check();
       updateStep('lock', { status: 'done' });
       saveSwapState();
     }
 
     updateStep('nonces', { status: 'active' });
-    await executeNonces();
+    await executeNonces(); check();
     updateStep('nonces', { status: 'done' });
 
     updateStep('presign', { status: 'active' });
-    await executePresign();
+    await executePresign(); check();
     updateStep('presign', { status: 'done' });
     saveSwapState();
 
@@ -1333,11 +1495,13 @@ async function autoExecuteSwap() {
     } else {
       await executeClaimBob();
     }
+    check();
     updateStep('claim', { status: 'done' });
 
     showSwapComplete();
 
   } catch (e) {
+    if (!state.activeSwap) { addLogMsg('system', 'Swap step ended after the swap was aborted', 'System'); return; }
     addLogMsg('system', `Swap error: ${e.message}`, 'Error');
   }
 }
@@ -1347,13 +1511,14 @@ async function retryStep(stepId) {
   const { role } = state.activeSwap;
 
   updateStep(stepId, { status: 'active', error: null });
+  const run = state.swapRun = {}; const check = stepGuard(run);
 
   try {
     const stepFns = {
       alice: { setup: executeSetupAlice, lock: executeLockAlice, nonces: executeNonces, presign: executePresign, claim: executeClaimAlice },
       bob: { setup: executeSetupBob, lock: executeLockBob, nonces: executeNonces, presign: executePresign, claim: executeClaimBob },
     };
-    await stepFns[role][stepId]();
+    await stepFns[role][stepId](); check();
     updateStep(stepId, { status: 'done' });
     saveSwapState();
 
@@ -1363,7 +1528,7 @@ async function retryStep(stepId) {
       const nextStep = stepOrder[i];
       if (state.stepData[nextStep]?.status === 'done') continue;
       updateStep(nextStep, { status: 'active' });
-      await stepFns[role][nextStep]();
+      await stepFns[role][nextStep](); check();
       updateStep(nextStep, { status: 'done' });
       saveSwapState();
     }
@@ -1749,6 +1914,7 @@ async function refundAlph() {
   try {
     const result = await state.engine.refundAlph();
     showRecoveryStatus(`ALPH refunded! txid: ${result.txid.slice(0, 16)}...`, 'ok');
+    addLogMsg('recovery', `ALPH refunded in ${result.txid}`, 'You');
     await refreshBalance();
   } catch (e) {
     showRecoveryStatus(`ALPH refund error: ${e.message}`, 'error');
@@ -1762,6 +1928,7 @@ async function refundBtc() {
   try {
     const result = await state.engine.refundBtc();
     showRecoveryStatus(`BTC refunded! txid: ${result.txid.slice(0, 16)}...`, 'ok');
+    addLogMsg('recovery', `BTC refunded in ${result.txid}`, 'You');
     await refreshBalance();
   } catch (e) {
     showRecoveryStatus(`BTC refund error: ${e.message}`, 'error');
@@ -1793,6 +1960,18 @@ function showSwapComplete() {
     markOfferProcessed(state.activeSwap.offerId); // prevent auto-restart on refresh
     const offer = state.offers.get(state.activeSwap.offerId);
     if (offer) { offer.status = 'completed'; renderOffersList(); }
+    publishAttestation('completed');
+    // a partially filled offer of mine: republish the remainder at the same rate
+    if (offer?.isMine && offer.minAlph) {
+      const remaining = BigInt(offer.alphAmount) - BigInt(state.activeSwap.alphAmount);
+      if (remaining >= BigInt(offer.minAlph)) {
+        const btcSat = btcSatFor(remaining.toString(), offer);
+        const offerId = generateUUID();
+        createOfferEvent({ offerId, direction: offer.direction, alphAmount: remaining, btcSat, expiresAt: Math.floor(Date.now() / 1000) + 86400, minAlph: remaining > BigInt(offer.minAlph) ? BigInt(offer.minAlph) : null })
+          .then((ev) => nostrPublish(ev)).then(() => addLogMsg('system', `Remainder republished: ${formatAlph(remaining.toString())} ALPH for ${btcSat} sat`, 'You'))
+          .catch((e) => addLogMsg('system', `Could not republish the remainder: ${e.message}`, 'Error'));
+      }
+    }
   }
   const { alphAmount, btcSat, role } = state.activeSwap;
   const claimData = state.stepData.claim || {};
@@ -1834,9 +2013,19 @@ async function sendAbortNotification() {
   }
 }
 
+// Bob has coins on chain once his lock is broadcast; Alice once her contract is
+// deployed (her engine also records Bob's lock txid, which is not her money).
+function ownFundsOnChain() {
+  if (!state.activeSwap || !state.engine) return false;
+  return state.activeSwap.role === 'bob' ? !!state.engine.btcLockTxid : !!state.engine.contractId;
+}
+
 async function abortSwap() {
   if (!state.activeSwap) return;
-  const lockDone = state.stepData.lock?.status === 'done';
+  // Anything of ours on chain (Bob's lock, Alice's contract) means recovery, not
+  // a reset: the lock step is not "done" until the peer has acted, but the coins
+  // are already committed (found by the local refund drill on 2026-10-01).
+  const lockDone = state.stepData.lock?.status === 'done' || ownFundsOnChain();
   let msg = 'Abort this swap?';
   if (lockDone) {
     msg += '\n\nFunds are already locked on-chain. After aborting, the recovery UI will appear with refund options.';
@@ -1873,6 +2062,7 @@ function resetSwap() {
   state.activeSwap = null;
   state.stepData = {};
   state.selectedUtxo = null;
+  state.swapRun = null;
 
   // Re-create engine for fresh swap state (keeps same keys)
   state.engine = new SwapEngine(state.keys);
@@ -2135,6 +2325,7 @@ function showRecoveryUI(checkpoint) {
 }
 
 async function transitionToRecovery() {
+  state.swapRun = null; // any step still running for this swap stops at its next check
   // Stop active pollers/monitors
   stopBtcClaimPoller();
   stopTimeoutMonitor();
@@ -2173,14 +2364,14 @@ async function checkOnChainState(checkpoint) {
   try {
     // Check BTC lock tx exists on-chain
     if (state.engine?.btcLockTxid) {
-      const txResp = await fetch(`https://mempool.space/signet/api/tx/${state.engine.btcLockTxid}`);
+      const txResp = await fetch(`${CONFIG.btcApi}/tx/${state.engine.btcLockTxid}`);
       if (!txResp.ok) {
         addLogMsg('system', 'BTC lock tx not found on-chain', 'System');
       }
 
       // Check if BTC lock output is already spent (claimed)
       if (state.engine.btcLockVout != null) {
-        const outspendResp = await fetch(`https://mempool.space/signet/api/tx/${state.engine.btcLockTxid}/outspend/${state.engine.btcLockVout}`);
+        const outspendResp = await fetch(`${CONFIG.btcApi}/tx/${state.engine.btcLockTxid}/outspend/${state.engine.btcLockVout}`);
         if (outspendResp.ok) {
           const outspend = await outspendResp.json();
           if (outspend.spent && outspend.txid) {
@@ -2367,7 +2558,7 @@ async function recoveryClaimAlph() {
 async function findBtcClaimTx() {
   if (!state.engine.btcLockTxid || state.engine.btcLockVout == null) return null;
   try {
-    const resp = await fetch(`https://mempool.space/signet/api/tx/${state.engine.btcLockTxid}/outspend/${state.engine.btcLockVout}`);
+    const resp = await fetch(`${CONFIG.btcApi}/tx/${state.engine.btcLockTxid}/outspend/${state.engine.btcLockVout}`);
     if (!resp.ok) return null;
     const data = await resp.json();
     if (data.spent && data.txid) return data.txid;
@@ -2591,6 +2782,12 @@ function subscribeToOffers() {
     kinds: [SWAP_OFFER_KIND],
     '#t': ['atomicswap'],
     since: Math.floor(Date.now() / 1000) - 172800,
+  }], handleOfferEvent);
+  // counterparty history: public 'started' and 'completed' notes over the last 60 days
+  subscribe('history_feed', [{
+    kinds: [SWAP_OFFER_KIND],
+    '#t': ['completed', 'started'],
+    since: Math.floor(Date.now() / 1000) - 60 * 86400,
   }], handleOfferEvent);
 }
 
@@ -2992,8 +3189,8 @@ function updateRateDisplay() {
   const btcSat = parseInt(document.getElementById('offer-btc-sat').value) || 0;
   const el = document.getElementById('rate-display');
   if (alphVal > 0 && btcSat > 0) {
-    const rate = (alphVal / (btcSat / 1e8)).toLocaleString(undefined, { maximumFractionDigits: 0 });
-    el.textContent = `Rate: ${rate} ALPH/BTC`;
+    const spa = satPerAlph(BigInt(Math.round(alphVal * 1e18)), btcSat);
+    el.innerHTML = `Rate: ${rateLine(spa)}${state.market ? `<div class="rate-line">market reference ${fmtRate(state.market.satPerAlph)} (CoinGecko)</div>` : ''}`;
   } else {
     el.textContent = 'Rate: --';
   }
@@ -3002,6 +3199,15 @@ function updateRateDisplay() {
 document.getElementById('offer-alph').addEventListener('input', updateRateDisplay);
 document.getElementById('offer-btc-sat').addEventListener('input', updateRateDisplay);
 updateRateDisplay();
+refreshMarketRate(); setInterval(refreshMarketRate, 5 * 60_000);
+
+// offer filters
+document.querySelectorAll('#offer-filters [data-filter-dir]').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('#offer-filters [data-filter-dir]').forEach((x) => x.classList.remove('active')); b.classList.add('active');
+  state.offerFilter.dir = b.dataset.filterDir; renderOffersList();
+}));
+document.getElementById('offer-sort').addEventListener('change', (e) => { state.offerFilter.sort = e.target.value; renderOffersList(); });
+document.getElementById('offer-hide-mine').addEventListener('change', (e) => { state.offerFilter.hideMine = e.target.checked; renderOffersList(); });
 
 document.getElementById('publish-offer-btn').addEventListener('click', publishOffer);
 

@@ -203,6 +203,9 @@ Two deployment modes share the same crypto core:
 | `npm run smoke:web` | Headless load of the page: modules, identity, relays, BIP327 self-test, contract artifact |
 | `npm run test:vault` | Passphrase vault: set, reload, wrong and right passphrase, remove |
 | `npm run e2e:local` | A complete two-browser swap on regtest (Esplora shim, 15 s blocks), devnet and a local relay, in about a minute |
+| `E2E_MODE=counter npm run e2e:local` | The taker counter-offers and the maker accepts the counter |
+| `E2E_MODE=partial npm run e2e:local` | A range offer: a hostile accept with other amounts is ignored, the taker fills part of it, the maker republishes the remainder |
+| `E2E_MODE=refund npm run e2e:local` | Bob aborts right after his lock; the regtest clock is moved past T_btc and Bob's page refunds itself (reset the regtest chain afterwards) |
 | `npm run e2e:live` | The same harness against the published page, signet and the Alephium testnet (needs funded keys) |
 
 ### Static Web App (`docs/`)
