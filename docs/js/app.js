@@ -15,7 +15,7 @@ import { btcConfirmationsFor } from './timelocks.js';
 import { BTC_NETWORK_NAME } from './btc.js';
 import { getP2TRAddress } from './btc.js';
 import { BUILD } from './build.js';
-import { deriveKeys, legacyKeys } from './keys.js';
+import { deriveKeys, deriveKeysV1, legacyKeys, mnemonicOf, entropyOf, alphKeyTypeOf } from './keys.js';
 import { deriveVaultKey, newSalt, sealString, openString, saltOf } from './vault.js';
 import { modalAlert, modalConfirm, modalPrompt } from './modal.js';
 import { addressFromQrText, scanWithCamera } from './qrscan.js';
@@ -829,7 +829,7 @@ function npubLink(pubkeyHex) {
 }
 
 function alphAddressFromPub(pubkeyHex) {
-  try { return addressFromPublicKey(pubkeyHex, 'bip340-schnorr'); } catch { return null; }
+  try { return addressFromPublicKey(pubkeyHex, alphKeyTypeOf(pubkeyHex)); } catch { return null; }
 }
 
 function getP2TRAddressFromPub(pubkeyHex) {
@@ -2292,21 +2292,23 @@ function initPassphraseButton() {
   if (btn) btn.textContent = hasPassphrase() ? '\u{1F512} Passphrase set' : 'Set passphrase';
 }
 
-const groupOfPub = (pubHex) => groupOfAddress(addressFromPublicKey(pubHex, 'bip340-schnorr'));
+const groupOfPub = (pubHex, keyType) => groupOfAddress(addressFromPublicKey(pubHex, keyType || alphKeyTypeOf(pubHex)));
 
 // Until 2026-09-27 the Nostr key was also the Bitcoin and Alephium key. Funds
 // left at those addresses are shown and can be moved to the derived addresses.
 async function checkLegacyFunds() {
   try {
-    const legacy = new SwapEngine(legacyKeys(state.secBytes));
-    const bal = await legacy.getBalances();
+    // the single-key scheme (before 2026-09-27) and the tagged-hash scheme (until 2026-10-01)
+    const schemes = [new SwapEngine(legacyKeys(state.secBytes)), new SwapEngine(deriveKeysV1(state.secBytes, groupOfPub))];
+    let legacy = null, bal = null;
+    for (const eng of schemes) { const b = await eng.getBalances(); if (b.btcConfirmedSat + b.btcUnconfirmedSat > 0 || Number(b.alph) > 0) { legacy = eng; bal = b; break; } }
+    if (!legacy) return;
     const btcSat = bal.btcConfirmedSat + bal.btcUnconfirmedSat;
     const alph = Number(bal.alph);
-    if (btcSat === 0 && alph === 0) return;
     addLogMsg('system', `Funds on the previous single-key addresses: ${btcSat} sat at ${legacy.btcAddress}, ${alph} ALPH at ${legacy.alphAddress}. Use "Move legacy funds" to bring them to the new addresses.`, 'System');
     const div = document.createElement('div');
     div.style.cssText = 'background:#1f6feb;color:#fff;padding:8px;font-size:13px;text-align:center';
-    div.innerHTML = `Your keys changed on 2026-09-27 (one key per chain). The previous addresses still hold ${btcSat} sat and ${alph} ALPH. <button id="legacy-sweep-btn" class="sm" style="margin-left:8px">Move legacy funds</button>`;
+    div.innerHTML = `Your keys changed (now standard HD wallet keys). The previous addresses still hold ${btcSat} sat and ${alph} ALPH. <button id="legacy-sweep-btn" class="sm" style="margin-left:8px">Move legacy funds</button>`;
     document.body.prepend(div);
     document.getElementById('legacy-sweep-btn').addEventListener('click', async () => {
       const btn = document.getElementById('legacy-sweep-btn'); btn.disabled = true; btn.textContent = 'Moving...';
@@ -2315,6 +2317,7 @@ async function checkLegacyFunds() {
         if (alph > 0.01) { const txId = await legacy.sweepAlph(state.alphAddress); addLogMsg('system', `Legacy ALPH swept in ${txId}`, 'You'); }
         div.textContent = 'Legacy funds moved; they appear at the new addresses once confirmed.';
         setTimeout(refreshBalance, 5000);
+        setTimeout(() => { div.remove(); checkLegacyFunds(); }, 8000); // another earlier scheme may hold funds too
       } catch (e) { addLogMsg('system', `Legacy sweep failed: ${e.message}`, 'Error'); btn.disabled = false; btn.textContent = 'Move legacy funds'; }
     });
   } catch (e) { addLogMsg('system', `Legacy funds check failed: ${e.message}`, 'System'); }
@@ -3018,15 +3021,25 @@ document.getElementById('refresh-bal-btn').addEventListener('click', refreshBala
 
 // Reset key — strong confirmation
 document.getElementById('reset-key-btn').addEventListener('click', async () => {
-  const msg = 'WARNING: This will permanently delete your current key.\n\n' +
+  const msg = 'WARNING: This replaces your current key.\n\n' +
     'All funds (BTC and ALPH) associated with this identity will be LOST ' +
-    'unless you have backed up your nsec.\n\n' +
-    'Type "RESET" to confirm:';
-  const input = await modalPrompt(msg, { placeholder: 'RESET' });
-  if (input !== 'RESET') return;
+    'unless you have backed up your nsec or 24 words.\n\n' +
+    'Type RESET for a new random key, or paste an nsec (nsec1... or 64 hex) or 24 BIP39 words to import one:';
+  const input = (await modalPrompt(msg, { placeholder: 'RESET, nsec1..., or 24 words' }) || '').trim();
+  if (!input) return;
+  let importedHex = null;
+  if (input !== 'RESET') {
+    try {
+      if (/^nsec1[a-z0-9]+$/i.test(input)) { const { words } = bech32.decode(input.toLowerCase(), 90); importedHex = bytesToHex(new Uint8Array(bech32.fromWords(words))); }
+      else if (/^[0-9a-f]{64}$/i.test(input)) importedHex = input.toLowerCase();
+      else if (input.split(/\s+/).length === 24) importedHex = bytesToHex(entropyOf(input));
+      else throw new Error('not an nsec, 64 hex characters or 24 words');
+    } catch (e) { await modalAlert(`Cannot import: ${e.message}`); return; }
+  }
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(STORAGE_KEY_ENC);
   localStorage.removeItem(BACKUP_CONFIRMED_KEY);
+  if (importedHex) localStorage.setItem(STORAGE_KEY, importedHex);
   location.reload();
 });
 
@@ -3287,7 +3300,8 @@ document.getElementById('nsec-reveal-btn').addEventListener('click', () => {
   const btn = document.getElementById('nsec-reveal-btn');
   nsecRevealed = !nsecRevealed;
   if (nsecRevealed) {
-    el.textContent = state.nsecBech32 || '';
+    el.textContent = `${state.nsecBech32 || ''}\n24 words: ${mnemonicOf(state.secBytes)}`;
+    el.style.whiteSpace = 'pre-wrap';
     el.classList.remove('key-masked');
     btn.textContent = 'hide';
   } else {

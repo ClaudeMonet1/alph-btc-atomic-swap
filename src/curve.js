@@ -1,7 +1,7 @@
 // Curve shim for the Node build (@noble/curves 2.x). docs/js/curve.js exposes
 // the same interface over @noble/curves 1.x, so that musig2.js, adaptor.js and
 // taproot-utils.js are byte-identical in both builds.
-import { schnorr } from '@noble/curves/secp256k1.js';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToNumberBE, numberToBytesBE, concatBytes, hexToBytes, bytesToHex } from '@noble/curves/utils.js';
 
 export const Point = schnorr.Point;
@@ -19,6 +19,8 @@ export const lift_x = schnorr.utils.lift_x;
 export const schnorrVerify = (sig, msg, pk) => schnorr.verify(sig, msg, pk);
 export const schnorrGetPublicKey = (sk) => schnorr.getPublicKey(sk);
 export const randomSecretKey = () => schnorr.utils.randomSecretKey();
+export const ecdsaSign = (msgHash, sec) => secp256k1.sign(msgHash, sec, { lowS: true, prehash: false }); // 64-byte compact r||s
+export const ecdsaPublicKey = (sec) => secp256k1.getPublicKey(sec, true); // 33-byte compressed
 export function pointFromBytes(b) { return Point.fromBytes(b); } // throws on invalid encodings
 export function cbytes(P) { return P.toBytes(true); }
 export function xbytes(P) { return P.toBytes(true).slice(1); }

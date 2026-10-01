@@ -1,8 +1,9 @@
 // Bundled by scripts/vendor.mjs from the pinned package in node_modules. Do not edit; rebuild with `npm run vendor`.
-// @noble/hashes/sha256 1.7.1
+// @noble/hashes/sha256 1.8.0
 
 
-// node_modules/noble-hashes-1/esm/_assert.js
+// node_modules/noble-hashes-1/esm/utils.js
+/*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
 function isBytes(a) {
   return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
@@ -25,9 +26,11 @@ function aoutput(out, instance) {
     throw new Error("digestInto() expects output buffer of length at least " + min);
   }
 }
-
-// node_modules/noble-hashes-1/esm/utils.js
-/*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+function clean(...arrays) {
+  for (let i = 0; i < arrays.length; i++) {
+    arrays[i].fill(0);
+  }
+}
 function createView(arr) {
   return new DataView(arr.buffer, arr.byteOffset, arr.byteLength);
 }
@@ -36,7 +39,7 @@ function rotr(word, shift) {
 }
 function utf8ToBytes(str) {
   if (typeof str !== "string")
-    throw new Error("utf8ToBytes expected string, got " + typeof str);
+    throw new Error("string expected");
   return new Uint8Array(new TextEncoder().encode(str));
 }
 function toBytes(data) {
@@ -46,12 +49,8 @@ function toBytes(data) {
   return data;
 }
 var Hash = class {
-  // Safe version that clones internal state
-  clone() {
-    return this._cloneInto();
-  }
 };
-function wrapConstructor(hashCons) {
+function createHasher(hashCons) {
   const hashC = (msg) => hashCons().update(toBytes(msg)).digest();
   const tmp = hashCons();
   hashC.outputLen = tmp.outputLen;
@@ -82,21 +81,22 @@ function Maj(a, b, c) {
 var HashMD = class extends Hash {
   constructor(blockLen, outputLen, padOffset, isLE) {
     super();
-    this.blockLen = blockLen;
-    this.outputLen = outputLen;
-    this.padOffset = padOffset;
-    this.isLE = isLE;
     this.finished = false;
     this.length = 0;
     this.pos = 0;
     this.destroyed = false;
+    this.blockLen = blockLen;
+    this.outputLen = outputLen;
+    this.padOffset = padOffset;
+    this.isLE = isLE;
     this.buffer = new Uint8Array(blockLen);
     this.view = createView(this.buffer);
   }
   update(data) {
     aexists(this);
-    const { view, buffer, blockLen } = this;
     data = toBytes(data);
+    abytes(data);
+    const { view, buffer, blockLen } = this;
     const len = data.length;
     for (let pos = 0; pos < len; ) {
       const take = Math.min(blockLen - this.pos, len - pos);
@@ -125,7 +125,7 @@ var HashMD = class extends Hash {
     const { buffer, view, blockLen, isLE } = this;
     let { pos } = this;
     buffer[pos++] = 128;
-    this.buffer.subarray(pos).fill(0);
+    clean(this.buffer.subarray(pos));
     if (this.padOffset > blockLen - pos) {
       this.process(view, 0);
       pos = 0;
@@ -156,18 +156,41 @@ var HashMD = class extends Hash {
     to || (to = new this.constructor());
     to.set(...this.get());
     const { blockLen, buffer, length, finished, destroyed, pos } = this;
+    to.destroyed = destroyed;
+    to.finished = finished;
     to.length = length;
     to.pos = pos;
-    to.finished = finished;
-    to.destroyed = destroyed;
     if (length % blockLen)
       to.buffer.set(buffer);
     return to;
   }
+  clone() {
+    return this._cloneInto();
+  }
 };
+var SHA256_IV = /* @__PURE__ */ Uint32Array.from([
+  1779033703,
+  3144134277,
+  1013904242,
+  2773480762,
+  1359893119,
+  2600822924,
+  528734635,
+  1541459225
+]);
+var SHA224_IV = /* @__PURE__ */ Uint32Array.from([
+  3238371032,
+  914150663,
+  812702999,
+  4144912697,
+  4290775857,
+  1750603025,
+  1694076839,
+  3204075428
+]);
 
-// node_modules/noble-hashes-1/esm/sha256.js
-var SHA256_K = /* @__PURE__ */ new Uint32Array([
+// node_modules/noble-hashes-1/esm/sha2.js
+var SHA256_K = /* @__PURE__ */ Uint32Array.from([
   1116352408,
   1899447441,
   3049323471,
@@ -233,20 +256,10 @@ var SHA256_K = /* @__PURE__ */ new Uint32Array([
   3204031479,
   3329325298
 ]);
-var SHA256_IV = /* @__PURE__ */ new Uint32Array([
-  1779033703,
-  3144134277,
-  1013904242,
-  2773480762,
-  1359893119,
-  2600822924,
-  528734635,
-  1541459225
-]);
 var SHA256_W = /* @__PURE__ */ new Uint32Array(64);
 var SHA256 = class extends HashMD {
-  constructor() {
-    super(64, 32, 8, false);
+  constructor(outputLen = 32) {
+    super(64, outputLen, 8, false);
     this.A = SHA256_IV[0] | 0;
     this.B = SHA256_IV[1] | 0;
     this.C = SHA256_IV[2] | 0;
@@ -307,31 +320,37 @@ var SHA256 = class extends HashMD {
     this.set(A, B, C, D, E, F, G, H);
   }
   roundClean() {
-    SHA256_W.fill(0);
+    clean(SHA256_W);
   }
   destroy() {
     this.set(0, 0, 0, 0, 0, 0, 0, 0);
-    this.buffer.fill(0);
+    clean(this.buffer);
   }
 };
 var SHA224 = class extends SHA256 {
   constructor() {
-    super();
-    this.A = 3238371032 | 0;
-    this.B = 914150663 | 0;
-    this.C = 812702999 | 0;
-    this.D = 4144912697 | 0;
-    this.E = 4290775857 | 0;
-    this.F = 1750603025 | 0;
-    this.G = 1694076839 | 0;
-    this.H = 3204075428 | 0;
-    this.outputLen = 28;
+    super(28);
+    this.A = SHA224_IV[0] | 0;
+    this.B = SHA224_IV[1] | 0;
+    this.C = SHA224_IV[2] | 0;
+    this.D = SHA224_IV[3] | 0;
+    this.E = SHA224_IV[4] | 0;
+    this.F = SHA224_IV[5] | 0;
+    this.G = SHA224_IV[6] | 0;
+    this.H = SHA224_IV[7] | 0;
   }
 };
-var sha256 = /* @__PURE__ */ wrapConstructor(() => new SHA256());
-var sha224 = /* @__PURE__ */ wrapConstructor(() => new SHA224());
+var sha256 = /* @__PURE__ */ createHasher(() => new SHA256());
+var sha224 = /* @__PURE__ */ createHasher(() => new SHA224());
+
+// node_modules/noble-hashes-1/esm/sha256.js
+var SHA2562 = SHA256;
+var sha2562 = sha256;
+var SHA2242 = SHA224;
+var sha2242 = sha224;
 export {
-  SHA256,
-  sha224,
-  sha256
+  SHA2242 as SHA224,
+  SHA2562 as SHA256,
+  sha2242 as sha224,
+  sha2562 as sha256
 };

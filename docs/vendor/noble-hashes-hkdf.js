@@ -1,14 +1,15 @@
 // Bundled by scripts/vendor.mjs from the pinned package in node_modules. Do not edit; rebuild with `npm run vendor`.
-// @noble/hashes/hkdf 1.7.1
+// @noble/hashes/hkdf 1.8.0
 
 
-// node_modules/noble-hashes-1/esm/_assert.js
+// node_modules/noble-hashes-1/esm/utils.js
+/*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+function isBytes(a) {
+  return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
+}
 function anumber(n) {
   if (!Number.isSafeInteger(n) || n < 0)
     throw new Error("positive integer expected, got " + n);
-}
-function isBytes(a) {
-  return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
 }
 function abytes(b, ...lengths) {
   if (!isBytes(b))
@@ -18,7 +19,7 @@ function abytes(b, ...lengths) {
 }
 function ahash(h) {
   if (typeof h !== "function" || typeof h.create !== "function")
-    throw new Error("Hash should be wrapped by utils.wrapConstructor");
+    throw new Error("Hash should be wrapped by utils.createHasher");
   anumber(h.outputLen);
   anumber(h.blockLen);
 }
@@ -28,12 +29,14 @@ function aexists(instance, checkFinished = true) {
   if (checkFinished && instance.finished)
     throw new Error("Hash#digest() has already been called");
 }
-
-// node_modules/noble-hashes-1/esm/utils.js
-/*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+function clean(...arrays) {
+  for (let i = 0; i < arrays.length; i++) {
+    arrays[i].fill(0);
+  }
+}
 function utf8ToBytes(str) {
   if (typeof str !== "string")
-    throw new Error("utf8ToBytes expected string, got " + typeof str);
+    throw new Error("string expected");
   return new Uint8Array(new TextEncoder().encode(str));
 }
 function toBytes(data) {
@@ -43,10 +46,6 @@ function toBytes(data) {
   return data;
 }
 var Hash = class {
-  // Safe version that clones internal state
-  clone() {
-    return this._cloneInto();
-  }
 };
 
 // node_modules/noble-hashes-1/esm/hmac.js
@@ -72,7 +71,7 @@ var HMAC = class extends Hash {
     for (let i = 0; i < pad.length; i++)
       pad[i] ^= 54 ^ 92;
     this.oHash.update(pad);
-    pad.fill(0);
+    clean(pad);
   }
   update(buf) {
     aexists(this);
@@ -105,6 +104,9 @@ var HMAC = class extends Hash {
     to.iHash = iHash._cloneInto(to.iHash);
     return to;
   }
+  clone() {
+    return this._cloneInto();
+  }
   destroy() {
     this.destroyed = true;
     this.oHash.destroy();
@@ -121,30 +123,30 @@ function extract(hash, ikm, salt) {
     salt = new Uint8Array(hash.outputLen);
   return hmac(hash, toBytes(salt), toBytes(ikm));
 }
-var HKDF_COUNTER = /* @__PURE__ */ new Uint8Array([0]);
-var EMPTY_BUFFER = /* @__PURE__ */ new Uint8Array();
+var HKDF_COUNTER = /* @__PURE__ */ Uint8Array.from([0]);
+var EMPTY_BUFFER = /* @__PURE__ */ Uint8Array.of();
 function expand(hash, prk, info, length = 32) {
   ahash(hash);
   anumber(length);
-  if (length > 255 * hash.outputLen)
+  const olen = hash.outputLen;
+  if (length > 255 * olen)
     throw new Error("Length should be <= 255*HashLen");
-  const blocks = Math.ceil(length / hash.outputLen);
+  const blocks = Math.ceil(length / olen);
   if (info === void 0)
     info = EMPTY_BUFFER;
-  const okm = new Uint8Array(blocks * hash.outputLen);
+  const okm = new Uint8Array(blocks * olen);
   const HMAC2 = hmac.create(hash, prk);
   const HMACTmp = HMAC2._cloneInto();
   const T = new Uint8Array(HMAC2.outputLen);
   for (let counter = 0; counter < blocks; counter++) {
     HKDF_COUNTER[0] = counter + 1;
     HMACTmp.update(counter === 0 ? EMPTY_BUFFER : T).update(info).update(HKDF_COUNTER).digestInto(T);
-    okm.set(T, hash.outputLen * counter);
+    okm.set(T, olen * counter);
     HMAC2._cloneInto(HMACTmp);
   }
   HMAC2.destroy();
   HMACTmp.destroy();
-  T.fill(0);
-  HKDF_COUNTER.fill(0);
+  clean(T, HKDF_COUNTER);
   return okm.slice(0, length);
 }
 var hkdf = (hash, ikm, salt, info, length) => expand(hash, extract(hash, ikm, salt), info, length);

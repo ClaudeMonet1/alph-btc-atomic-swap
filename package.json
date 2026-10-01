@@ -43,10 +43,12 @@
   },
   "devDependencies": {
     "@bitcoinerlab/secp256k1": "^1.2.0",
+    "@scure/bip32": "^1.7.0",
+    "@scure/bip39": "^1.6.0",
     "esbuild": "^0.28.2",
     "jsqr": "^1.4.0",
-    "noble-curves-1": "npm:@noble/curves@^1.8.1",
-    "noble-hashes-1": "npm:@noble/hashes@^1.7.1",
+    "noble-curves-1": "npm:@noble/curves@^1.9.7",
+    "noble-hashes-1": "npm:@noble/hashes@^1.8.0",
     "puppeteer-core": "^24.43.1",
     "qrcode-generator": "^1.4.4"
   }

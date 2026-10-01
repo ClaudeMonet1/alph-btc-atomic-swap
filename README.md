@@ -2,7 +2,7 @@
 
 Trustless cross-chain swaps between Bitcoin and Alephium using MuSig2 adaptor signatures. No hash preimages, no bridge, no intermediary.
 
-Each participant backs up a **single Nostr nsec**. It is the Nostr identity, and the Bitcoin and Alephium keys are derived from it with domain-separated tagged hashes (`keys.js`): one secret to keep, three keys to use, no signature valid on more than one chain. The Alephium key is derived into group 1 so that any imported nsec can trade.
+Each participant backs up a **single secret**, shown as the Nostr nsec and as 24 BIP39 words. The Bitcoin key is derived on the BIP86 taproot path and the Alephium account on the Alephium wallet path (`keys.js`), so both are importable into standard wallets from the same 24 words; the Nostr identity is the secret itself. No signature is valid on more than one chain, and the Alephium account is derived into group 1 so that any imported secret can trade.
 
 ```
 nsec (secp256k1 scalar)
