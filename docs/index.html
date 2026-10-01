@@ -226,6 +226,15 @@
   }
   .send-modal-status.hidden { display: none; }
 
+  .offer-filters { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0 8px; }
+  .offer-filters button.active { background: #21262d; color: #e6edf3; border-color: #8b949e; }
+  .offer-filters select { font-size: 11px; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; padding: 3px 6px; }
+  .rate-line { font-size: 10px; color: #8b949e; margin-top: 2px; }
+  .rate-line .off { color: #d29922; }
+  .rate-line .far { color: #f85149; }
+  .peer-history { font-size: 10px; color: #8b949e; margin-left: 6px; }
+  .accept-form { display: flex; gap: 6px; align-items: center; margin-top: 6px; flex-wrap: wrap; font-size: 11px; }
+  .accept-form input { width: 90px; font-size: 11px; padding: 3px 6px; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px; }
   /* In-page dialogs (modal.js) */
   .modal-overlay { position: fixed; inset: 0; background: #000000aa; display: flex; align-items: center; justify-content: center; z-index: 10000; padding: 16px; }
   .modal-box { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; max-width: 460px; width: 100%; font-size: 13px; color: #e6edf3; }
@@ -626,11 +635,15 @@
         </div>
         <div class="form-row">
           <label>ALPH</label>
-          <input type="text" id="offer-alph" value="1" placeholder="ALPH amount">
+          <input type="text" id="offer-alph" value="1" placeholder="ALPH amount (max)">
           <label style="width:auto; margin-left:8px">BTC sat</label>
-          <input type="text" id="offer-btc-sat" value="5000" placeholder="satoshis">
+          <input type="text" id="offer-btc-sat" value="5000" placeholder="satoshis for that amount">
         </div>
-        <div class="rate-display" id="rate-display">Rate: 200,000 ALPH/BTC</div>
+        <div class="form-row">
+          <label title="Leave empty for an all-or-nothing offer; otherwise a taker may fill any amount between this minimum and the amount above, at the same rate">Min ALPH</label>
+          <input type="text" id="offer-min-alph" value="" placeholder="optional: allow partial fills down to this amount">
+        </div>
+        <div class="rate-display" id="rate-display">Rate: --</div>
         <div class="form-actions">
           <button id="publish-offer-btn" class="primary">Publish Offer</button>
         </div>
@@ -645,6 +658,17 @@
       <!-- Open Offers List -->
       <div class="offers-section" id="offers-section">
         <h3>Offers <span class="count" id="offers-count">(0)</span></h3>
+        <div class="offer-filters" id="offer-filters">
+          <button class="sm active" data-filter-dir="all">All</button>
+          <button class="sm" data-filter-dir="sell_alph">Sell ALPH</button>
+          <button class="sm" data-filter-dir="buy_alph">Buy ALPH</button>
+          <select id="offer-sort" class="sm" title="Order of the open offers">
+            <option value="newest">Newest first</option>
+            <option value="rate">Best rate for me</option>
+            <option value="size">Largest first</option>
+          </select>
+          <label style="font-size:11px; color:#8b949e"><input type="checkbox" id="offer-hide-mine"> hide mine</label>
+        </div>
         <div id="offers-list">
           <div style="color:#484f58; font-size:12px; text-align:center; padding:24px;">
             No offers yet. Create one or wait for offers to appear.
