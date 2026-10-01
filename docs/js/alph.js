@@ -102,7 +102,9 @@ TxScript RefundSwap(htlc: AtomicSwap) {
 let compiledCache = null;
 export async function compileSwapContract() {
   if (compiledCache) return compiledCache;
-  const res = await fetch(new URL('../contracts/atomic-swap.json', import.meta.url));
+  // a per-network artifact (atomic-swap.<network>.json) wins over the common one
+  let res = await fetch(new URL(`../contracts/atomic-swap.${ALPH_NETWORK}.json`, import.meta.url));
+  if (!res.ok) res = await fetch(new URL('../contracts/atomic-swap.json', import.meta.url));
   if (!res.ok) throw new Error(`cannot load the compiled contract artifact: HTTP ${res.status}`);
   const artifact = await res.json();
   const sourceHash = bytesToHex(sha256(new TextEncoder().encode(SWAP_CONTRACT_SOURCE)));

@@ -3,10 +3,12 @@
 // the cache as the fallback so the page opens offline; the whole build is
 // precached on install and old caches are dropped on activate. Cross-origin
 // requests (nodes, Esplora, relays, price API) are never cached.
-const BUILD = '20261001T122720-e3dd723';
+const BUILD = '20261001T140034-6cad60d';
 const CACHE = 'btc-alph-swap-' + BUILD;
 const ASSETS = [
   "./contracts/atomic-swap.json",
+  "./icons/alephium.png",
+  "./icons/bitcoin.png",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/icon.svg",
