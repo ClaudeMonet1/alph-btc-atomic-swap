@@ -802,7 +802,7 @@ function btcSatFor(alphAmount, offer) { return Number(BigInt(alphAmount) * BigIn
 function fmtRate(spa) { return `${spa.toLocaleString(undefined, { maximumFractionDigits: 2 })} sat/ALPH · ${Math.round(1e8 / spa).toLocaleString()} ALPH/BTC`; }
 // deviation of an offer's rate from the market reference, from the point of view of the taker of `direction`
 function rateDeviation(spa) {
-  if (!state.market?.satPerAlph) return null;
+  if (!state.market?.satPerAlph || !state.market.reliable) return null; // no comparison on a single or disputed quote
   return (spa - state.market.satPerAlph) / state.market.satPerAlph; // > 0: ALPH priced above market
 }
 function rateLine(spa, direction) {
@@ -813,13 +813,51 @@ function rateLine(spa, direction) {
   const side = dev > 0 ? 'above' : 'below';
   return `<div class="rate-line">${fmtRate(spa)} <span class="${cls}">(${pct}% ${side} market)</span></div>`;
 }
+// Three independent quotes of ALPH in BTC (all allow browser requests); the
+// reference is their median and it counts as reliable only when at least two
+// sources answered and they agree within 5 %.
+const MARKET_SOURCES = [
+  { name: 'CoinGecko', url: 'https://api.coingecko.com/api/v3/simple/price?ids=alephium&vs_currencies=btc', pick: (j) => j.alephium.btc * 1e8 },
+  { name: 'CoinPaprika', url: 'https://api.coinpaprika.com/v1/tickers/alph-alephium?quotes=BTC', pick: (j) => j.quotes.BTC.price * 1e8 },
+  { name: 'Gate.io', url: 'https://api.gateio.ws/api/v4/spot/tickers?currency_pair=ALPH_USDT', pick: null, usd: 'https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT' },
+];
+async function fetchJson(url) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 8000);
+  try { const r = await fetch(url, { cache: 'no-store', signal: ctl.signal }); if (!r.ok) throw new Error(`HTTP ${r.status}`); return await r.json(); }
+  finally { clearTimeout(t); }
+}
 async function refreshMarketRate() {
-  try {
-    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=alephium,bitcoin&vs_currencies=usd', { cache: 'no-store' });
-    const j = await r.json();
-    const spa = j.bitcoin.usd > 0 ? j.alephium.usd / j.bitcoin.usd * 1e8 : 0;
-    if (spa > 0) { state.market = { satPerAlph: spa, at: Date.now() }; renderOffersList(); updateRateDisplay(); }
-  } catch { /* no reference: rates are shown without a comparison */ }
+  const quotes = await Promise.all(MARKET_SOURCES.map(async (s) => {
+    try {
+      let spa;
+      if (s.pick) spa = s.pick(await fetchJson(s.url));
+      else { const [a, b] = await Promise.all([fetchJson(s.url), fetchJson(s.usd)]); spa = Number(a[0].last) / Number(b[0].last) * 1e8; }
+      return Number.isFinite(spa) && spa > 0 ? { name: s.name, spa } : null;
+    } catch { return null; }
+  }));
+  const sources = quotes.filter(Boolean).sort((a, b) => a.spa - b.spa);
+  if (!sources.length) { state.market = null; updateRateDisplay(); return; }
+  const median = sources[Math.floor(sources.length / 2)].spa;
+  const spread = (sources[sources.length - 1].spa - sources[0].spa) / median;
+  const reliable = sources.length >= 2 && spread <= 0.05;
+  state.market = { satPerAlph: median, sources, spread, reliable, at: Date.now() };
+  renderOffersList(); updateRateDisplay(); presetSatFromMarket();
+}
+function marketSummary() {
+  const m = state.market; if (!m) return '';
+  const names = m.sources.map((s) => s.name).join(', ');
+  if (m.reliable) return `${fmtRate(m.satPerAlph)} (${names} agree within ${Math.max(1, Math.round(m.spread * 100))}%)`;
+  if (m.sources.length === 1) return `${fmtRate(m.satPerAlph)} (${names} only: unconfirmed)`;
+  return `sources disagree by ${Math.round(m.spread * 100)}%: ${m.sources.map((s) => `${s.name} ${s.spa.toFixed(1)}`).join(', ')} sat/ALPH`;
+}
+// The sat field follows the ALPH amount at the market rate until the user edits it by hand.
+let satManual = false;
+function presetSatFromMarket() {
+  const m = state.market; if (!m?.reliable || satManual) return;
+  const alphVal = parseFloat(document.getElementById('offer-alph').value) || 0;
+  if (alphVal <= 0) return;
+  document.getElementById('offer-btc-sat').value = String(Math.max(1, Math.round(alphVal * m.satPerAlph)));
+  updateRateDisplay();
 }
 
 // ---- Counterparty history (public attestations, a hint and not a proof: anyone can publish them) ----
@@ -1119,7 +1157,7 @@ async function publishOffer() {
     if (minVal > 0 && minVal >= alphVal) { showOfferWarning('The minimum must be below the amount.'); btn.disabled = false; btn.textContent = 'Publish Offer'; return; }
     const dev = rateDeviation(satPerAlph(alphAmount, btcSat));
     if (dev !== null && Math.abs(dev) >= 0.3) {
-      const ok = await modalConfirm(`Your rate is ${fmtRate(satPerAlph(alphAmount, btcSat))}, ${Math.round(Math.abs(dev) * 100)}% ${dev > 0 ? 'above' : 'below'} the market reference (${fmtRate(state.market.satPerAlph)}). Publish anyway?`, 'Publish');
+      const ok = await modalConfirm(`Your rate is ${fmtRate(satPerAlph(alphAmount, btcSat))}, ${Math.round(Math.abs(dev) * 100)}% ${dev > 0 ? 'above' : 'below'} the market reference (${marketSummary()}). Publish anyway?`, 'Publish');
       if (!ok) { btn.disabled = false; btn.textContent = 'Publish Offer'; return; }
     }
 
@@ -1218,7 +1256,7 @@ async function acceptOffer(offerId, fillAmount = null) {
   }
   const dev = rateDeviation(satPerAlph(alphAmount, btcSat));
   if (dev !== null && Math.abs(dev) >= 0.3) {
-    const ok = await modalConfirm(`This offer's rate is ${fmtRate(satPerAlph(alphAmount, btcSat))}, ${Math.round(Math.abs(dev) * 100)}% ${dev > 0 ? 'above' : 'below'} the market reference (${fmtRate(state.market.satPerAlph)}). Take it anyway?`, 'Take it');
+    const ok = await modalConfirm(`This offer's rate is ${fmtRate(satPerAlph(alphAmount, btcSat))}, ${Math.round(Math.abs(dev) * 100)}% ${dev > 0 ? 'above' : 'below'} the market reference (${marketSummary()}). Take it anyway?`, 'Take it');
     if (!ok) return;
   }
 
@@ -3272,14 +3310,15 @@ function updateRateDisplay() {
   const el = document.getElementById('rate-display');
   if (alphVal > 0 && btcSat > 0) {
     const spa = satPerAlph(BigInt(Math.round(alphVal * 1e18)), btcSat);
-    el.innerHTML = `Rate: ${rateLine(spa)}${state.market ? `<div class="rate-line">market reference ${fmtRate(state.market.satPerAlph)} (CoinGecko)</div>` : ''}`;
+    el.innerHTML = `Rate: ${rateLine(spa)}${state.market ? `<div class="rate-line">market ${marketSummary()}${state.market.reliable ? (satManual ? ' · <a href="#" id="use-market-rate">use market rate</a>' : ' · sat pre-set from it') : ''}</div>` : '<div class="rate-line">market reference unavailable</div>'}`;
+    document.getElementById('use-market-rate')?.addEventListener('click', (e) => { e.preventDefault(); satManual = false; presetSatFromMarket(); });
   } else {
     el.textContent = 'Rate: --';
   }
 }
 
-document.getElementById('offer-alph').addEventListener('input', updateRateDisplay);
-document.getElementById('offer-btc-sat').addEventListener('input', updateRateDisplay);
+document.getElementById('offer-alph').addEventListener('input', () => { presetSatFromMarket(); updateRateDisplay(); });
+document.getElementById('offer-btc-sat').addEventListener('input', () => { satManual = true; updateRateDisplay(); });
 updateRateDisplay();
 refreshMarketRate(); setInterval(refreshMarketRate, 5 * 60_000);
 
