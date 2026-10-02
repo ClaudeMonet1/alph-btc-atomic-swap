@@ -1,25 +1,14 @@
-// Passphrase protection for what the page keeps in localStorage (audit W3): the
-// Nostr secret and the swap state (adaptor secret, nonces, pre-signatures).
-// WebCrypto only: PBKDF2-SHA256 (600k iterations, random salt) derives an
-// AES-256-GCM key; each record has its own IV. The derived key lives in memory
-// for the session, never in storage. A wrong passphrase fails authentication.
+// Opens a key that a build before 2026-10-02 sealed with a passphrase (audit W3).
+// The passphrase option itself is gone; this is the one-time unlock path, kept so
+// that a key encrypted by an earlier build can still be read and migrated.
+// WebCrypto only: PBKDF2-SHA256 (600k iterations) derives the AES-256-GCM key.
 const ITERATIONS = 600_000;
 const enc = new TextEncoder(), dec = new TextDecoder();
-const b64 = (u8) => btoa(String.fromCharCode(...u8));
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
 export async function deriveVaultKey(passphrase, salt) {
   const base = await crypto.subtle.importKey('raw', enc.encode(passphrase.normalize('NFKC')), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: ITERATIONS }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-}
-
-export function newSalt() { return crypto.getRandomValues(new Uint8Array(16)); }
-
-// Encrypts a string; returns a JSON-serialisable record.
-export async function sealString(key, salt, plaintext) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext)));
-  return { v: 1, kdf: 'pbkdf2-sha256', iterations: ITERATIONS, salt: b64(salt), iv: b64(iv), ct: b64(ct) };
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: ITERATIONS }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
 }
 
 export async function openString(key, record) {

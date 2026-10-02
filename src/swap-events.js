@@ -15,6 +15,9 @@
 import { getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import WebSocket from 'ws';
 import { encryptTo, decryptFrom } from './nip44.js';
+import { randomBytes } from './curve.js';
+
+const subIdOf = (prefix) => prefix + Buffer.from(randomBytes(6)).toString('hex'); // not security critical, but one RNG in the codebase
 
 // ---- Event Kinds (parameterized replaceable, 30000-39999) ----
 
@@ -147,7 +150,7 @@ export function publish(ws, event) {
 // to the decrypted event. Filters by kind + #e session tag + author pubkey.
 export function waitForSwapEvent(ws, kind, sessionId, fromPubHex, predicate = null, timeoutMs = 60000, secKeyBytes = null) {
   return new Promise((resolve, reject) => {
-    const subId = 'sw_' + Math.random().toString(36).slice(2, 10);
+    const subId = subIdOf('sw_');
     const timeout = setTimeout(() => {
       unsub();
       reject(new Error(`timeout waiting for kind ${kind} from ${fromPubHex.slice(0, 8)}...`));
@@ -170,7 +173,7 @@ export function waitForSwapEvent(ws, kind, sessionId, fromPubHex, predicate = nu
 // Wait for any event matching kind + filter (for public offer discovery).
 export function waitForEvent(ws, kind, filter = {}, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
-    const subId = 'w_' + Math.random().toString(36).slice(2, 10);
+    const subId = subIdOf('w_');
     const timeout = setTimeout(() => {
       unsub();
       reject(new Error(`timeout waiting for kind ${kind}`));

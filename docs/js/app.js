@@ -16,7 +16,7 @@ import { BTC_NETWORK_NAME } from './btc.js';
 import { getP2TRAddress } from './btc.js';
 import { BUILD } from './build.js';
 import { deriveKeys, deriveKeysV1, legacyKeys, mnemonicOf, entropyOf, alphKeyTypeOf, newMasterSecret, isMasterSecret } from './keys.js';
-import { deriveVaultKey, newSalt, sealString, openString, saltOf } from './vault.js';
+import { deriveVaultKey, openString, saltOf } from './vault.js';
 import { modalAlert, modalConfirm, modalPrompt } from './modal.js';
 import { addressFromQrText, scanWithCamera } from './qrscan.js';
 import { CONFIG, DEFAULTS as CONFIG_DEFAULTS, NETWORK_DEFAULTS, resetConfig, saveConfig } from './config.js';
@@ -2200,12 +2200,12 @@ function resetSwap() {
 // Auto-Connect
 // ============================================================
 
-const STORAGE_KEY = 'btc-alph-swap-nsec';           // plaintext secret (no passphrase)
-const STORAGE_KEY_ENC = 'btc-alph-swap-nsec-enc';   // vault record (passphrase set)
+const STORAGE_KEY = 'btc-alph-swap-nsec';           // the secret, hex
+const STORAGE_KEY_ENC = 'btc-alph-swap-nsec-enc';   // a key sealed by a build before 2026-10-02, unlocked once and migrated
 const BACKUP_CONFIRMED_KEY = 'btc-alph-swap-backup-confirmed';
-// Session vault key (AES-GCM, derived from the passphrase); null when no passphrase is set.
-let vaultKey = null, vaultSalt = null;
-const hasPassphrase = () => !!localStorage.getItem(STORAGE_KEY_ENC);
+// Set only while migrating a key that an earlier build sealed with a passphrase:
+// the swap state it saved is sealed with the same key and is read once with it.
+let migratedVaultKey = null;
 const SWAP_STATE_KEY = 'btc-alph-swap-state';
 const PROCESSED_OFFERS_KEY = 'btc-alph-swap-processed';
 
@@ -2228,24 +2228,25 @@ function markOfferProcessed(offerId) {
   localStorage.setItem(PROCESSED_OFFERS_KEY, JSON.stringify(arr));
 }
 
-// A stored key is never replaced: it may hold funds. With a passphrase set, the
-// secret is only available after the vault is opened; a cancelled prompt leaves
-// the page locked (nothing is deleted).
+// A stored key is never replaced: it may hold funds. A key that an earlier build
+// sealed with a passphrase is unlocked once and stored unsealed (the passphrase
+// feature is gone); a cancelled prompt leaves the page locked, nothing is deleted.
 async function loadOrCreateNsec(statusEl) {
   const encRaw = localStorage.getItem(STORAGE_KEY_ENC);
   if (encRaw) {
     const record = JSON.parse(encRaw);
     for (;;) {
-      const pass = await modalPrompt('This wallet is protected by a passphrase. Enter it to unlock (Cancel keeps the page locked).', { password: true, placeholder: 'passphrase' });
-      if (pass === null) throw new Error('Wallet locked: reload and enter the passphrase to use it.');
+      const pass = await modalPrompt('This wallet still holds a key encrypted with a passphrase by an earlier version. Enter the passphrase once: the key is then kept unencrypted, as the passphrase option has been removed. Cancel keeps the page locked and deletes nothing.', { password: true, placeholder: 'passphrase' });
+      if (pass === null) throw new Error('Wallet locked: reload and enter the passphrase to unlock the key it still holds.');
       if (statusEl) statusEl.textContent = 'Unlocking...';
       try {
-        const salt = saltOf(record);
-        const key = await deriveVaultKey(pass, salt);
+        const key = await deriveVaultKey(pass, saltOf(record));
         const hex = await openString(key, record);
         if (!isMasterSecret(hexToBytes(hex))) throw new Error('bad record');
-        vaultKey = key; vaultSalt = salt;
-        localStorage.removeItem(STORAGE_KEY); // a plaintext copy has no business next to the vault
+        migratedVaultKey = key; // the swap state saved next to it is sealed with the same key
+        localStorage.setItem(STORAGE_KEY, hex);
+        localStorage.removeItem(STORAGE_KEY_ENC);
+        addLogMsg('system', 'Passphrase removed: your key is now stored unencrypted in this browser. Back up your recovery words.', 'System');
         return hex;
       } catch { await modalAlert('Wrong passphrase.'); }
     }
@@ -2256,38 +2257,6 @@ async function loadOrCreateNsec(statusEl) {
   const fresh = bytesToHex(newMasterSecret());
   localStorage.setItem(STORAGE_KEY, fresh);
   return fresh;
-}
-
-// Set, change or remove the passphrase. The secret and the current swap state are re-sealed.
-async function setPassphrase() {
-  if (hasPassphrase()) {
-    if (!await modalConfirm('A passphrase is set. Remove it and store the key in clear again?', 'Remove')) return;
-    localStorage.setItem(STORAGE_KEY, bytesToHex(state.secBytes));
-    localStorage.removeItem(STORAGE_KEY_ENC);
-    vaultKey = null; vaultSalt = null;
-    saveSwapState();
-    addLogMsg('system', 'Passphrase removed: the key is stored in clear in this browser.', 'System');
-  } else {
-    const p1 = await modalPrompt('Choose a passphrase (at least 8 characters). It encrypts your key and swap state in this browser. Losing it means losing access unless you have backed up your recovery words.', { password: true, placeholder: 'passphrase' });
-    if (p1 === null) return;
-    if (p1.length < 8) { await modalAlert('At least 8 characters.'); return; }
-    const p2 = await modalPrompt('Repeat the passphrase:', { password: true, placeholder: 'passphrase again' });
-    if (p2 !== p1) { await modalAlert('The passphrases differ.'); return; }
-    const salt = newSalt();
-    const key = await deriveVaultKey(p1, salt);
-    const record = await sealString(key, salt, bytesToHex(state.secBytes));
-    localStorage.setItem(STORAGE_KEY_ENC, JSON.stringify(record));
-    localStorage.removeItem(STORAGE_KEY);
-    vaultKey = key; vaultSalt = salt;
-    saveSwapState();
-    addLogMsg('system', 'Passphrase set: the key and the swap state are now encrypted at rest (PBKDF2-SHA256, AES-256-GCM).', 'System');
-  }
-  initPassphraseButton();
-}
-
-function initPassphraseButton() {
-  const btn = document.getElementById('passphrase-btn');
-  if (btn) btn.textContent = hasPassphrase() ? '\u{1F512} Passphrase set' : 'Set passphrase';
 }
 
 const groupOfPub = (pubHex, keyType) => groupOfAddress(addressFromPublicKey(pubHex, keyType || alphKeyTypeOf(pubHex)));
@@ -2360,29 +2329,20 @@ function saveSwapState() {
       activeSwap: state.activeSwap,
       stepData: state.stepData,
     };
-    const json = JSON.stringify(data);
-    if (vaultKey) {
-      // sealed asynchronously; writes are serialised so the latest state wins
-      saveQueue = saveQueue.then(async () => {
-        const record = await sealString(vaultKey, vaultSalt, json);
-        localStorage.setItem(SWAP_STATE_KEY, 'enc:' + JSON.stringify(record));
-      }).catch((e) => console.warn('Failed to seal swap state:', e));
-    } else {
-      localStorage.setItem(SWAP_STATE_KEY, json);
-    }
+    localStorage.setItem(SWAP_STATE_KEY, JSON.stringify(data));
   } catch (e) {
     console.warn('Failed to save swap state:', e);
   }
 }
-let saveQueue = Promise.resolve();
 
 async function loadSwapState() {
   try {
     const raw = localStorage.getItem(SWAP_STATE_KEY);
     if (!raw) return null;
     if (raw.startsWith('enc:')) {
-      if (!vaultKey) throw new Error('sealed swap state but no vault key');
-      return JSON.parse(await openString(vaultKey, JSON.parse(raw.slice(4))));
+      // sealed by an earlier build; readable only with the key just migrated, and saved in clear from here on
+      if (!migratedVaultKey) throw new Error('this swap state was encrypted with a passphrase that is no longer held');
+      return JSON.parse(await openString(migratedVaultKey, JSON.parse(raw.slice(4))));
     }
     return JSON.parse(raw);
   } catch (e) {
@@ -2851,7 +2811,6 @@ async function autoConnect() {
   try {
     const masterHex = await loadOrCreateNsec(statusEl);
     state.secBytes = hexToBytes(masterHex);
-    initPassphraseButton();
 
     statusEl.textContent = 'Deriving identity...';
     // One secret (12 or 24 words), three keys: Nostr (NIP-06, or the secret itself for
@@ -3348,7 +3307,6 @@ function initBackupState() {
 
 document.getElementById('settings-btn').addEventListener('click', () => { showSettings().catch(() => {}); });
 document.getElementById('notify-btn').addEventListener('click', () => { toggleNotifications().catch(() => {}); });
-document.getElementById('passphrase-btn').addEventListener('click', () => { setPassphrase().catch((e) => addLogMsg('system', `Passphrase change failed: ${e.message}`, 'Error')); });
 
 document.getElementById('backup-btn').addEventListener('click', async () => {
   const confirmed = await modalConfirm(

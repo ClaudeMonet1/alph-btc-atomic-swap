@@ -10,7 +10,7 @@
 
 import {
   G, n, Fn, taggedHash, pointFromBytes, cbytes, xbytes, hasEvenY, isInfinity, mul,
-  bytesToNum, numTo32b, concatBytes, lift_x, Point,
+  bytesToNum, numTo32b, concatBytes, lift_x, Point, randomBytes,
 } from './curve.js';
 import {
   keyAgg, applyTweak, getXonlyPk, nonceGen, nonceAgg, readSecNonce, getSessionKeyAggCoeff, InvalidContributionError,
@@ -149,5 +149,5 @@ export function adaptorSecretFromBytes(tBytes) {
   return { t, tBytes: numTo32b(t), T, Tbytes: xbytes(T) };
 }
 
-export { nonceAgg, G, n, Fn, lift_x, hasEvenY, bytesToNum, numTo32b, Point, taggedHash, cbytes };
+export { nonceAgg, G, n, Fn, lift_x, hasEvenY, bytesToNum, numTo32b, Point, taggedHash, cbytes, randomBytes };
 export { xbytes as pointToBytes, xbytes as getPlainPubkey };
