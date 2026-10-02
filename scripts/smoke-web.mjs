@@ -42,6 +42,17 @@ const hd = await page.evaluate(async () => {
     return k.btc.pubHex.startsWith('3bd7f4dbaa9eb124') && k.alph.pubHex.startsWith('0322e222404f66f5') && k.alph.index === 0 ? 'ok' : `mismatch ${k.btc.pubHex.slice(0, 16)} ${k.alph.pubHex.slice(0, 16)}`;
   } catch (e) { return 'error: ' + (e.message || e); }
 });
+// Entropy in the browser: fresh identities come from the platform CSPRNG
+const entropy = await page.evaluate(async () => {
+  try {
+    const keys = await import(new URL('./js/keys.js', location.href).href);
+    const native = /\[native code\]/.test(Function.prototype.toString.call(crypto.getRandomValues));
+    const secs = Array.from({ length: 200 }, () => keys.newMasterSecret());
+    const hex = secs.map((s) => [...s].map((b) => b.toString(16).padStart(2, '0')).join(''));
+    const sizes = new Set(secs.map((s) => s.length));
+    return native && sizes.size === 1 && sizes.has(16) && new Set(hex).size === 200 ? 'ok' : `native ${native}, sizes ${[...sizes]}, distinct ${new Set(hex).size}`;
+  } catch (e) { return 'error: ' + (e.message || e); }
+});
 // QR decoding: a code generated in the page must decode back to the address
 const qr = await page.evaluate(async () => {
   try {
@@ -91,10 +102,11 @@ console.log('identity shown   :', { npub: npub?.slice(0, 16), btc: btc?.slice(0,
 console.log('bip327 self-test :', selftest.failed.length ? selftest.failed : `${selftest.total} checks passed`);
 console.log('contract artifact:', artifact.error ? artifact.error : `codeHash ${artifact.codeHash.slice(0, 16)}..., ${artifact.bytecodeLen / 2} bytes`);
 console.log('hd keys          :', hd);
+console.log('entropy (browser):', entropy);
 console.log('qr decode        :', qr);
 console.log('service worker   :', sw);
 console.log('offline reload   :', offline);
 console.log('console (last 8) :'); for (const l of console_.slice(-8)) console.log('  ' + l.slice(0, 160));
-const ok = errors.length === 0 && failed.length === 0 && npub && btc && state.hasNsec && selftest.total > 0 && selftest.failed.length === 0 && !artifact.error && !offline.startsWith('page did not load offline') && qr === 'ok' && hd === 'ok';
+const ok = errors.length === 0 && failed.length === 0 && npub && btc && state.hasNsec && selftest.total > 0 && selftest.failed.length === 0 && !artifact.error && !offline.startsWith('page did not load offline') && qr === 'ok' && hd === 'ok' && entropy === 'ok';
 console.log(ok ? '\nWEB SMOKE OK' : '\nWEB SMOKE FAILED');
 process.exit(ok ? 0 : 1);

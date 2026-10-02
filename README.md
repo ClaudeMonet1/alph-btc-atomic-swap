@@ -201,7 +201,8 @@ Two deployment modes share the same crypto core:
 | `npm run test:petri` | The protocol net: every reachable marking, and the document block matches |
 | `npm run vendor:check` | Vendored bundles match their checksums |
 | `npm run smoke:web` | Headless load of the page: modules, identity, relays, BIP327 self-test, contract artifact, service worker, offline reload |
-| `npm run test:vault` | Passphrase vault: set, reload, wrong and right passphrase, remove |
+| `npm run test:entropy` | Where secrets come from: 128 bits from the platform CSPRNG per identity, balanced bits, uniform bytes, nothing lost on the way to the mnemonic, no weak randomness in the signing path |
+| `npm run test:vault` | One-time unlock of a key that an older build sealed with a passphrase: wrong passphrase refused, right one migrates the key and removes the record |
 | `npm run e2e:local` | A complete two-browser swap on regtest (Esplora shim, 15 s blocks), devnet and a local relay, in about a minute |
 | `E2E_MODE=counter npm run e2e:local` | The taker counter-offers and the maker accepts the counter |
 | `E2E_MODE=partial npm run e2e:local` | A range offer: a hostile accept with other amounts is ignored, the taker fills part of it, the maker republishes the remainder |
