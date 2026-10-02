@@ -202,7 +202,6 @@ Two deployment modes share the same crypto core:
 | `npm run vendor:check` | Vendored bundles match their checksums |
 | `npm run smoke:web` | Headless load of the page: modules, identity, relays, BIP327 self-test, contract artifact, service worker, offline reload |
 | `npm run test:entropy` | Where secrets come from: 128 bits from the platform CSPRNG per identity, balanced bits, uniform bytes, nothing lost on the way to the mnemonic, no weak randomness in the signing path |
-| `npm run test:vault` | One-time unlock of a key that an older build sealed with a passphrase: wrong passphrase refused, right one migrates the key and removes the record |
 | `npm run e2e:local` | A complete two-browser swap on regtest (Esplora shim, 15 s blocks), devnet and a local relay, in about a minute |
 | `E2E_MODE=counter npm run e2e:local` | The taker counter-offers and the maker accepts the counter |
 | `E2E_MODE=partial npm run e2e:local` | A range offer: a hostile accept with other amounts is ignored, the taker fills part of it, the maker republishes the remainder |
@@ -225,7 +224,7 @@ The app icon combines the Bitcoin logo (public domain) and the Alephium logo (Al
 | `docs/js/musig2.js`, `adaptor.js`, `taproot-utils.js`, `bip327-selftest.js` | Byte-identical to the `src/` files |
 | `docs/spec/bip327/` | BIP327 test vectors, served with the page for the browser self-test |
 
-Mainnet can be selected in Settings behind a typed confirmation and a persistent warning; it has had no dry run yet. The page is installable (manifest, generated network-first service worker) and can notify when the peer acts while the tab is in the background. Browser dependencies are bundled from the pinned packages into `docs/vendor/` with checksums (`npm run vendor`, `npm run vendor:check`) and mapped by the import map with an integrity block; nothing is fetched from a CDN. The Buffer polyfill is loaded before any modules via top-level `await`. The key and the swap state can be sealed with a passphrase (PBKDF2-SHA256 to AES-256-GCM, `docs/js/vault.js`); by default they are stored in clear.
+Mainnet can be selected in Settings behind a typed confirmation and a persistent warning; it has had no dry run yet. The page is installable (manifest, generated network-first service worker) and can notify when the peer acts while the tab is in the background. Browser dependencies are bundled from the pinned packages into `docs/vendor/` with checksums (`npm run vendor`, `npm run vendor:check`) and mapped by the import map with an integrity block; nothing is fetched from a CDN. The Buffer polyfill is loaded before any modules via top-level `await`. The key and the swap state are stored unencrypted in the browser profile: these are testnet amounts and the page says so.
 
 ### CLI Tests
 
