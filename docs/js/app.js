@@ -16,7 +16,6 @@ import { BTC_NETWORK_NAME } from './btc.js';
 import { getP2TRAddress } from './btc.js';
 import { BUILD } from './build.js';
 import { deriveKeys, deriveKeysV1, legacyKeys, mnemonicOf, entropyOf, alphKeyTypeOf, newMasterSecret, isMasterSecret } from './keys.js';
-import { deriveVaultKey, openString, saltOf } from './vault.js';
 import { modalAlert, modalConfirm, modalPrompt } from './modal.js';
 import { addressFromQrText, scanWithCamera } from './qrscan.js';
 import { CONFIG, DEFAULTS as CONFIG_DEFAULTS, NETWORK_DEFAULTS, resetConfig, saveConfig } from './config.js';
@@ -2201,11 +2200,8 @@ function resetSwap() {
 // ============================================================
 
 const STORAGE_KEY = 'btc-alph-swap-nsec';           // the secret, hex
-const STORAGE_KEY_ENC = 'btc-alph-swap-nsec-enc';   // a key sealed by a build before 2026-10-02, unlocked once and migrated
+const STORAGE_KEY_ENC = 'btc-alph-swap-nsec-enc';   // a key sealed by the removed passphrase option: discarded on sight
 const BACKUP_CONFIRMED_KEY = 'btc-alph-swap-backup-confirmed';
-// Set only while migrating a key that an earlier build sealed with a passphrase:
-// the swap state it saved is sealed with the same key and is read once with it.
-let migratedVaultKey = null;
 const SWAP_STATE_KEY = 'btc-alph-swap-state';
 const PROCESSED_OFFERS_KEY = 'btc-alph-swap-processed';
 
@@ -2228,28 +2224,14 @@ function markOfferProcessed(offerId) {
   localStorage.setItem(PROCESSED_OFFERS_KEY, JSON.stringify(arr));
 }
 
-// A stored key is never replaced: it may hold funds. A key that an earlier build
-// sealed with a passphrase is unlocked once and stored unsealed (the passphrase
-// feature is gone); a cancelled prompt leaves the page locked, nothing is deleted.
+// A stored key is never replaced: it may hold funds. The passphrase option is
+// gone, and so is the code that could open what it sealed: a leftover sealed key
+// is dropped and a new identity created (testnet amounts, stated in the log).
 async function loadOrCreateNsec(statusEl) {
-  const encRaw = localStorage.getItem(STORAGE_KEY_ENC);
-  if (encRaw) {
-    const record = JSON.parse(encRaw);
-    for (;;) {
-      const pass = await modalPrompt('This wallet still holds a key encrypted with a passphrase by an earlier version. Enter the passphrase once: the key is then kept unencrypted, as the passphrase option has been removed. Cancel keeps the page locked and deletes nothing.', { password: true, placeholder: 'passphrase' });
-      if (pass === null) throw new Error('Wallet locked: reload and enter the passphrase to unlock the key it still holds.');
-      if (statusEl) statusEl.textContent = 'Unlocking...';
-      try {
-        const key = await deriveVaultKey(pass, saltOf(record));
-        const hex = await openString(key, record);
-        if (!isMasterSecret(hexToBytes(hex))) throw new Error('bad record');
-        migratedVaultKey = key; // the swap state saved next to it is sealed with the same key
-        localStorage.setItem(STORAGE_KEY, hex);
-        localStorage.removeItem(STORAGE_KEY_ENC);
-        addLogMsg('system', 'Passphrase removed: your key is now stored unencrypted in this browser. Back up your recovery words.', 'System');
-        return hex;
-      } catch { await modalAlert('Wrong passphrase.'); }
-    }
+  if (localStorage.getItem(STORAGE_KEY_ENC)) {
+    localStorage.removeItem(STORAGE_KEY_ENC);
+    localStorage.removeItem(SWAP_STATE_KEY);
+    addLogMsg('system', 'Discarded a key that the removed passphrase option had encrypted: it can no longer be opened. Any coins it held are lost; import your recovery words to get them back.', 'System');
   }
   const hex = localStorage.getItem(STORAGE_KEY);
   if (hex && (hex.length === 32 || hex.length === 64)) return hex; // 12-word (16 bytes) or 24-word / nsec (32 bytes)
@@ -2339,11 +2321,7 @@ async function loadSwapState() {
   try {
     const raw = localStorage.getItem(SWAP_STATE_KEY);
     if (!raw) return null;
-    if (raw.startsWith('enc:')) {
-      // sealed by an earlier build; readable only with the key just migrated, and saved in clear from here on
-      if (!migratedVaultKey) throw new Error('this swap state was encrypted with a passphrase that is no longer held');
-      return JSON.parse(await openString(migratedVaultKey, JSON.parse(raw.slice(4))));
-    }
+    if (raw.startsWith('enc:')) { localStorage.removeItem(SWAP_STATE_KEY); throw new Error('this swap state was encrypted by the removed passphrase option and cannot be read'); }
     return JSON.parse(raw);
   } catch (e) {
     addLogMsg('system', `Saved swap state could not be read: ${e.message}`, 'Error');
