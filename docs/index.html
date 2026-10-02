@@ -548,7 +548,6 @@
       <button class="copy-btn" id="nsec-reveal-btn" title="Show/hide private key">show</button>
       <button class="copy-btn" data-copy="nsec" title="Copy the backup (recovery words, or the nsec of a 24-word identity)">copy</button>
       <button class="sm" id="backup-btn">Backed Up</button>
-      <button class="sm" id="passphrase-btn" title="Encrypt the key and the swap state in this browser with a passphrase">Set passphrase</button>
       <button class="sm danger" id="reset-key-btn">Reset</button>
     </div>
     <div class="key-warning" id="key-warning">Back up this key! Funds will be lost without it.</div>
@@ -629,7 +628,7 @@
           <li>One secret, standard keys: 12 BIP39 words (24 for identities created before 2026-10-01, where the nsec is the secret itself); the Nostr key (NIP-06), the Bitcoin key (BIP86 taproot) and the Alephium account (wallet path, group 1) derive from them and can be imported into Sparrow, Bitcoin Core or the Alephium wallet; no signature is valid on two chains</li>
           <li>Every transaction built by a node is decoded and checked before it is signed; the contract is shipped pre-compiled and its bytecode is verified on chain</li>
           <li>BTC side uses Taproot MuSig2 (BIP327). ALPH side uses a Ralph contract &mdash; asymmetric by design for inspectable state, unilateral locking, and explicit timeouts</li>
-          <li>Set a passphrase in the identity panel to encrypt your key and swap state in this browser</li>
+          <li>Your key is stored unencrypted in this browser: use a profile only you have access to, keep the amounts small, and back up your recovery words</li>
           <li>Install the page (browser menu) and turn on Notifications to be told when the peer acts or a wait ends while the tab is in the background</li>
           <li>Settings lets you point the page at your own Esplora, Alephium node and relays, or switch networks; mainnet needs a typed confirmation, shows a red banner and asks again before every offer, and has had no dry run yet</li>
         </ul>

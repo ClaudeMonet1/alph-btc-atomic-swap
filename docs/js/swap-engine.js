@@ -5,7 +5,7 @@ import { schnorr } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 
-import { xonlyKeyAgg, tapTweak, swapNonceGen, nonceAgg, adaptorSign, adaptorVerify, adaptorAggregate, completeAdaptorSig, adaptorExtract, adaptorSecretFromBytes, G, Fn, n, lift_x, hasEvenY, bytesToNum, numTo32b, pointToBytes, Point } from './adaptor.js';
+import { xonlyKeyAgg, tapTweak, swapNonceGen, nonceAgg, adaptorSign, adaptorVerify, adaptorAggregate, completeAdaptorSig, adaptorExtract, adaptorSecretFromBytes, randomBytes, G, Fn, n, lift_x, hasEvenY, bytesToNum, numTo32b, pointToBytes, Point } from './adaptor.js';
 import {
   createSwapOutput, verifySwapOutput,
   buildClaimTx, buildP2TRKeyPathSpend, finalizeKeyPathSpend, broadcastTx,
@@ -228,15 +228,8 @@ export class SwapEngine {
     const result = { role: this.role };
 
     if (this.role === 'alice') {
-      let tBytes = new Uint8Array(32);
-      crypto.getRandomValues(tBytes);
-      let t = bytesToNum(tBytes);
-      let T = G.multiply(t);
-      if (!hasEvenY(T)) {
-        T = T.negate();
-        t = Fn.neg(t);
-        tBytes = numTo32b(t);
-      }
+      // 32 bytes from the platform CSPRNG, reduced into [1, n) and normalised to an even-Y point
+      const { tBytes, T } = adaptorSecretFromBytes(randomBytes(32));
       this.adaptorSecret = tBytes;
       this.adaptorPoint = T;
       result.adaptorPoint = bytesToHex(pointToBytes(T));
