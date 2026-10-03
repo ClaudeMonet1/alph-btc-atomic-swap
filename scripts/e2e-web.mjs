@@ -192,8 +192,29 @@ console.log('B accepted offer', accepted);
 
 // Poll both sides; stop early when both have claimed or either side shows an error.
 let lastA = '', lastB = '', aborted = false;
-const pollMs = mode === 'refund' || mode === 'resume' ? 1000 : 15000; // both drills must catch the lock before Alice deploys
-let reloaded = false;
+const pollMs = mode === 'refund' || mode === 'resume' || mode === 'desync' ? 1000 : 15000; // these drills must catch a phase as it happens
+let reloaded = false, desynced = false;
+// The desync drill needs the exact moment both sides have committed their nonces: the
+// page UI passes through it in under a second, so watch the relay for the two nonce
+// events instead and reload Alice right then, while Bob waits for her reveal.
+let desyncReady = false;
+if (mode === 'desync') {
+  const WebSocket = (await import('ws')).default;
+  const relayUrl = process.env.E2E_RELAY || 'ws://127.0.0.1:7777';
+  const authors = new Set();
+  const ws = new WebSocket(relayUrl);
+  ws.on('open', () => ws.send(JSON.stringify(['REQ', 'desync', { kinds: [38391], since: Math.floor(Date.now() / 1000) - 5 }])));
+  ws.on('message', (raw) => {
+    try {
+      const m = JSON.parse(raw.toString());
+      if (m[0] === 'EVENT' && m[2]?.kind === 38391) {
+        authors.add(m[2].pubkey);
+        if (authors.size >= 2) { desyncReady = true; try { ws.close(); } catch {} }
+      }
+    } catch {}
+  });
+  ws.on('error', (e) => console.log('desync relay watch failed:', e.message));
+}
 for (let t = pollMs / 1000; t <= seconds; t += pollMs / 1000) {
   await sleep(pollMs);
   // a page or browser that died is reopened on its profile: the app resumes the swap from its saved checkpoint
@@ -212,6 +233,19 @@ for (let t = pollMs / 1000; t <= seconds; t += pollMs / 1000) {
     lastA = a; lastB = b;
   }
   const done = (x) => /5\. Claim\s*✓ Done/.test(x);
+  // Desync drill: reload Alice alone once the nonce phase is under way, so her waiters
+  // are gone while Bob is still waiting for her reveal. Resume on both sides must heal it.
+  if (mode === 'desync' && !desynced && (desyncReady || /3\. Nonces\s*▶ Active/.test(b))) {
+    desynced = true;
+    const already = /BTC claimed|ALPH claimed/.test(a + b);
+    console.log(`\n===== nonce phase reached: reloading Alice alone (Bob keeps waiting), then Resume on both${already ? ' [window missed: a claim is already out, the pair was faster than the drill]' : ''}`);
+    await aliceP().page.reload({ waitUntil: 'load' });
+    await sleep(6000);
+    await resumeIfOffered(aliceP(), 25);
+    await sleep(4000);
+    await resumeIfOffered(bobP(), 10); // Bob may still be mid-step; Resume is only offered in recovery
+    continue;
+  }
   // reload both pages mid-protocol, then press Resume: the swap must finish from the saved checkpoints
   if (mode === 'resume' && !reloaded && /BTC locked: [0-9a-f]{16}/.test(dir === 'buy_alph' ? a : b)) {
     reloaded = true;
@@ -239,6 +273,13 @@ for (let t = pollMs / 1000; t <= seconds; t += pollMs / 1000) {
     const refunded = /BTC refunded/.test(aLog) || /BTC refunded/.test(a);
     if (refunded) { console.log('\n===== stop: Bob refunded after the abort'); break; }
     if (/✗ Error/.test(a + b) && !aborted) { console.log('\n===== stop: a side reported an error'); break; }
+    continue;
+  }
+  if (mode === 'desync') {
+    const logs = (await Promise.all([A.page, B.page].map((p) => p.evaluate(() => (document.getElementById('app-log')?.textContent || '') + (document.getElementById('recovery-status-msg')?.textContent || ''))))).join('\n');
+    const btcClaimed = /BTC claimed|claimed the BTC|BTC claim/i.test(logs + a + b), alphClaimed = /ALPH claimed/i.test(logs + a + b);
+    if (btcClaimed && alphClaimed) { console.log('\n===== stop: both claims are out (desync healed)'); break; }
+    if (/✗ Error/.test(a + b)) console.log('   (a step shows an error; waiting to see whether the pair heals)');
     continue;
   }
   if ((done(a) && done(b)) || /✗ Error/.test(a + b)) { console.log('\n===== stop:', done(a) && done(b) ? 'both sides complete' : 'a side reported an error'); break; }
