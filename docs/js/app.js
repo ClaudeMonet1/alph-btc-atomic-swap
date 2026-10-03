@@ -340,6 +340,12 @@ function subscribe(subId, filters, onEvent) {
 }
 
 const swapEventWaiters = [];
+// The peer's latest message per kind and phase. A swap message that arrives before
+// the step waiting for it has registered used to be dropped, which deadlocked the
+// pair whenever one side was reloaded or retried a step (found 2026-10-03 by a
+// stalled session on the public relays). Waits read this first.
+const swapInbox = new Map();
+const inboxKey = (event) => `${event.kind}:${event.pubkey}:${(event.tags.find((t) => t[0] === 'd') || [])[1] || ''}`;
 
 // Waits that span the peer's on-chain confirmation wait (lock and claim phases)
 // get CHAIN_WAIT_MS; the timelocks are the real deadline, and the user can abort.
@@ -348,15 +354,38 @@ const BTC_BLOCK_HINT = BTC_NETWORK_NAME === 'signet' ? 'a signet block takes 10 
 const ALPH_BLOCK_HINT = 'about 16 s per block';
 const fmtRemaining = (ms) => { if (ms <= 0) return 'now'; const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000); return h ? `${h} h ${m} min` : `${m} min`; };
 function waitForSwapEvent(kind, sessionId, fromPub, predicate = null, timeoutMs = 3600_000) {
+  // Already received? Take the newest matching message instead of waiting for another.
+  const ready = [...swapInbox.values()]
+    .filter((e) => e.kind === kind && e.pubkey === fromPub && (!predicate || safePredicate(predicate, e)))
+    .sort((a, b) => a.created_at - b.created_at)
+    .pop();
+  if (ready) {
+    addLogMsg('system', `Using the peer's kind ${kind} message already received`, 'System');
+    return Promise.resolve(ready);
+  }
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      const idx = swapEventWaiters.findIndex(w => w.resolve === resolve);
+    let republished = false;
+    const fail = () => {
+      const idx = swapEventWaiters.findIndex((w) => w.resolve === resolve);
       if (idx >= 0) swapEventWaiters.splice(idx, 1);
       reject(new Error(`timeout waiting for kind ${kind}`));
+    };
+    // On a long silence, send our own last message again: a peer that lost it (reload,
+    // relay hiccup) is then able to answer, and we keep waiting a little longer.
+    const timer = setTimeout(function onTimeout() {
+      const w = swapEventWaiters.find((x) => x.resolve === resolve);
+      if (!republished && state.lastSwapEvent) {
+        republished = true;
+        try { nostrPublish(state.lastSwapEvent); addLogMsg('system', 'No answer from the peer: sent our last message again', 'System'); } catch {}
+        if (w) w.timer = setTimeout(onTimeout, Math.min(timeoutMs, 10 * 60_000));
+        return;
+      }
+      fail();
     }, timeoutMs);
     swapEventWaiters.push({ kind, fromPub, predicate, resolve, reject, timer });
   });
 }
+const safePredicate = (predicate, event) => { try { return predicate(event); } catch { return false; } };
 
 // ============================================================
 // Event Kinds & Builders
@@ -1491,6 +1520,8 @@ function subscribeToSwap(sessionId, peerPubHex) {
   if (existing) existing();
 
   swapEventWaiters.length = 0;
+  swapInbox.clear(); // refilled by the relay's replay of this session's messages
+  phaseRestarts = 0;
 
   subscribe('active_swap', [{
     kinds: [SWAP_SETUP_KIND, SWAP_NONCE_KIND, SWAP_PRESIG_KIND, SWAP_CLAIM_KIND],
@@ -1526,17 +1557,41 @@ function subscribeToSwap(sessionId, peerPubHex) {
     if (!isMine) { let t = ''; try { const c = JSON.parse(decryptedContent); t = c.type || c.phase || (c.btcPresig ? 'pre-signatures' : ''); } catch {} notify('Swap: the peer acted', t ? `Received ${t}` : 'New message from the peer', 'peer'); }
 
     const decryptedEvent = { ...event, content: decryptedContent };
+    if (!isMine) swapInbox.set(inboxKey(event), decryptedEvent); // keep it for a step that is not waiting yet
+    let claimed = false;
     for (let i = swapEventWaiters.length - 1; i >= 0; i--) {
       const w = swapEventWaiters[i];
       if (decryptedEvent.kind === w.kind && decryptedEvent.pubkey === w.fromPub) {
-        if (!w.predicate || w.predicate(decryptedEvent)) {
+        if (!w.predicate || safePredicate(w.predicate, decryptedEvent)) {
           clearTimeout(w.timer);
           swapEventWaiters.splice(i, 1);
           w.resolve(decryptedEvent);
+          claimed = true;
         }
       }
     }
+    if (!isMine && !claimed) repairPhase(decryptedEvent);
   });
+}
+
+// A peer whose page reloaded or whose step was retried restarts the nonce exchange,
+// while this side is waiting for a later message: nothing matches and both sides wait
+// for ever (what stalled the sessions seen on the public relays on 2026-10-03). When
+// such a message arrives and nothing is irreversible yet, restart that exchange here
+// too, so the two state machines meet again. Capped, and never after a pre-signature
+// has been aggregated or a claim made.
+let phaseRestarts = 0;
+function repairPhase(event) {
+  if (!state.activeSwap || event.kind !== SWAP_NONCE_KIND) return;
+  if (state.engine?.btcAdaptorAgg || state.engine?.btcClaimTxid || state.stepData.claim?.status === 'done') return;
+  let phase = ''; try { phase = JSON.parse(event.content).phase || ''; } catch { return; }
+  if (phaseRestarts >= 2) {
+    addLogMsg('system', `The peer is in the ${phase} phase and this side is elsewhere. Press Retry on the Nonces step of both pages.`, 'Error');
+    return;
+  }
+  phaseRestarts++;
+  addLogMsg('system', `The peer restarted the nonce exchange (${phase}): restarting it here too so both sides agree.`, 'System');
+  retryStep('nonces').catch((e) => addLogMsg('system', `Restarting the nonce exchange failed: ${e.message}`, 'Error'));
 }
 
 async function handlePeerAbort() {
@@ -2034,6 +2089,7 @@ async function refundAlph() {
     const result = await state.engine.refundAlph();
     showRecoveryStatus(`ALPH refunded! txid: ${result.txid.slice(0, 16)}...`, 'ok');
     addLogMsg('recovery', `ALPH refunded in ${result.txid}`, 'You');
+    settleSwap('refunded');
     await refreshBalance();
   } catch (e) {
     showRecoveryStatus(`ALPH refund error: ${e.message}`, 'error');
@@ -2048,6 +2104,7 @@ async function refundBtc() {
     const result = await state.engine.refundBtc();
     showRecoveryStatus(`BTC refunded! txid: ${result.txid.slice(0, 16)}...`, 'ok');
     addLogMsg('recovery', `BTC refunded in ${result.txid}`, 'You');
+    settleSwap('refunded');
     await refreshBalance();
   } catch (e) {
     showRecoveryStatus(`BTC refund error: ${e.message}`, 'error');
@@ -2066,6 +2123,22 @@ function showRecoveryStatus(msg, type) {
   }
   el.style.color = type === 'error' ? '#f85149' : '#2ea043';
   el.textContent = msg;
+}
+
+// A refunded swap is over: without this the saved state survived and the next load
+// offered to resume a session whose coins were already back (found 2026-10-03).
+function settleSwap(how) {
+  clearSwapState();
+  stopTimeoutMonitor();
+  for (const w of swapEventWaiters) clearTimeout(w.timer);
+  swapEventWaiters.length = 0;
+  swapInbox.clear();
+  if (state.activeSwap) {
+    markOfferProcessed(state.activeSwap.offerId);
+    const offer = state.offers.get(state.activeSwap.offerId);
+    if (offer) { offer.status = how; renderOffersList(); }
+  }
+  addLogMsg('system', `This swap is settled (${how}); its saved state has been cleared.`, 'System');
 }
 
 // ============================================================
