@@ -1589,6 +1589,11 @@ let phaseRestarts = 0;
 function repairPhase(event) {
   if (!state.activeSwap || event.kind !== SWAP_NONCE_KIND) return;
   if (state.engine?.btcAdaptorAgg || state.engine?.btcClaimTxid || state.stepData.claim?.status === 'done') return;
+  // Only once the nonce exchange is actually due: both sides locked and the shared
+  // context computed. Without this a peer could push this page into the nonce step
+  // before it has a contract to sign for, which the griefing drill turned into an
+  // error state at will (found 2026-10-05 by E2E_MODE=spam).
+  if (state.stepData.lock?.status !== 'done' || !state.engine?.ctx) return;
   let phase = ''; try { phase = JSON.parse(event.content).phase || ''; } catch { return; }
   if (phaseRestarts >= 2) {
     addLogMsg('system', `The peer is in the ${phase} phase and this side is elsewhere. Press Retry on the Nonces step of both pages.`, 'Error');
@@ -1681,6 +1686,8 @@ async function autoExecuteSwap() {
 
   } catch (e) {
     if (!state.activeSwap) { addLogMsg('system', 'Swap step ended after the swap was aborted', 'System'); return; }
+    // a chain replaced by a restart is not a failure of the swap
+    if (e.message === 'Swap aborted') { addLogMsg('system', 'The previous step chain stopped because the swap was restarted', 'System'); return; }
     addLogMsg('system', `Swap error: ${e.message}`, 'Error');
   }
 }
