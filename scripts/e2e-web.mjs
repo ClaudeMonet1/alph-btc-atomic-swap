@@ -192,24 +192,26 @@ console.log('B accepted offer', accepted);
 
 // Poll both sides; stop early when both have claimed or either side shows an error.
 let lastA = '', lastB = '', aborted = false;
-const pollMs = mode === 'refund' || mode === 'resume' || mode === 'desync' ? 1000 : 15000; // these drills must catch a phase as it happens
+const pollMs = mode === 'refund' || mode === 'resume' || mode === 'desync' || mode === 'spam' ? 1000 : 15000; // these drills must catch a phase as it happens
 let reloaded = false, desynced = false;
 // The desync drill needs the exact moment both sides have committed their nonces: the
 // page UI passes through it in under a second, so watch the relay for the two nonce
 // events instead and reload Alice right then, while Bob waits for her reveal.
-let desyncReady = false;
-if (mode === 'desync') {
+let desyncReady = false, spamSession = null, spamSent = 0;
+if (mode === 'desync' || mode === 'spam') {
   const WebSocket = (await import('ws')).default;
   const relayUrl = process.env.E2E_RELAY || 'ws://127.0.0.1:7777';
   const authors = new Set();
   const ws = new WebSocket(relayUrl);
-  ws.on('open', () => ws.send(JSON.stringify(['REQ', 'desync', { kinds: [38391], since: Math.floor(Date.now() / 1000) - 5 }])));
+  ws.on('open', () => ws.send(JSON.stringify(['REQ', 'desync', { kinds: mode === 'spam' ? [38390, 38391] : [38391], since: Math.floor(Date.now() / 1000) - 5 }])));
   ws.on('message', (raw) => {
     try {
       const m = JSON.parse(raw.toString());
-      if (m[0] === 'EVENT' && m[2]?.kind === 38391) {
+      if (m[0] === 'EVENT' && (m[2]?.kind === 38391 || (mode === 'spam' && m[2]?.kind === 38390))) {
+        if (mode === 'spam' && !spamSession) spamSession = (m[2].tags.find((t) => t[0] === 'e') || [])[1] || null;
+        if (m[2].kind !== 38391) return;
         authors.add(m[2].pubkey);
-        if (authors.size >= 2) { desyncReady = true; try { ws.close(); } catch {} }
+        if (authors.size >= 2) { desyncReady = true; if (mode !== 'spam') { try { ws.close(); } catch {} } }
       }
     } catch {}
   });
@@ -233,6 +235,28 @@ for (let t = pollMs / 1000; t <= seconds; t += pollMs / 1000) {
     lastA = a; lastB = b;
   }
   const done = (x) => /5\. Claim\s*✓ Done/.test(x);
+  // Griefing drill: the peer (Alice's key, held by this harness) floods nonce commitments
+  // at Bob, as a malicious counterparty would, to make him regenerate nonces for ever.
+  // His page must restart that exchange at most twice and then say so, and never roll back
+  // once a pre-signature has been aggregated.
+  if (mode === 'spam' && spamSession && spamSent < 8) {
+    spamSent++;
+    try {
+      const [{ finalizeEvent }, nip44, keysMod, alphMod] = await Promise.all([import('nostr-tools/pure'), import('../src/nip44.js'), import('../src/keys.js'), import('@alephium/web3')]);
+      const { hexToBytes, bytesToHex } = await import('@noble/hashes/utils.js');
+      // the stored secret is BIP39 entropy, not the Nostr key: derive as the page does
+      const groupOfPub = (pubHex, keyType) => alphMod.groupOfAddress(alphMod.addressFromPublicKey(pubHex, keyType));
+      const nostrOf = (hex) => keysMod.deriveKeys(hexToBytes(hex), groupOfPub).nostr;
+      const aliceSec = nostrOf(seededKeys[dir === 'buy_alph' ? 'B' : 'A'].nsecHex).sec;
+      const bobPub = nostrOf(seededKeys[dir === 'buy_alph' ? 'A' : 'B'].nsecHex).pubHex;
+      const content = nip44.encryptTo(aliceSec, bobPub, JSON.stringify({ phase: 'commit', btcNonceHash: bytesToHex(new Uint8Array(32).fill(spamSent)), alphNonceHash: bytesToHex(new Uint8Array(32).fill(spamSent + 100)) }));
+      const ev = finalizeEvent({ kind: 38391, created_at: Math.floor(Date.now() / 1000), tags: [['e', spamSession], ['p', bobPub], ['d', `${spamSession}:commit`]], content }, aliceSec);
+      const WebSocket = (await import('ws')).default;
+      const pub = new WebSocket(process.env.E2E_RELAY || 'ws://127.0.0.1:7777');
+      pub.on('open', () => { pub.send(JSON.stringify(['EVENT', ev])); setTimeout(() => { try { pub.close(); } catch {} }, 1500); });
+      if (spamSent === 1) console.log(`\n===== griefing: publishing bogus nonce commitments as the peer into session ${spamSession.slice(0, 12)}`);
+    } catch (e) { console.log('griefing injection failed:', e.message.slice(0, 120)); }
+  }
   // Desync drill: reload Alice alone once the nonce phase is under way, so her waiters
   // are gone while Bob is still waiting for her reveal. Resume on both sides must heal it.
   if (mode === 'desync' && !desynced && (desyncReady || /3\. Nonces\s*▶ Active/.test(b))) {
@@ -273,6 +297,17 @@ for (let t = pollMs / 1000; t <= seconds; t += pollMs / 1000) {
     const refunded = /BTC refunded/.test(aLog) || /BTC refunded/.test(a);
     if (refunded) { console.log('\n===== stop: Bob refunded after the abort'); break; }
     if (/✗ Error/.test(a + b) && !aborted) { console.log('\n===== stop: a side reported an error'); break; }
+    continue;
+  }
+  if (mode === 'spam') {
+    const bobLog = await bobP().page.evaluate(() => document.getElementById('app-log')?.textContent || '');
+    const restarts = (bobLog.match(/restarted the nonce exchange/g) || []).length;
+    const capped = /Press Retry on the Nonces step of both pages/.test(bobLog);
+    if (spamSent >= 8 && (capped || restarts > 2 || /5\. Claim\s*✓ Done/.test(a + b))) {
+      console.log(`\n===== stop: griefing drill — the peer sent ${spamSent} bogus commitments, this side restarted the exchange ${restarts} time(s)${capped ? ' and then refused to restart again' : ''}`);
+      console.log(restarts <= 2 ? 'PASS: the restarts are capped' : `FAIL: ${restarts} restarts`);
+      break;
+    }
     continue;
   }
   if (mode === 'desync') {

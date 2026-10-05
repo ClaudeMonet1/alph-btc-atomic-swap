@@ -201,12 +201,14 @@ Two deployment modes share the same crypto core:
 | `npm run test:petri` | The protocol net: every reachable marking, and the document block matches |
 | `npm run vendor:check` | Vendored bundles match their checksums |
 | `npm run smoke:web` | Headless load of the page: modules, identity, relays, BIP327 self-test, contract artifact, service worker, offline reload |
+| `npm run test:adversarial` | The protocol under attack: forged and tampered pre-signatures, a stranger signing, replay across sessions, a changed adaptor point, nonce reuse, completing with the wrong secret, the rogue-key attack on key aggregation, inverted and out-of-range timelocks, and abusive claim fees |
 | `npm run test:fees` | The pre-signed claim fee: what one side proposes the other accepts, at every amount and fee rate, with the relay minimum, the share cap and the dust rule |
 | `npm run test:entropy` | Where secrets come from: 128 bits from the platform CSPRNG per identity, balanced bits, uniform bytes, nothing lost on the way to the mnemonic, no weak randomness in the signing path |
 | `npm run e2e:local` | A complete two-browser swap on regtest (Esplora shim, 15 s blocks), devnet and a local relay, in about a minute |
 | `E2E_MODE=counter npm run e2e:local` | The taker counter-offers and the maker accepts the counter |
 | `E2E_MODE=partial npm run e2e:local` | A range offer: a hostile accept with other amounts is ignored, the taker fills part of it, the maker republishes the remainder |
 | `E2E_MODE=resume npm run e2e:local` | Both pages are reloaded right after Bob's lock and resumed from their saved checkpoints; the swap must still complete |
+| `E2E_MODE=spam npm run e2e:local` | The peer floods bogus nonce commitments into the live session: this side must restart that exchange at most twice, then refuse, and never roll back once a pre-signature is aggregated |
 | `E2E_MODE=desync npm run e2e:local` | Alice alone is reloaded the moment both nonce commitments reach the relay, then both pages are resumed; the pair must still finish. On regtest the nonce, pre-sign and claim phases pass in under a second, so the drill often reports that it missed the window: it bites on slow networks (`npm run e2e:live`) |
 | `E2E_MODE=refund npm run e2e:local` | Bob aborts right after his lock; the regtest clock is moved past T_btc and Bob's page refunds itself (reset the regtest chain afterwards) |
 | `npm run e2e:live` | The same harness against the published page, signet and the Alephium testnet (needs funded keys) |
