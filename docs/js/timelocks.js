@@ -104,17 +104,26 @@ export const FEE_HEADROOM = 2;                // pre-signed fee = headroom x cur
 export const MIN_FEE_RATE = 1;                // sat/vB
 export const MAX_CLAIM_FEE_FRACTION = 0.05;   // Bob refuses a claim fee above this share of the amount
 export const P2TR_DUST = 330;
+export const MIN_RELAY_CLAIM_FEE = MIN_FEE_RATE * CLAIM_VBYTES;   // what the claim costs to relay at all
+export const MIN_SWAP_SAT = MIN_RELAY_CLAIM_FEE + P2TR_DUST;      // below this the claim cannot pay its own fee and leave a spendable output
 
 export function claimFeeFor(feeRate, btcSat) {
   const rate = Math.max(MIN_FEE_RATE, Math.ceil(feeRate * FEE_HEADROOM));
-  const fee = rate * CLAIM_VBYTES;
-  const cap = Math.floor(btcSat * MAX_CLAIM_FEE_FRACTION);
-  return Math.max(MIN_FEE_RATE * CLAIM_VBYTES, Math.min(fee, cap));
+  return Math.max(MIN_RELAY_CLAIM_FEE, Math.min(rate * CLAIM_VBYTES, claimFeeCap(btcSat)));
+}
+
+// The share cap protects the claimer from an absurd pre-signed fee, but it can never
+// sit below what the claim must pay to be relayed at all: for a small swap the two
+// rules used to contradict each other, so the page proposed the relay minimum and then
+// refused it ("claim fee 111 sat exceeds 5% of the amount", reported 2026-10-05 with
+// a 2000 sat swap, after the peer had already locked).
+export function claimFeeCap(btcSat) {
+  return Math.max(MIN_RELAY_CLAIM_FEE, Math.floor(btcSat * MAX_CLAIM_FEE_FRACTION));
 }
 
 export function checkClaimFee(feeSat, btcSat) {
-  if (!Number.isInteger(feeSat) || feeSat < MIN_FEE_RATE * CLAIM_VBYTES) throw new Error(`claim fee ${feeSat} sat is below the relay minimum`);
-  if (feeSat > Math.floor(btcSat * MAX_CLAIM_FEE_FRACTION)) throw new Error(`claim fee ${feeSat} sat exceeds ${MAX_CLAIM_FEE_FRACTION * 100}% of the amount`);
+  if (!Number.isInteger(feeSat) || feeSat < MIN_RELAY_CLAIM_FEE) throw new Error(`claim fee ${feeSat} sat is below the relay minimum`);
+  if (feeSat > claimFeeCap(btcSat)) throw new Error(`claim fee ${feeSat} sat exceeds ${MAX_CLAIM_FEE_FRACTION * 100}% of the amount (${claimFeeCap(btcSat)} sat)`);
   if (btcSat - feeSat < P2TR_DUST) throw new Error(`claim output would be dust`);
 }
 

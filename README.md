@@ -201,6 +201,7 @@ Two deployment modes share the same crypto core:
 | `npm run test:petri` | The protocol net: every reachable marking, and the document block matches |
 | `npm run vendor:check` | Vendored bundles match their checksums |
 | `npm run smoke:web` | Headless load of the page: modules, identity, relays, BIP327 self-test, contract artifact, service worker, offline reload |
+| `npm run test:fees` | The pre-signed claim fee: what one side proposes the other accepts, at every amount and fee rate, with the relay minimum, the share cap and the dust rule |
 | `npm run test:entropy` | Where secrets come from: 128 bits from the platform CSPRNG per identity, balanced bits, uniform bytes, nothing lost on the way to the mnemonic, no weak randomness in the signing path |
 | `npm run e2e:local` | A complete two-browser swap on regtest (Esplora shim, 15 s blocks), devnet and a local relay, in about a minute |
 | `E2E_MODE=counter npm run e2e:local` | The taker counter-offers and the maker accepts the counter |
