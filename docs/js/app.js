@@ -9,7 +9,7 @@ import qrcode from 'qrcode-generator';
 import { SwapEngine } from './swap-engine.js';
 import { encryptTo as nip44EncryptTo, decryptFrom as nip44DecryptFrom } from './nip44.js';
 import { getMedianTimePast, estimateFeeRate } from './btc.js';
-import { CLAIM_VBYTES, MIN_SWAP_SAT, MIN_RELAY_CLAIM_FEE } from './timelocks.js';
+import { CLAIM_VBYTES, MIN_SWAP_SAT, MIN_RELAY_CLAIM_FEE, MIN_ALPH_SWAP } from './timelocks.js';
 import { groupOfAddress, addressFromPublicKey, getBalance } from './alph.js';
 import { btcConfirmationsFor } from './timelocks.js';
 import { BTC_NETWORK_NAME } from './btc.js';
@@ -1225,6 +1225,12 @@ async function publishOffer() {
     const minVal = parseFloat(document.getElementById('offer-min-alph').value) || 0;
     const minAlph = minVal > 0 && minVal < alphVal ? BigInt(Math.round(minVal * 1e18)) : null;
     if (minVal > 0 && minVal >= alphVal) { showOfferWarning('The minimum must be below the amount.'); btn.disabled = false; btn.textContent = 'Publish Offer'; return; }
+    // The chain refuses a swap contract holding less than 0.1 ALPH, and it would refuse
+    // it only at deployment, after the peer had locked
+    if (alphAmount < MIN_ALPH_SWAP) {
+      showOfferWarning(`${alphVal} ALPH is too small: Alephium refuses a contract holding less than ${Number(MIN_ALPH_SWAP) / 1e18} ALPH, so a swap needs at least that much.`);
+      btn.disabled = false; btn.textContent = 'Publish Offer'; return;
+    }
     // Below this the pre-signed claim cannot pay the relay minimum and still leave a spendable output
     if (btcSat < MIN_SWAP_SAT) {
       showOfferWarning(`${btcSat} sat is too small: the Bitcoin claim costs ${MIN_RELAY_CLAIM_FEE} sat to relay, so a swap needs at least ${MIN_SWAP_SAT} sat.`);
