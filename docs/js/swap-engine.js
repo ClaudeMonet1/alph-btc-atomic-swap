@@ -22,7 +22,7 @@ import {
 } from './alph.js';
 import { computeTweakedPrivateKey } from './taproot-utils.js';
 import { deriveKeys, legacyKeys, alphKeyTypeOf } from './keys.js';
-import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, btcConfirmationsFor, alphConfirmationsFor, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, CLAIM_VBYTES, REFUND_VBYTES } from './timelocks.js';
+import { btcLocktimeNow, alphTimeoutFor, alphTimeoutBounds, checkBtcLocktime, btcConfirmationsFor, alphConfirmationsFor, LOCK_CONFIRMATION_POLL_MS, LOCK_CONFIRMATION_TIMEOUT_MS, claimFeeFor, checkClaimFee, MIN_ALPH_SWAP, CLAIM_VBYTES, REFUND_VBYTES } from './timelocks.js';
 
 // ============================================================
 // Shared context computation
@@ -391,6 +391,7 @@ export class SwapEngine {
     if (this.contractId && this.deployResult) {
       return { contractId: this.contractId, contractAddress: this.contractAddress, txId: this.deployResult.txId, claimFeeSat: this.claimFeeSat, reused: true };
     }
+    if (this.alphAmount < MIN_ALPH_SWAP) throw new Error(`Alephium refuses a contract holding less than ${Number(MIN_ALPH_SWAP) / 1e18} ALPH: this swap is too small`);
     progress('Compiling the swap contract on the Alephium node...');
     const compiled = await compileSwapContract();
     this.compiled = compiled;
