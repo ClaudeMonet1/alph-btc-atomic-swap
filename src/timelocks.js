@@ -104,6 +104,12 @@ export const FEE_HEADROOM = 2;                // pre-signed fee = headroom x cur
 export const MIN_FEE_RATE = 1;                // sat/vB
 export const MAX_CLAIM_FEE_FRACTION = 0.05;   // Bob refuses a claim fee above this share of the amount
 export const P2TR_DUST = 330;
+// Alephium refuses to create a contract holding less than this, and the swap
+// contract holds exactly the amount being swapped, so a smaller swap cannot be
+// deployed at all (measured 2026-10-07: "Expect 0.1 ALPH deposit to deploy a new
+// contract"). The amount itself satisfies the deposit, so nothing extra is locked.
+export const MIN_ALPH_SWAP = 100000000000000000n; // 0.1 ALPH in atto
+
 export const MIN_RELAY_CLAIM_FEE = MIN_FEE_RATE * CLAIM_VBYTES;   // what the claim costs to relay at all
 export const MIN_SWAP_SAT = MIN_RELAY_CLAIM_FEE + P2TR_DUST;      // below this the claim cannot pay its own fee and leave a spendable output
 
