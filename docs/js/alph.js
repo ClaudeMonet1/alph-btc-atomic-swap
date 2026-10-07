@@ -141,7 +141,8 @@ export async function deploySwapContract(pubKeyHex, secBytes, swapKeyHex, claimA
     fromPublicKeyType: alphKeyTypeOf(pubKeyHex),
     bytecode,
     initialAttoAlphAmount: alphAmount.toString(),
-    gasAmount: 100000,
+    // no gasAmount: the node estimates it. Alephium charges the limit, not what is
+    // used, so a pinned 100000 doubled the fee of every swap (measured 2026-10-07).
   }, secBytes, { kind: 'deploy', address: addressFromPublicKey(pubKeyHex, alphKeyTypeOf(pubKeyHex)), bytecode, initialAttoAlphAmount: alphAmount, gasAmount: 100000 });
 
   return {
@@ -172,7 +173,6 @@ export async function claimSwap(pubKeyHex, secBytes, contractId, musig2Signature
     fromPublicKeyType: alphKeyTypeOf(pubKeyHex),
     bytecode,
     attoAlphAmount: DUST_AMOUNT.toString(),
-    gasAmount: 100000,
   }, secBytes, { kind: 'execute', address: addressFromPublicKey(pubKeyHex, alphKeyTypeOf(pubKeyHex)), bytecode, gasAmount: 100000 });
 
   return { txId: result.txId };
@@ -197,7 +197,6 @@ export async function refundSwap(pubKeyHex, secBytes, contractId, compiled) {
     fromPublicKeyType: alphKeyTypeOf(pubKeyHex),
     bytecode,
     attoAlphAmount: DUST_AMOUNT.toString(),
-    gasAmount: 100000,
   }, secBytes, { kind: 'execute', address: addressFromPublicKey(pubKeyHex, alphKeyTypeOf(pubKeyHex)), bytecode, gasAmount: 100000 });
 
   return { txId: result.txId };
