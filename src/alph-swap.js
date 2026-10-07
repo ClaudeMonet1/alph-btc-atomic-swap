@@ -133,7 +133,7 @@ export async function deploySwapContract(wallet, swapKeyHex, claimAddress, refun
     structs,
   );
 
-  const params = { bytecode, initialAttoAlphAmount: alphAmount.toString(), gasAmount: 100000 };
+  const params = { bytecode, initialAttoAlphAmount: alphAmount.toString() }; // the node estimates the gas; 100000 below is the ceiling we accept
   if (targetGroup !== undefined) params.group = targetGroup;
 
   const result = await signAndSubmit(wallet, '/contracts/unsigned-tx/deploy-contract', params, { kind: 'deploy', bytecode, initialAttoAlphAmount: alphAmount, gasAmount: 100000 });
@@ -161,7 +161,7 @@ export async function claimSwap(wallet, contractId, musig2SignatureHex, compiled
     structs,
   );
 
-  const params = { bytecode, attoAlphAmount: DUST_AMOUNT.toString(), gasAmount: 100000 };
+  const params = { bytecode, attoAlphAmount: DUST_AMOUNT.toString() };
   if (targetGroup !== undefined) params.group = targetGroup;
 
   const result = await signAndSubmit(wallet, '/contracts/unsigned-tx/execute-script', params, { kind: 'execute', bytecode, gasAmount: 100000 });
@@ -182,7 +182,7 @@ export async function refundSwap(wallet, contractId, compiled) {
     structs,
   );
 
-  const result = await signAndSubmit(wallet, '/contracts/unsigned-tx/execute-script', { bytecode, attoAlphAmount: DUST_AMOUNT.toString(), gasAmount: 100000 }, { kind: 'execute', bytecode, gasAmount: 100000 });
+  const result = await signAndSubmit(wallet, '/contracts/unsigned-tx/execute-script', { bytecode, attoAlphAmount: DUST_AMOUNT.toString() }, { kind: 'execute', bytecode, gasAmount: 100000 });
 
   return { txId: result.txId };
 }
